@@ -2322,7 +2322,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
-            pair: KMutex::new(Some(ufid_out), KMutexType::Spin),
+            pair: KMutex::new(Some(ufid_out), KMutexType::Driver),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: ufid_in.crc32(),
@@ -2547,7 +2547,7 @@ impl<N: NetworkImpl> Port<N> {
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
 
         let hte = UftEntry {
-            pair: KMutex::new(None, KMutexType::Spin),
+            pair: KMutex::new(None, KMutexType::Driver),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: flow_before.crc32(),
@@ -2855,7 +2855,7 @@ impl TcpFlowEntryState {
                     bytes_in,
                     bytes_out: 0,
                 },
-                KMutexType::Spin,
+                KMutexType::Driver,
             ),
         }
     }
@@ -2876,7 +2876,7 @@ impl TcpFlowEntryState {
                     bytes_in: 0,
                     bytes_out,
                 },
-                KMutexType::Spin,
+                KMutexType::Driver,
             ),
         }
     }

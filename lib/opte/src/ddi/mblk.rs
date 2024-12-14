@@ -723,13 +723,13 @@ impl MsgBlk {
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
             // illumos_sys_hdrs::mac_hcksum_set(
-            //     self.inner.as_ptr(),
+            //     self.0.as_ptr(),
             //     0,0,0,0,
             //     ckflags,
             // );
             // if is_tcp {
             //     illumos_sys_hdrs::lso_info_set(
-            //         self.inner.as_ptr(),
+            //         self.0.as_ptr(),
             //         mss,
             //         0x10,
             //     );

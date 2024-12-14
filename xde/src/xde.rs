@@ -239,7 +239,7 @@ pub struct xde_underlay_port {
     stream: Arc<DlsStream>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct OffloadInfo {
     lso_flags: u32,
     cso_flags: u32,
@@ -303,9 +303,9 @@ impl OffloadInfo {
                 TunnelTcpLsoFlags::from_bits_truncate(self.tun_v6_state.flags);
 
             tun_flags.contains(
+                // Inner v6 not yet supported, like.
                 TunnelTcpLsoFlags::GENEVE
-                    | TunnelTcpLsoFlags::INNER_IPV4
-                    | TunnelTcpLsoFlags::INNER_IPV6,
+                    | TunnelTcpLsoFlags::INNER_IPV4,
             )
         } else {
             false
@@ -1263,6 +1263,10 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
+    warn!(
+        "I'm seeing\ni1: {:?},\ni2: {:?}",
+        i1, i2
+    );
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
@@ -1826,6 +1830,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 return ptr::null_mut();
             }
 
+            // TODO: should these not just be copied from the original input
+            //       mblk?
             let cso_possible = src_dev.underlay_capab.should_request_cso();
             let lso_possible = src_dev.underlay_capab.should_request_lso();
 
@@ -1835,9 +1841,11 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 // Boost MSS to use full jumbo frames if we know our path
                 // can be served purely on internal links.
                 // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+
                 let mss = src_dev.underlay_capab.mtu
                     - 70
                     - (non_eth_payl_bytes as u32);
+                // let mss = 1448;
 
                 out_pkt.request_offload(is_tcp && lso_possible, mss);
 
@@ -1983,6 +1991,13 @@ unsafe extern "C" fn xde_mc_getcapab(
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
             let desired_lso = shared_underlay_caps.upstream_lso();
+
+            warn!(
+                "I'm advertising flags {:x?}, v4 {:?} v6 {:?}",
+                desired_lso.lso_flags,
+                desired_lso.lso_basic_tcp_ipv4,
+                desired_lso.lso_basic_tcp_ipv6
+            );
 
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt

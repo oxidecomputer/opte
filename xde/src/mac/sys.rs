@@ -195,19 +195,19 @@ extern "C" {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct lso_basic_tcp_ipv4_t {
     pub lso_max: t_uscalar_t,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct lso_basic_tcp_ipv6_t {
     pub lso_max: t_uscalar_t,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct lso_tunnel_tcp_ipv4_t {
     pub lso_max: t_uscalar_t,
     pub encap_max: t_uscalar_t,
@@ -215,7 +215,7 @@ pub struct lso_tunnel_tcp_ipv4_t {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct lso_tunnel_tcp_ipv6_t {
     pub lso_max: t_uscalar_t,
     pub encap_max: t_uscalar_t,
