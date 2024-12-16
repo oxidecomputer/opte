@@ -22,6 +22,9 @@ cfg_if! {
             c_void, kstat_t, kstat_create, kstat_delete, kstat_install,
             kstat_named_init, kstat_named_t, KSTAT_STRLEN, KSTAT_TYPE_NAMED,
         };
+    } else {
+        use core::sync::atomic::AtomicU64;
+        use core::sync::atomic::Ordering;
     }
 }
 
@@ -221,35 +224,41 @@ impl KStatU64 {
         Self { inner: kstat_named_t::new() }
     }
 
-    pub fn set(&mut self, val: u64) {
+    pub fn set(&self, val: u64) {
         self.inner.value.set_u64(val);
     }
 
     pub fn val(&self) -> u64 {
         self.inner.val_u64()
     }
-}
 
-#[cfg(all(not(feature = "std"), not(test)))]
-impl core::ops::AddAssign<u64> for KStatU64 {
-    #[inline]
-    fn add_assign(&mut self, other: u64) {
-        self.inner.value += other;
+    pub fn incr(&self, val: u64) {
+        self.inner.value.incr_u64(val);
+    }
+
+    pub fn decr(&self, val: u64) {
+        self.inner.value.decr_u64(val);
     }
 }
 
-#[cfg(all(not(feature = "std"), not(test)))]
+impl core::ops::AddAssign<u64> for KStatU64 {
+    #[inline]
+    fn add_assign(&mut self, other: u64) {
+        self.incr(other);
+    }
+}
+
 impl core::ops::SubAssign<u64> for KStatU64 {
     #[inline]
     fn sub_assign(&mut self, other: u64) {
-        self.inner.value -= other;
+        self.decr(other);
     }
 }
 
 #[cfg(any(feature = "std", test))]
 #[derive(Default)]
 pub struct KStatU64 {
-    value: u64,
+    value: AtomicU64,
 }
 
 #[cfg(any(feature = "std", test))]
@@ -263,25 +272,19 @@ impl KStatU64 {
     }
 
     pub fn set(&mut self, val: u64) {
-        self.value = val;
+        self.value.store(val, Ordering::Relaxed);
     }
 
     pub fn val(&self) -> u64 {
-        self.value
+        self.value.load(Ordering::Relaxed)
     }
-}
 
-#[cfg(any(feature = "std", test))]
-impl core::ops::AddAssign<u64> for KStatU64 {
-    fn add_assign(&mut self, other: u64) {
-        self.value += other;
+    pub fn incr(&self, val: u64) {
+        self.value.fetch_add(val, Ordering::Relaxed);
     }
-}
 
-#[cfg(any(feature = "std", test))]
-impl core::ops::SubAssign<u64> for KStatU64 {
-    fn sub_assign(&mut self, other: u64) {
-        self.value -= other;
+    pub fn decr(&self, val: u64) {
+        self.value.fetch_sub(val, Ordering::Relaxed);
     }
 }
 

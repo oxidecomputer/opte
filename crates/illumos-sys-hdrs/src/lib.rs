@@ -12,7 +12,10 @@ pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
 
+use core::mem::transmute;
 use core::ptr;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 
 // The following are "C type" aliases for native Rust types so that
 // the native illumos structures may be defined almost verbatim to the
@@ -117,8 +120,9 @@ impl kstat_named_t {
         Self::default()
     }
 
+    #[inline]
     pub fn val_u64(&self) -> u64 {
-        unsafe { self.value._u64 }
+        self.value.as_u64().load(Ordering::Relaxed)
     }
 }
 
@@ -144,20 +148,48 @@ pub union KStatNamedValue {
 impl core::ops::AddAssign<u64> for KStatNamedValue {
     #[inline]
     fn add_assign(&mut self, other: u64) {
-        unsafe { self._u64 += other };
+        self.incr_u64(other);
     }
 }
 
 impl core::ops::SubAssign<u64> for KStatNamedValue {
     #[inline]
     fn sub_assign(&mut self, other: u64) {
-        unsafe { self._u64 -= other };
+        self.decr_u64(other);
     }
 }
 
 impl KStatNamedValue {
-    pub fn set_u64(&mut self, val: u64) {
-        self._u64 = val;
+    /// Validates at compile time whether ._u64 can be safely used as
+    /// an AtomicU64.
+    const KSTAT_ATOMIC_U64_SAFE: () = if align_of::<KStatNamedValue>() % 8 == 0
+    {
+        ()
+    } else {
+        panic!("Platform does not meet u64 8B alignment for AtomicU64");
+    };
+
+    #[inline(always)]
+    fn as_u64(&self) -> &AtomicU64 {
+        let _ = Self::KSTAT_ATOMIC_U64_SAFE;
+        // SAFETY: KStatNamedValue must have 8B alignment on target platform.
+        //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.
+        unsafe { transmute(&self._u64) }
+    }
+
+    #[inline]
+    pub fn set_u64(&self, val: u64) {
+        self.as_u64().store(val, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn incr_u64(&self, val: u64) {
+        self.as_u64().fetch_add(val, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn decr_u64(&self, val: u64) {
+        self.as_u64().fetch_sub(val, Ordering::Relaxed);
     }
 }
 
