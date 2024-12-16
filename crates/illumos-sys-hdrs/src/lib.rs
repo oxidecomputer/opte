@@ -164,32 +164,32 @@ impl KStatNamedValue {
     /// an AtomicU64.
     const KSTAT_ATOMIC_U64_SAFE: () = if align_of::<KStatNamedValue>() % 8 == 0
     {
-        ()
     } else {
         panic!("Platform does not meet u64 8B alignment for AtomicU64");
     };
 
     #[inline(always)]
-    fn as_u64(&self) -> &AtomicU64 {
-        let _ = Self::KSTAT_ATOMIC_U64_SAFE;
+    #[allow(clippy::let_unit_value)]
+    pub fn as_u64(&self) -> &AtomicU64 {
+        _ = Self::KSTAT_ATOMIC_U64_SAFE;
         // SAFETY: KStatNamedValue must have 8B alignment on target platform.
         //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.
-        unsafe { transmute(&self._u64) }
+        unsafe { transmute::<&u64, &AtomicU64>(&self._u64) }
     }
 
     #[inline]
     pub fn set_u64(&self, val: u64) {
-        self.as_u64().store(val, Ordering::Relaxed);
+        core::hint::black_box(self.as_u64().store(val, Ordering::Relaxed));
     }
 
     #[inline]
     pub fn incr_u64(&self, val: u64) {
-        self.as_u64().fetch_add(val, Ordering::Relaxed);
+        core::hint::black_box(self.as_u64().fetch_add(val, Ordering::Relaxed));
     }
 
     #[inline]
     pub fn decr_u64(&self, val: u64) {
-        self.as_u64().fetch_sub(val, Ordering::Relaxed);
+        core::hint::black_box(self.as_u64().fetch_sub(val, Ordering::Relaxed));
     }
 }
 

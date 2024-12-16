@@ -271,7 +271,7 @@ impl KStatU64 {
         Self::default()
     }
 
-    pub fn set(&mut self, val: u64) {
+    pub fn set(&self, val: u64) {
         self.value.store(val, Ordering::Relaxed);
     }
 
