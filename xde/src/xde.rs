@@ -29,6 +29,7 @@ use crate::secpolicy;
 use crate::stats::XdeStats;
 use crate::sys;
 use crate::warn;
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -227,6 +228,7 @@ struct XdeState {
     v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
     stats: KMutex<KStatNamed<XdeStats>>,
+    cleanup: Periodic<()>,
 }
 
 struct UnderlayState {
@@ -259,6 +261,12 @@ impl XdeState {
                     .expect("Name is well-constructed (len, no NUL bytes)"),
                 KMutexType::Driver,
             ),
+            cleanup: Periodic::new(
+                c"XDE flow/cache expiry".to_owned(),
+                shared_periodic_expire,
+                Box::new(()),
+                ONE_SECOND,
+            ),
         }
     }
 }
@@ -284,7 +292,6 @@ pub struct XdeDev {
     // However, that's not where things are today.
     port: Arc<Port<VpcNetwork>>,
     vpc_cfg: VpcCfg,
-    port_periodic: Periodic<Arc<Port<VpcNetwork>>>,
     port_v2p: Arc<overlay::Virt2Phys>,
 
     // Pass the packets through to the underlay devices, skipping
@@ -302,7 +309,6 @@ pub struct XdeDev {
     // ports to theoretically reduce contention around route expiry
     // and reinsertion.
     routes: RouteCache,
-    routes_periodic: Periodic<RouteCache>,
 }
 
 #[cfg(not(test))]
@@ -631,17 +637,12 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
 #[no_mangle]
-fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
-    // XXX The call fails if the port is paused; in which case we
-    // ignore the error. Eventually xde will also have logic for
-    // moving a port to a paused state, and in that state the periodic
-    // should probably be canceled.
-    let _ = port.expire_flows();
-}
-
-#[no_mangle]
-fn expire_route_cache(routes: &mut RouteCache) {
-    routes.remove_routes()
+fn shared_periodic_expire(_: &mut ()) {
+    let devs = unsafe { xde_devs.read() };
+    for dev in devs.iter() {
+        let _ = dev.port.expire_flows();
+        dev.routes.remove_routes();
+    }
 }
 
 #[no_mangle]
@@ -703,32 +704,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         }
     };
 
-    let port = new_port(
-        req.xde_devname.clone(),
-        &cfg,
-        state.vpc_map.clone(),
-        port_v2p.clone(),
-        state.v2b.clone(),
-        state.ectx.clone(),
-        &req.dhcp,
-    )?;
-
-    let port_periodic = Periodic::new(
-        port.name_cstr().clone(),
-        expire_periodic,
-        Box::new(port.clone()),
-        ONE_SECOND,
-    );
-
-    let routes = RouteCache::default();
-
-    let routes_periodic = Periodic::new(
-        port.name_cstr().clone(),
-        expire_route_cache,
-        Box::new(routes.clone()),
-        ONE_SECOND,
-    );
-
     let mut guest_addr = cfg.guest_mac.bytes();
 
     let mut xde = Box::new(XdeDev {
@@ -736,16 +711,22 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         linkid: req.linkid,
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
-        port,
-        port_periodic,
+        port: new_port(
+            req.xde_devname.clone(),
+            &cfg,
+            state.vpc_map.clone(),
+            port_v2p.clone(),
+            state.v2b.clone(),
+            state.ectx.clone(),
+            &req.dhcp,
+        )?,
         port_v2p,
         vni: cfg.vni,
         vpc_cfg: cfg,
         passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
-        routes,
-        routes_periodic,
+        routes: RouteCache::default(),
     });
     drop(underlay_);
 
