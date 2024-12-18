@@ -215,6 +215,14 @@ struct OpteCreateParams {
         default_value_t=ZoneBrand::Sparse,
     )]
     brand: ZoneBrand,
+
+    /// The number of additional OPTE ports which should be created.
+    ///
+    /// These ports will not be used for traffic generation, and are used
+    /// to impact the port lookup time for Rx'd packets. Ports will be
+    /// assigned random MAC addresses.
+    #[arg(short = 'P', long, default_value_t = 0)]
+    passive_ports: u32,
 }
 
 #[derive(Parser)]
@@ -425,6 +433,7 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_B_PORT,
         &[xde_tests::ZONE_A_PORT],
+        params.passive_ports,
         params.brand.to_str(),
     )?;
     print_banner("Topology built!");
@@ -543,6 +552,7 @@ fn host_iperf(params: &OpteCreateParams) -> Result<()> {
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_A_PORT,
         &[xde_tests::ZONE_B_PORT],
+        params.passive_ports,
         params.brand.to_str(),
     )?;
 

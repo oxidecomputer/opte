@@ -40,6 +40,7 @@ use illumos_sys_hdrs::size_t;
 use illumos_sys_hdrs::CE_WARN;
 use illumos_sys_hdrs::KM_SLEEP;
 
+pub mod dev_map;
 pub mod dls;
 pub mod ip;
 pub mod mac;

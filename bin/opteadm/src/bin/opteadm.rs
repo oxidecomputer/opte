@@ -571,7 +571,20 @@ fn main() -> anyhow::Result<()> {
         Command::ListPorts => {
             let mut t = TabWriter::new(std::io::stdout());
             print_port_header(&mut t)?;
-            for p in hdl.list_ports()?.ports {
+            let mut ports = hdl.list_ports()?.ports;
+
+            ports.sort_by(|lhs, rhs| {
+                let l_opt_num: Option<u64> =
+                    lhs.name.strip_prefix("opte").and_then(|v| v.parse().ok());
+                let r_opt_num: Option<u64> =
+                    rhs.name.strip_prefix("opte").and_then(|v| v.parse().ok());
+
+                match (l_opt_num, r_opt_num) {
+                    (Some(l_n), Some(r_n)) => l_n.cmp(&r_n),
+                    _ => lhs.name.cmp(&rhs.name),
+                }
+            });
+            for p in ports {
                 print_port(&mut t, p)?;
             }
             t.flush()?;
