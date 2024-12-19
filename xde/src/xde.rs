@@ -304,8 +304,7 @@ impl OffloadInfo {
 
             tun_flags.contains(
                 // Inner v6 not yet supported, like.
-                TunnelTcpLsoFlags::GENEVE
-                    | TunnelTcpLsoFlags::INNER_IPV4,
+                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
             )
         } else {
             false
@@ -1263,10 +1262,7 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
-    warn!(
-        "I'm seeing\ni1: {:?},\ni2: {:?}",
-        i1, i2
-    );
+    warn!("I'm seeing\ni1: {:?},\ni2: {:?}", i1, i2);
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
