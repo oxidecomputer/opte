@@ -2698,6 +2698,7 @@ dependencies = [
  "libnet 0.1.0 (git+https://github.com/oxidecomputer/netadm-sys)",
  "opteadm",
  "oxide-vpc",
+ "rand",
  "slog",
  "slog-async",
  "slog-envlogger",
