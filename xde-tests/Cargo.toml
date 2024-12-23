@@ -12,6 +12,7 @@ oxide-vpc.workspace = true
 
 anyhow.workspace = true
 libnet.workspace = true
+rand.workspace = true
 slog.workspace = true
 slog-async.workspace = true
 slog-envlogger.workspace = true
