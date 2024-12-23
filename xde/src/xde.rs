@@ -1833,8 +1833,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
             }
 
-            drop(devs);
-
             // Currently the overlay layer leaves the outer frame
             // destination and source zero'd. Ask IRE for the route
             // associated with the underlay destination. Then ask NCE
