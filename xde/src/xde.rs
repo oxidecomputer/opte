@@ -1710,7 +1710,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         .as_ref()
         .map(|v| matches!(v, ValidUlp::Tcp(_)))
         .unwrap_or_default();
-    // let is_tcp = false;
     let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
 
     // typedef enum mac_ether_offload_flags {
@@ -1791,6 +1790,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
+            let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
             let mut out_pkt = emit_spec.apply(pkt);
 
@@ -1813,9 +1813,13 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 // can be served purely on internal links.
                 // Recall that SDU does not include L2 size, hence 'non_eth_payl'
 
-                let mss = src_dev.underlay_capab.mtu
-                    - 70
-                    - (non_eth_payl_bytes as u32);
+                let mss = if mtu_unrestricted {
+                    src_dev.underlay_capab.mtu
+                        - 70
+                        - (non_eth_payl_bytes as u32)
+                } else {
+                    1500 - (non_eth_payl_bytes as u32)
+                };
                 // let mss = 1448;
 
                 out_pkt.request_offload(is_tcp && lso_possible, mss);

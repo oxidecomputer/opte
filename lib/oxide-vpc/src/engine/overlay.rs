@@ -238,6 +238,8 @@ impl StaticAction for EncapAction {
 
         let phys_target = match target {
             RouterTargetInternal::InternetGateway(_) => {
+                action_meta
+                    .insert("opte:internal-target".into(), "false".into());
                 match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
@@ -260,6 +262,8 @@ impl StaticAction for EncapAction {
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
                 Some(phys) => {
+                    action_meta
+                        .insert("opte:internal-target".into(), "true".into());
                     PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni }
                 }
 

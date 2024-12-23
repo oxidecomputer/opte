@@ -46,6 +46,7 @@ use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use super::rule::TransformFlags;
 use super::tcp::TcpState;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
@@ -1423,7 +1424,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 let len = pkt.len();
                 let meta = pkt.meta_mut();
-                let body_csum = if tx.checksums_dirty {
+                let body_csum = if tx.checksums_dirty() {
                     meta.compute_body_csum()
                 } else {
                     None
@@ -1439,6 +1440,7 @@ impl<N: NetworkImpl> Port<N> {
                     _ => 0,
                 };
                 let out = EmitSpec {
+                    mtu_unrestricted: tx.local_destination(),
                     prepend: PushSpec::Fastpath(tx),
                     l4_hash,
                     rewind,
@@ -1532,7 +1534,7 @@ impl<N: NetworkImpl> Port<N> {
             }
             InternalProcessResult::Hairpin(v) => Ok(ProcessResult::Hairpin(v)),
             InternalProcessResult::Modified => pkt
-                .emit_spec()
+                .emit_spec(&ameta)
                 .map_err(|_| ProcessError::BadEmitSpec)
                 .map(ProcessResult::Modified),
         });
@@ -1727,7 +1729,7 @@ impl Transforms {
     }
 
     #[inline]
-    fn compile(mut self, checksums_dirty: bool) -> Arc<Self> {
+    fn compile(mut self, flags: TransformFlags) -> Arc<Self> {
         // Compile to a fasterpath transform iff. no body transform.
         if self.body.is_empty() {
             let mut still_permissable = true;
@@ -1890,7 +1892,7 @@ impl Transforms {
                             inner_ether: inner_ether.cloned(),
                             inner_ip: inner_ip.cloned(),
                             inner_ulp: inner_ulp.cloned(),
-                            checksums_dirty,
+                            flags,
                         }
                         .into(),
                     );
@@ -2320,10 +2322,22 @@ impl<N: NetworkImpl> Port<N> {
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
+        let mut flags = TransformFlags::empty();
+        if pkt.checksums_dirty() {
+            flags |= TransformFlags::CSUM_DIRTY;
+        }
+        if ameta
+            .get("opte:internal-target")
+            .map(|v| v == "true")
+            .unwrap_or_default()
+        {
+            flags |= TransformFlags::LOCAL_DESTINATION;
+        }
+
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
             pair: KMutex::new(Some(ufid_out), KMutexType::Driver),
-            xforms: xforms.compile(pkt.checksums_dirty()),
+            xforms: xforms.compile(flags),
             epoch,
             l4_hash: ufid_in.crc32(),
             tcp_flow: None,
@@ -2546,9 +2560,21 @@ impl<N: NetworkImpl> Port<N> {
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
 
+        let mut flags = TransformFlags::empty();
+        if pkt.checksums_dirty() {
+            flags |= TransformFlags::CSUM_DIRTY;
+        }
+        if ameta
+            .get("opte:internal-target")
+            .map(|v| v == "true")
+            .unwrap_or_default()
+        {
+            flags |= TransformFlags::LOCAL_DESTINATION;
+        }
+
         let hte = UftEntry {
             pair: KMutex::new(None, KMutexType::Driver),
-            xforms: xforms.compile(pkt.checksums_dirty()),
+            xforms: xforms.compile(flags),
             epoch,
             l4_hash: flow_before.crc32(),
             tcp_flow,

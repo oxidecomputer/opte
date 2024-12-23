@@ -35,6 +35,7 @@ use super::ip::L3;
 use super::parse::NoEncap;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
+use super::port::meta::ActionMeta;
 use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
@@ -964,7 +965,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(&mut self) -> Result<EmitSpec, ingot::types::ParseError>
+    pub fn emit_spec(
+        &mut self,
+        action_meta: &ActionMeta,
+    ) -> Result<EmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
@@ -1164,11 +1168,17 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
             _ => {}
         }
 
+        let mtu_unrestricted = !action_meta
+            .get("opte:internal-target")
+            .map(|v| v == "true")
+            .unwrap_or_default();
+
         Ok(EmitSpec {
             rewind: rewind as u16,
             ulp_len: encapped_len as u32,
             prepend: PushSpec::Slowpath(push_spec.into()),
             l4_hash,
+            mtu_unrestricted,
         })
     }
 
@@ -1594,11 +1604,18 @@ pub struct EmitSpec {
     pub(crate) l4_hash: u32,
     pub(crate) rewind: u16,
     pub(crate) ulp_len: u32,
+    pub(crate) mtu_unrestricted: bool,
 }
 
 impl Default for EmitSpec {
     fn default() -> Self {
-        Self { prepend: PushSpec::NoOp, l4_hash: 0, rewind: 0, ulp_len: 0 }
+        Self {
+            prepend: PushSpec::NoOp,
+            l4_hash: 0,
+            rewind: 0,
+            ulp_len: 0,
+            mtu_unrestricted: false,
+        }
     }
 }
 
@@ -1608,6 +1625,14 @@ impl EmitSpec {
     #[must_use]
     pub fn l4_hash(&self) -> u32 {
         self.l4_hash
+    }
+
+    /// Return whether this packet's route allows the use of a full jumbo frame
+    /// MSS.
+    #[inline]
+    #[must_use]
+    pub fn mtu_unrestricted(&self) -> bool {
+        self.mtu_unrestricted
     }
 
     /// Perform final structural transformations to a packet (removal of
