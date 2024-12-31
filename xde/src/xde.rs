@@ -17,7 +17,6 @@ use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
-use crate::ip::t_uscalar_t;
 use crate::mac;
 use crate::mac::lso_basic_tcp_ipv4_t;
 use crate::mac::lso_basic_tcp_ipv6_t;
@@ -25,8 +24,10 @@ use crate::mac::lso_tunnel_tcp_ipv4_t;
 use crate::mac::lso_tunnel_tcp_ipv6_t;
 use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
+use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
 use crate::mac::ChecksumOffloadCapabs;
+use crate::mac::MacEmul;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
@@ -37,7 +38,6 @@ use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::stats::XdeStats;
-use crate::sys;
 use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
@@ -47,12 +47,13 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
-use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
@@ -70,6 +71,7 @@ use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
 use opte::ddi::kstat::KStatProvider;
+use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
@@ -84,7 +86,6 @@ use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
 use opte::engine::ip::v6::Ipv6Addr;
-use opte::engine::ip::ValidL3;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -1582,13 +1583,29 @@ fn guest_loopback(
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
                     let pkt = emit_spec.apply(pkt);
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk().as_ptr(),
-                        )
+
+                    // Having advertised offloads to our guest, looped back
+                    // packets are liable to have zero-checksums. Fill these
+                    // if necessary.
+                    let pkt = if pkt
+                        .cksum_flags()
+                        .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
+                    {
+                        mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
+                            .and_then(|v| v.unwrap_mblk())
+                    } else {
+                        Some(pkt.unwrap_mblk())
                     };
+
+                    if let Some(pkt) = pkt {
+                        unsafe {
+                            mac::mac_rx(
+                                dest_dev.mh,
+                                ptr::null_mut(),
+                                pkt.as_ptr(),
+                            )
+                        };
+                    }
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
@@ -1722,13 +1739,19 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     // } mac_ether_offload_flags_t;
 
     let (l4_flag, l4_ty) = match &meta.inner_ulp {
-        Some(ValidUlp::Tcp(_)) => (0b01000, IpProtocol::TCP.0),
-        Some(ValidUlp::Udp(_)) => (0b01000, IpProtocol::UDP.0),
-        _ => (0, 0),
+        Some(ValidUlp::Tcp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP.0)
+        }
+        Some(ValidUlp::Udp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP.0)
+        }
+        _ => (MacEtherOffloadFlags::empty(), 0),
     };
 
     let ulp_meoi = mac_ether_offload_info_t {
-        meoi_flags: 0b00101 | l4_flag,
+        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+            | MacEtherOffloadFlags::L3INFO_SET
+            | l4_flag,
         meoi_len,
         meoi_l2hlen: meta.inner_eth.packet_length() as u8,
         meoi_l3proto: meta.inner_eth.ethertype().0,
@@ -1808,7 +1831,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
 
             // CSO is a prerequisite for LSO.
             if cso_possible {
-                // TODO: actually scope MTU down by chosen V2P/V2B.
                 // Boost MSS to use full jumbo frames if we know our path
                 // can be served purely on internal links.
                 // Recall that SDU does not include L2 size, hence 'non_eth_payl'
@@ -1820,12 +1842,13 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 } else {
                     1500 - (non_eth_payl_bytes as u32)
                 };
-                // let mss = 1448;
 
                 out_pkt.request_offload(is_tcp && lso_possible, mss);
 
                 let tun_meoi = mac_ether_tun_info_t {
-                    mett_flags: 0b10101,
+                    mett_flags: MacEtherOffloadFlags::L2INFO_SET
+                        | MacEtherOffloadFlags::L3INFO_SET
+                        | MacEtherOffloadFlags::TUNINFO_SET,
                     mett_l2hlen: 14,
                     mett_l3proto: Ethertype::IPV6.0,
                     mett_l3hlen: 40,
@@ -2164,9 +2187,7 @@ unsafe fn xde_rx_one(
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let mut npkt = emit_spec.apply(pkt);
-
-            // npkt.mark_cksum_happy();
+            let npkt = emit_spec.apply(pkt);
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
         }

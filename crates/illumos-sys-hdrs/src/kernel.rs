@@ -602,4 +602,12 @@ extern "C" {
         value: u32,
         flags: u32,
     );
+    pub fn mac_hcksum_get(
+        mp: *mut mblk_t,
+        start: *mut u32,
+        stuff: *mut u32,
+        end: *mut u32,
+        value: *mut u32,
+        flags: *mut u32,
+    );
 }

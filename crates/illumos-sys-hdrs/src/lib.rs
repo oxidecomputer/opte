@@ -11,6 +11,9 @@
 pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
+use mac::MacEtherOffloadFlags;
+
+pub mod mac;
 
 use core::ptr;
 
@@ -210,27 +213,13 @@ pub enum krw_type_t {
 }
 
 // ======================================================================
-// uts/common/sys/stream.h
+// uts/common/sys/mac_provider.h
 // ======================================================================
-
-// LOCAL TESTING AHOY
-// typedef struct mac_ether_offload_info {
-//     mac_ether_offload_flags_t   meoi_flags; /* What's valid? */
-//     size_t      meoi_len;   /* Total message length */
-//     uint8_t     meoi_l2hlen;    /* How long is the Ethernet header? */
-//     uint16_t    meoi_l3proto;   /* What's the Ethertype */
-//     uint16_t    meoi_l3hlen;    /* How long is the header? */
-//     uint8_t     meoi_l4proto;   /* What is the payload type? */
-//     uint8_t     meoi_l4hlen;    /* How long is the L4 header */
-//     /* TODO(kyle) we do need this tracked, but this is the wrong place */
-//     uint8_t     meoi_tunproto;  /* What is the payload type? */
-//     uint16_t    meoi_tunhlen;   /* How long is the L4 header */
-// } mac_ether_offload_info_t;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct mac_ether_offload_info_t {
-    pub meoi_flags: u8,
+    pub meoi_flags: MacEtherOffloadFlags,
     pub meoi_l2hlen: u8,
     pub meoi_l3proto: u16,
     pub meoi_l3hlen: u16,
@@ -242,12 +231,16 @@ pub struct mac_ether_offload_info_t {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct mac_ether_tun_info_t {
-    pub mett_flags: u8,
+    pub mett_flags: MacEtherOffloadFlags,
     pub mett_tuntype: u8,
     pub mett_l2hlen: u8,
     pub mett_l3proto: u16,
     pub mett_l3hlen: u16,
 }
+
+// ======================================================================
+// uts/common/sys/stream.h
+// ======================================================================
 
 // Many of these fields are not needed at the moment and thus defined
 // imprecisely for expediency.

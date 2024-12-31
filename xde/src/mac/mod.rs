@@ -21,7 +21,9 @@ use core::fmt;
 use core::mem::MaybeUninit;
 use core::ptr;
 use illumos_sys_hdrs::*;
+use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
+use opte::ddi::mblk::MsgBlkChain;
 use opte::engine::ether::EtherAddr;
 pub use sys::*;
 
@@ -243,7 +245,7 @@ impl MacClientHandle {
     /// but for now we pass only a single packet at a time.
     pub fn tx(
         &self,
-        pkt: MsgBlk,
+        pkt: impl AsMblk,
         hint: uintptr_t,
         flags: MacTxFlags,
     ) -> Option<MsgBlk> {
@@ -251,14 +253,11 @@ impl MacClientHandle {
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
         let mut ret_mp = ptr::null_mut();
+        let Some(mblk) = pkt.unwrap_mblk() else {
+            return None;
+        };
         unsafe {
-            mac_tx(
-                self.mch,
-                pkt.unwrap_mblk().as_ptr(),
-                hint,
-                flags.bits(),
-                &mut ret_mp,
-            )
+            mac_tx(self.mch, mblk.as_ptr(), hint, flags.bits(), &mut ret_mp)
         };
         if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
@@ -284,7 +283,7 @@ impl MacClientHandle {
     /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
-        pkt: MsgBlk,
+        pkt: impl AsMblk,
         hint: uintptr_t,
         flags: MacTxFlags,
     ) {
@@ -294,14 +293,13 @@ impl MacClientHandle {
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         let mut ret_mp = ptr::null_mut();
+
+        let Some(mblk) = pkt.unwrap_mblk() else {
+            return;
+        };
+
         unsafe {
-            mac_tx(
-                self.mch,
-                pkt.unwrap_mblk().as_ptr(),
-                hint,
-                raw_flags,
-                &mut ret_mp,
-            )
+            mac_tx(self.mch, mblk.as_ptr(), hint, raw_flags, &mut ret_mp)
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
@@ -457,9 +455,38 @@ pub struct ChecksumOffloadCapabs: u32 {
     const INET_HDRCKSUM = 1 << 4;
 
     const NON_TUN_CAPABS =
-        Self::INET_PARTIAL.bits() | Self::INET_FULL_V4.bits() | Self::INET_FULL_V6.bits() | Self::INET_HDRCKSUM.bits();
+        Self::INET_PARTIAL.bits() | Self::INET_FULL_V4.bits() |
+            Self::INET_FULL_V6.bits() | Self::INET_HDRCKSUM.bits();
 
     const TUN_OUTER_CSUM = 1 << 5;
     const TUN_GENEVE = 1 << 6;
 }
+}
+
+bitflags! {
+/// Flagset for requesting emulation on any packets marked
+/// with the given offloads.
+pub struct MacEmul: u32 {
+    /// Calculate the L3/L4 checksums.
+    const HWCKSUM_EMUL = MAC_HWCKSUM_EMUL;
+    /// Calculate the IPv4 checksum, ignoring L4.
+    const IPCKSUM_EMUL = MAC_IPCKSUM_EMUL;
+    /// Segment TCP packets into MSS-sized chunks.
+    const LSO_EMUL = MAC_LSO_EMUL;
+}
+}
+
+/// Emulates various offloads (checksum, LSO) for packets on loopback paths.
+pub fn mac_hw_emul(msg: impl AsMblk, flags: MacEmul) -> Option<MsgBlkChain> {
+    let mut chain = msg.unwrap_mblk()?.as_ptr();
+    unsafe {
+        sys::mac_hw_emul(
+            &raw mut chain,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            flags.bits(),
+        );
+    }
+
+    (!chain.is_null()).then(|| unsafe { MsgBlkChain::new(chain).unwrap() })
 }

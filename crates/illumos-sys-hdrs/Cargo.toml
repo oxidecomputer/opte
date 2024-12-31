@@ -9,3 +9,6 @@ repository.workspace = true
 [features]
 default = []
 kernel = []
+
+[dependencies]
+bitflags = { workspace = true }
