@@ -1168,17 +1168,12 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
             _ => {}
         }
 
-        let mtu_unrestricted = !action_meta
-            .get("opte:internal-target")
-            .map(|v| v == "true")
-            .unwrap_or_default();
-
         Ok(EmitSpec {
             rewind: rewind as u16,
             ulp_len: encapped_len as u32,
             prepend: PushSpec::Slowpath(push_spec.into()),
             l4_hash,
-            mtu_unrestricted,
+            mtu_unrestricted: action_meta.is_internal_target(),
         })
     }
 

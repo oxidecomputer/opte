@@ -724,7 +724,7 @@ impl MsgBlk {
             | MblkOffloadFlags::HCK_FULLCKSUM;
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
-            illumos_sys_hdrs::mac_hcksum_set(
+            illumos_sys_hdrs::mac::mac_hcksum_set(
                 self.0.as_ptr(),
                 0,
                 0,
@@ -733,7 +733,7 @@ impl MsgBlk {
                 ckflags.bits() as u32,
             );
             if is_tcp {
-                illumos_sys_hdrs::lso_info_set(
+                illumos_sys_hdrs::mac::lso_info_set(
                     self.0.as_ptr(),
                     mss,
                     MblkOffloadFlags::HW_LSO.bits() as u32,
@@ -771,7 +771,7 @@ impl MsgBlk {
 
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
-            illumos_sys_hdrs::mac_hcksum_get(
+            illumos_sys_hdrs::mac::mac_hcksum_get(
                 self.0.as_ptr(),
                 ptr::null_mut(),
                 ptr::null_mut(),

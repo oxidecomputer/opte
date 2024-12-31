@@ -4,6 +4,8 @@
 
 // Copyright 2024 Oxide Computer Company
 
+#[cfg(feature = "kernel")]
+use crate::mblk_t;
 use bitflags::bitflags;
 
 // ======================================================================
@@ -27,6 +29,49 @@ pub struct MacEtherOffloadFlags: u8 {
     /// `tuntype` is set.
     const TUNINFO_SET    = 1 << 4;
 }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct mac_ether_offload_info_t {
+    pub meoi_flags: MacEtherOffloadFlags,
+    pub meoi_l2hlen: u8,
+    pub meoi_l3proto: u16,
+    pub meoi_l3hlen: u16,
+    pub meoi_l4proto: u8,
+    pub meoi_l4hlen: u8,
+    pub meoi_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct mac_ether_tun_info_t {
+    pub mett_flags: MacEtherOffloadFlags,
+    pub mett_tuntype: u8,
+    pub mett_l2hlen: u8,
+    pub mett_l3proto: u16,
+    pub mett_l3hlen: u16,
+}
+
+#[cfg(feature = "kernel")]
+extern "C" {
+    pub fn lso_info_set(mp: *mut mblk_t, mss: u32, flags: u32);
+    pub fn mac_hcksum_set(
+        mp: *mut mblk_t,
+        start: u32,
+        stuff: u32,
+        end: u32,
+        value: u32,
+        flags: u32,
+    );
+    pub fn mac_hcksum_get(
+        mp: *mut mblk_t,
+        start: *mut u32,
+        stuff: *mut u32,
+        end: *mut u32,
+        value: *mut u32,
+        flags: *mut u32,
+    );
 }
 
 // ======================================================================

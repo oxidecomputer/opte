@@ -29,7 +29,7 @@ opte-api.workspace = true
 
 ingot.workspace = true
 
-bitflags = { workspace = true , features = ["serde"]}
+bitflags = { workspace = true , features = ["serde"] }
 cfg-if.workspace = true
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true
