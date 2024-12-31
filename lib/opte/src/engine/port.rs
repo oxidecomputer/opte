@@ -1255,6 +1255,13 @@ impl<N: NetworkImpl> Port<N> {
         //
         // In case 1, we can also cache and reuse the same EmitSpec for
         // all hit packets.
+        //
+        // Lock management here is generally optimistic. The strategy we employ
+        // is to attempt to grab a UFT entry from a read lock -- on a miss or
+        // an invalidated entry, we upgrade to a write lock (assuming we need to
+        // fallback to the slowpath), and attempt to read again. A second miss
+        // then leads to the slowpath. A successful fastpath hit may need to
+        // reacquire the write-lock if we end up closing out a TCP flow.
 
         // The lock needs to be optional here because there is one
         // case wherein we need to reacquire the lock -- invalidation
