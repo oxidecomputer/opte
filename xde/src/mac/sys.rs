@@ -240,23 +240,18 @@ pub struct mac_capab_lso_t {
     pub lso_tunnel_tcp_ipv6: lso_tunnel_tcp_ipv6_t,
 }
 
-/*
- * Currently supported flags for LSO.
- */
-pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01; /* TCPv4 LSO capability */
-pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02; /* TCPv6 LSO capability */
-pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04; /* Tun/v4 LSO capability */
-pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08; /* Tun/v6 LSO capability */
+// Currently supported flags for LSO.
+pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01;
+pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02;
+pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04;
+pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08;
 
-/*
- * Currently supported tunnel classes for tunnelled LSO offload.
- * Design: This allows different L3 support from unencapped. Overkill?
- */
+// Currently supported tunnel classes for tunnelled LSO offload.
 pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;
 pub const LSO_TX_TUNNEL_INNER_IP4: u32 = 0x02;
 pub const LSO_TX_TUNNEL_INNER_IP6: u32 = 0x04;
-pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08; /* support Geneve (UDP) */
-pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10; /* support VXLAN (UDP) */
+pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08;
+pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10;
 
 #[repr(C)]
 #[derive(Debug)]

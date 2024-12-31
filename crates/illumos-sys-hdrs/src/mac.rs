@@ -32,6 +32,16 @@ pub struct MacEtherOffloadFlags: u8 {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct MacTunType(u8);
+
+impl MacTunType {
+    pub const NONE: Self = Self(0);
+    pub const GENEVE: Self = Self(1);
+    pub const VXLAN: Self = Self(2);
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct mac_ether_offload_info_t {
     pub meoi_flags: MacEtherOffloadFlags,
@@ -47,7 +57,7 @@ pub struct mac_ether_offload_info_t {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct mac_ether_tun_info_t {
     pub mett_flags: MacEtherOffloadFlags,
-    pub mett_tuntype: u8,
+    pub mett_tuntype: MacTunType,
     pub mett_l2hlen: u8,
     pub mett_l3proto: u16,
     pub mett_l3hlen: u16,

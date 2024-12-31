@@ -430,35 +430,57 @@ impl Drop for MacPerimeterHandle {
 }
 
 bitflags! {
+/// Classes of TCP segmentation offload supported by a MAC provider.
 pub struct TcpLsoFlags: u32 {
+    /// The device supports TCP LSO over IPv4.
     const BASIC_IPV4 = LSO_TX_BASIC_TCP_IPV4;
+    /// The device supports TCP LSO over IPv6.
     const BASIC_IPV6 = LSO_TX_BASIC_TCP_IPV6;
+    /// The device supports LSO of TCP packets within IPv4-based tunnels.
     const TUN_IPV4 = LSO_TX_TUNNEL_TCP_IPV4;
+    /// The device supports LSO of TCP packets within IPv6-based tunnels.
     const TUN_IPV6 = LSO_TX_TUNNEL_TCP_IPV6;
 }
 
+/// Supported LSO use specific to [`TcpLsoFlags::TUN_IPV4`] or
+/// [`TcpLsoFlags::TUN_IPV6`].
 pub struct TunnelTcpLsoFlags: u32 {
+    /// The device can fill the outer L4 (e.g., UDP) checksum
+    /// on generated tunnel packets.
     const FILL_OUTER_CSUM = LSO_TX_TUNNEL_OUTER_CSUM;
+    /// The device supports *inner* TCP LSO over IPv4.
     const INNER_IPV4 = LSO_TX_TUNNEL_INNER_IP4;
+    /// The device supports *inner* TCP LSO over IPv6.
     const INNER_IPV6 = LSO_TX_TUNNEL_INNER_IP6;
+    /// LSO is supported with a Geneve outer transport.
     const GENEVE = LSO_TX_TUNNEL_GENEVE;
+    /// LSO is supported with a VXLAN outer transport.
     const VXLAN = LSO_TX_TUNNEL_VXLAN;
 }
 
+/// Classes of checksum offload suppported by a MAC provider.
 pub struct ChecksumOffloadCapabs: u32 {
-    /// XXX: set on packets, not on device.
+    /// CSO is enabled on the device.
     const ENABLE = 1 << 0;
 
+    /// Device can finalize packet checksum when provided with a partial
+    /// (pseudoheader) checksum.
     const INET_PARTIAL = 1 << 1;
+    /// Device can compute full (L3+L4) checksum of TCP/UDP over IPv4.
     const INET_FULL_V4 = 1 << 2;
+    /// Device can compute full (L4) checksum of TCP/UDP over IPv6.
     const INET_FULL_V6 = 1 << 3;
+    /// Device can compute IPv4 header checksum.
     const INET_HDRCKSUM = 1 << 4;
 
     const NON_TUN_CAPABS =
-        Self::INET_PARTIAL.bits() | Self::INET_FULL_V4.bits() |
-            Self::INET_FULL_V6.bits() | Self::INET_HDRCKSUM.bits();
+        Self::ENABLE.bits() | Self::INET_PARTIAL.bits() |
+        Self::INET_FULL_V4.bits() | Self::INET_FULL_V6.bits() |
+        Self::INET_HDRCKSUM.bits();
 
+    /// Device can fill outer (UDP) checksum on tunnelled packets.
     const TUN_OUTER_CSUM = 1 << 5;
+    /// Device can fill inner checksums (`NON_TUN_CAPABS`) for Geneve packets.
     const TUN_GENEVE = 1 << 6;
 }
 }

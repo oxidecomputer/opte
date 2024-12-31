@@ -11,7 +11,8 @@
 pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
-use mac::MacEtherOffloadFlags;
+use mac::mac_ether_offload_info_t;
+use mac::mac_ether_tun_info_t;
 
 pub mod mac;
 
@@ -210,32 +211,6 @@ pub enum krw_type_t {
     RW_DRIVER = 2,
     /// Kernel default lock.
     RW_DEFAULT = 4,
-}
-
-// ======================================================================
-// uts/common/sys/mac_provider.h
-// ======================================================================
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct mac_ether_offload_info_t {
-    pub meoi_flags: MacEtherOffloadFlags,
-    pub meoi_l2hlen: u8,
-    pub meoi_l3proto: u16,
-    pub meoi_l3hlen: u16,
-    pub meoi_l4proto: u8,
-    pub meoi_l4hlen: u8,
-    pub meoi_len: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct mac_ether_tun_info_t {
-    pub mett_flags: MacEtherOffloadFlags,
-    pub mett_tuntype: u8,
-    pub mett_l2hlen: u8,
-    pub mett_l3proto: u16,
-    pub mett_l3hlen: u16,
 }
 
 // ======================================================================

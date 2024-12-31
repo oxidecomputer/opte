@@ -11,4 +11,4 @@ default = []
 kernel = []
 
 [dependencies]
-bitflags = { workspace = true }
+bitflags.workspace = true

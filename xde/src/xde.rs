@@ -52,7 +52,10 @@ use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
@@ -81,10 +84,12 @@ use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
+use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
@@ -883,7 +888,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_min_sdu = 1;
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
-    mreg.m_margin = 128; //sys::VLAN_TAGSZ;
+    mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     unsafe {
@@ -1240,7 +1245,6 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
-    warn!("I'm seeing\ni1: {:?},\ni2: {:?}", i1, i2);
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
@@ -1729,15 +1733,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         .unwrap_or_default();
     let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
 
-    // typedef enum mac_ether_offload_flags {
-    //     MEOI_L2INFO_SET     = 1 << 0,
-    //     MEOI_VLAN_TAGGED    = 1 << 1,
-    //     MEOI_L3INFO_SET     = 1 << 2,
-    //     MEOI_L4INFO_SET     = 1 << 3,
-    //     /* TODO(kyle) we do need this tracked, but this is the wrong place */
-    //     MEOI_TUNINFO_SET        = 1 << 4
-    // } mac_ether_offload_flags_t;
-
     let (l4_flag, l4_ty) = match &meta.inner_ulp {
         Some(ValidUlp::Tcp(_)) => {
             (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP.0)
@@ -1818,7 +1813,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let mut out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
-                // TODO(kyle): need to provide CSO emu here for these packets.
                 let devs = unsafe { xde_devs.read() };
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
@@ -1849,10 +1843,10 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     mett_flags: MacEtherOffloadFlags::L2INFO_SET
                         | MacEtherOffloadFlags::L3INFO_SET
                         | MacEtherOffloadFlags::TUNINFO_SET,
-                    mett_l2hlen: 14,
+                    mett_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
                     mett_l3proto: Ethertype::IPV6.0,
-                    mett_l3hlen: 40,
-                    mett_tuntype: 1,
+                    mett_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                    mett_tuntype: MacTunType::GENEVE,
 
                     ..Default::default()
                 };
@@ -1987,13 +1981,6 @@ unsafe extern "C" fn xde_mc_getcapab(
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
             let desired_lso = shared_underlay_caps.upstream_lso();
-
-            warn!(
-                "I'm advertising flags {:x?}, v4 {:?} v6 {:?}",
-                desired_lso.lso_flags,
-                desired_lso.lso_basic_tcp_ipv4,
-                desired_lso.lso_basic_tcp_ipv6
-            );
 
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt
