@@ -6,7 +6,6 @@
 
 //! A virtual switch port.
 
-use self::meta::ActionMeta;
 use super::ether::Ethernet;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
@@ -46,6 +45,7 @@ use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use super::rule::TransformFlags;
 use super::tcp::TcpState;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
@@ -96,11 +96,15 @@ use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use ingot::types::Read;
 use ingot::udp::Udp;
+use meta::ActionMeta;
 use opte_api::Direction;
 use opte_api::MacAddr;
 use opte_api::OpteError;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
+
+/// Metadata for inter-action communication.
+pub mod meta;
 
 pub type Result<T> = result::Result<T, OpteError>;
 
@@ -1447,7 +1451,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 let len = pkt.len();
                 let meta = pkt.meta_mut();
-                let body_csum = if tx.checksums_dirty {
+                let body_csum = if tx.checksums_dirty() {
                     meta.compute_body_csum()
                 } else {
                     None
@@ -1463,6 +1467,7 @@ impl<N: NetworkImpl> Port<N> {
                     _ => 0,
                 };
                 let out = EmitSpec {
+                    mtu_unrestricted: tx.local_destination(),
                     prepend: PushSpec::Fastpath(tx),
                     l4_hash,
                     rewind,
@@ -1556,7 +1561,7 @@ impl<N: NetworkImpl> Port<N> {
             }
             InternalProcessResult::Hairpin(v) => Ok(ProcessResult::Hairpin(v)),
             InternalProcessResult::Modified => pkt
-                .emit_spec()
+                .emit_spec(&ameta)
                 .map_err(|_| ProcessError::BadEmitSpec)
                 .map(ProcessResult::Modified),
         });
@@ -1751,7 +1756,7 @@ impl Transforms {
     }
 
     #[inline]
-    fn compile(mut self, checksums_dirty: bool) -> Arc<Self> {
+    fn compile(mut self, flags: TransformFlags) -> Arc<Self> {
         // Compile to a fasterpath transform iff. no body transform.
         if self.body.is_empty() {
             let mut still_permissable = true;
@@ -1914,7 +1919,7 @@ impl Transforms {
                             inner_ether: inner_ether.cloned(),
                             inner_ip: inner_ip.cloned(),
                             inner_ulp: inner_ulp.cloned(),
-                            checksums_dirty,
+                            flags,
                         }
                         .into(),
                     );
@@ -2344,10 +2349,18 @@ impl<N: NetworkImpl> Port<N> {
             Err(e) => return Err(ProcessError::Layer(e)),
         }
 
+        let mut flags = TransformFlags::empty();
+        if pkt.checksums_dirty() {
+            flags |= TransformFlags::CSUM_DIRTY;
+        }
+        if ameta.is_internal_target() {
+            flags |= TransformFlags::LOCAL_DESTINATION;
+        }
+
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
             pair: KMutex::new(Some(ufid_out), KMutexType::Driver),
-            xforms: xforms.compile(pkt.checksums_dirty()),
+            xforms: xforms.compile(flags),
             epoch,
             l4_hash: ufid_in.crc32(),
             tcp_flow: None,
@@ -2570,9 +2583,17 @@ impl<N: NetworkImpl> Port<N> {
         let flow_before = *pkt.flow();
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
 
+        let mut flags = TransformFlags::empty();
+        if pkt.checksums_dirty() {
+            flags |= TransformFlags::CSUM_DIRTY;
+        }
+        if ameta.is_internal_target() {
+            flags |= TransformFlags::LOCAL_DESTINATION;
+        }
+
         let hte = UftEntry {
             pair: KMutex::new(None, KMutexType::Driver),
-            xforms: xforms.compile(pkt.checksums_dirty()),
+            xforms: xforms.compile(flags),
             epoch,
             l4_hash: flow_before.crc32(),
             tcp_flow,
@@ -3070,83 +3091,4 @@ extern "C" {
         port: uintptr_t,
         ifid: *const InnerFlowId,
     );
-}
-
-/// Metadata for inter-action communication.
-pub mod meta {
-    use alloc::collections::BTreeMap;
-    use alloc::string::String;
-    use alloc::string::ToString;
-
-    /// A value meant to be used in the [`ActionMeta`] map.
-    ///
-    /// The purpose of this trait is to define the value's key as well
-    /// as serialization to/from strings. These are like Display and
-    /// FromStr; but here their focus is on unambiguous parsing. That
-    /// is, we can't necessarily rely on a type's Display impl being
-    /// good for serializing to a metadata string, but at the same
-    /// time we don't want to force its Display to have to work in
-    /// this constraint.
-    ///
-    /// A value doesn't have to implement this type; there is nothing
-    /// that enforces the strings stored in [`ActionMeta`] are strings
-    /// generated by this trait impl. It's just a convenient way to
-    /// mark and implement values meant to be used as action metadata.
-    pub trait ActionMetaValue: Sized {
-        const KEY: &'static str;
-
-        fn key(&self) -> String {
-            Self::KEY.to_string()
-        }
-
-        /// Create a representation of the value to be used in
-        /// [`ActionMeta`].
-        fn as_meta(&self) -> String;
-
-        /// Attempt to create a value assuming that `s` was created
-        /// with [`Self::as_meta()`].
-        fn from_meta(s: &str) -> Result<Self, String>;
-    }
-
-    /// The action metadata map.
-    ///
-    /// This metadata is accessible by all actions during layer
-    /// processing and acts as a form of inter-action communication.
-    /// The action metadata is nothing more than a map of string keys
-    /// to string values -- their meaning is opaque to OPTE itself. It
-    /// is up to the actions to decide what these strings mean.
-    #[derive(Default)]
-    pub struct ActionMeta {
-        inner: BTreeMap<String, String>,
-    }
-
-    impl ActionMeta {
-        pub fn new() -> Self {
-            Self::default()
-        }
-
-        /// Clear all entries.
-        pub fn clear(&mut self) {
-            self.inner.clear();
-        }
-
-        /// Insert the key-value pair into the map, replacing any
-        /// existing key-value pair. Return the value being replaced,
-        /// or `None`.
-        pub fn insert(&mut self, key: String, val: String) -> Option<String> {
-            self.inner.insert(key, val)
-        }
-
-        /// Remove the key-value pair with the specified key. Return
-        /// the value, or `None` if no such entry exists.
-        pub fn remove(&mut self, key: &str) -> Option<String> {
-            self.inner.remove(key)
-        }
-
-        /// Get a reference to the value with the given key, or `None`
-        /// if no such entry exists.
-        pub fn get(&self, key: &str) -> Option<&String> {
-            self.inner.get(key)
-        }
-    }
 }

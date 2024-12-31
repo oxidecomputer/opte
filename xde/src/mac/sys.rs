@@ -186,6 +186,13 @@ extern "C" {
     pub fn mac_perim_exit(mph: mac_perim_handle);
     pub fn mac_perim_held(mh: mac_handle) -> boolean_t;
 
+    pub fn mac_hw_emul(
+        mp_chain: *mut *mut mblk_t,
+        otail: *mut *mut mblk_t,
+        ocount: *mut c_uint,
+        mac_emul: u32,
+    );
+
     // VERY private to MAC.
     pub fn mac_capab_get(
         mh: *mut mac_handle,
@@ -233,24 +240,18 @@ pub struct mac_capab_lso_t {
     pub lso_tunnel_tcp_ipv6: lso_tunnel_tcp_ipv6_t,
 }
 
-/*
- * Currently supported flags for LSO.
- */
-pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01; /* TCPv4 LSO capability */
-pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02; /* TCPv6 LSO capability */
-pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04; /* Tun/v4 LSO capability */
-pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08; /* Tun/v6 LSO capability */
+// Currently supported flags for LSO.
+pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01;
+pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02;
+pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04;
+pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08;
 
-/*
- * Currently supported tunnel classes for tunnelled LSO offload.
- * Design: This allows different L3 support from unencapped. Overkill?
- */
-/* hardware can fill outer UDP or GRE checksum information */
+// Currently supported tunnel classes for tunnelled LSO offload.
 pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;
 pub const LSO_TX_TUNNEL_INNER_IP4: u32 = 0x02;
 pub const LSO_TX_TUNNEL_INNER_IP6: u32 = 0x04;
-pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08; /* support Geneve (UDP) */
-pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10; /* support VXLAN (UDP) */
+pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08;
+pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -534,3 +535,10 @@ pub struct mac_register_t {
     pub m_v12n: u32,
     pub m_multicast_sdu: c_uint,
 }
+
+// ======================================================================
+// uts/common/sys/mac_client.h
+// ======================================================================
+pub const MAC_HWCKSUM_EMUL: u32 = 1 << 0;
+pub const MAC_IPCKSUM_EMUL: u32 = 1 << 1;
+pub const MAC_LSO_EMUL: u32 = 1 << 2;

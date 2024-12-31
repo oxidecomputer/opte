@@ -45,6 +45,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
@@ -319,6 +320,14 @@ impl Display for HdrTransform {
     }
 }
 
+bitflags! {
+    #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+    pub struct TransformFlags: u8 {
+        const CSUM_DIRTY = 1;
+        const LOCAL_DESTINATION = 1 << 1;
+    }
+}
+
 /// Header transformations matching a simple format, amenable
 /// to fastpath compilation:
 /// * Encap is either pushed or popped in its entirety,
@@ -331,10 +340,20 @@ pub struct CompiledTransform {
     pub inner_ether: Option<EtherMod>,
     pub inner_ip: Option<IpMod>,
     pub inner_ulp: Option<UlpMetaModify>,
-    pub checksums_dirty: bool,
+    pub flags: TransformFlags,
 }
 
 impl CompiledTransform {
+    #[inline]
+    pub fn checksums_dirty(&self) -> bool {
+        self.flags.contains(TransformFlags::CSUM_DIRTY)
+    }
+
+    #[inline]
+    pub fn local_destination(&self) -> bool {
+        self.flags.contains(TransformFlags::LOCAL_DESTINATION)
+    }
+
     #[inline(always)]
     pub fn transform_ether<V: ByteSliceMut>(
         &self,

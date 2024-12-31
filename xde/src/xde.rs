@@ -12,11 +12,11 @@
 
 //#![allow(clippy::arc_with_non_send_sync)]
 
+use crate::dev_map::DevMap;
 use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
-use crate::ip::t_uscalar_t;
 use crate::mac;
 use crate::mac::lso_basic_tcp_ipv4_t;
 use crate::mac::lso_basic_tcp_ipv6_t;
@@ -24,8 +24,10 @@ use crate::mac::lso_tunnel_tcp_ipv4_t;
 use crate::mac::lso_tunnel_tcp_ipv6_t;
 use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
+use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
 use crate::mac::ChecksumOffloadCapabs;
+use crate::mac::MacEmul;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
@@ -36,8 +38,8 @@ use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::stats::XdeStats;
-use crate::sys;
 use crate::warn;
+use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -45,12 +47,16 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
-use core::mem::MaybeUninit;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
@@ -68,6 +74,7 @@ use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
 use opte::ddi::kstat::KStatProvider;
+use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
@@ -77,12 +84,13 @@ use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
+use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Addr;
-use opte::engine::ip::ValidL3;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -141,8 +149,7 @@ const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
-#[allow(clippy::vec_box)]
-static mut xde_devs: KRwLock<Vec<Box<XdeDev>>> = KRwLock::new(Vec::new());
+static mut xde_devs: KRwLock<DevMap> = KRwLock::new(DevMap::new());
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = ptr::null_mut();
@@ -304,8 +311,7 @@ impl OffloadInfo {
 
             tun_flags.contains(
                 // Inner v6 not yet supported, like.
-                TunnelTcpLsoFlags::GENEVE
-                    | TunnelTcpLsoFlags::INNER_IPV4,
+                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
             )
         } else {
             false
@@ -360,6 +366,8 @@ struct XdeState {
     v2b: Arc<overlay::Virt2Boundary>,
     underlay: KMutex<Option<UnderlayState>>,
     stats: KMutex<KStatNamed<XdeStats>>,
+    #[allow(unused)]
+    cleanup: Periodic<()>,
 }
 
 struct UnderlayState {
@@ -393,6 +401,12 @@ impl XdeState {
                     .expect("Name is well-constructed (len, no NUL bytes)"),
                 KMutexType::Driver,
             ),
+            cleanup: Periodic::new(
+                c"XDE flow/cache expiry".to_owned(),
+                shared_periodic_expire,
+                Box::new(()),
+                ONE_SECOND,
+            ),
         }
     }
 }
@@ -406,7 +420,7 @@ fn stat_parse_error(dir: Direction, err: &ParseError) {
 
 #[repr(C)]
 pub struct XdeDev {
-    devname: String,
+    pub devname: String,
     linkid: datalink_id_t,
     mh: *mut mac::mac_handle,
     link_state: mac::link_state_t,
@@ -416,16 +430,15 @@ pub struct XdeDev {
     // XXX Ideally the xde driver would be a generic driver which
     // could setup ports for any number of network implementations.
     // However, that's not where things are today.
-    port: Arc<Port<VpcNetwork>>,
+    pub port: Arc<Port<VpcNetwork>>,
     vpc_cfg: VpcCfg,
-    port_periodic: Periodic<Arc<Port<VpcNetwork>>>,
     port_v2p: Arc<overlay::Virt2Phys>,
 
     // Pass the packets through to the underlay devices, skipping
     // opte-core processing.
     passthrough: bool,
 
-    vni: Vni,
+    pub vni: Vni,
 
     // These are clones of the underlay ports initialized by the
     // driver.
@@ -437,7 +450,6 @@ pub struct XdeDev {
     // ports to theoretically reduce contention around route expiry
     // and reinsertion.
     routes: RouteCache,
-    routes_periodic: Periodic<RouteCache>,
 }
 
 #[cfg(not(test))]
@@ -766,17 +778,12 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
 #[no_mangle]
-fn expire_periodic(port: &mut Arc<Port<VpcNetwork>>) {
-    // XXX The call fails if the port is paused; in which case we
-    // ignore the error. Eventually xde will also have logic for
-    // moving a port to a paused state, and in that state the periodic
-    // should probably be canceled.
-    let _ = port.expire_flows();
-}
-
-#[no_mangle]
-fn expire_route_cache(routes: &mut RouteCache) {
-    routes.remove_routes()
+fn shared_periodic_expire(_: &mut ()) {
+    let devs = unsafe { xde_devs.read() };
+    for dev in devs.iter() {
+        let _ = dev.port.expire_flows();
+        dev.routes.remove_routes();
+    }
 }
 
 #[no_mangle]
@@ -801,15 +808,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // This does mean that the current Rx path is blocked on device
     // creation, but that's a price we need to pay for the moment.
     let mut devs = unsafe { xde_devs.write() };
-    if devs.iter().any(|x| x.devname == req.xde_devname) {
+    if devs.get_by_name(&req.xde_devname).is_some() {
         return Err(OpteError::PortExists(req.xde_devname.clone()));
     }
 
     let cfg = VpcCfg::from(req.cfg.clone());
-    if devs
-        .iter()
-        .any(|x| x.vni == cfg.vni && x.port.mac_addr() == cfg.guest_mac)
-    {
+    if devs.get(cfg.vni, cfg.guest_mac).is_some() {
         return Err(OpteError::MacExists {
             port: req.xde_devname.clone(),
             vni: cfg.vni,
@@ -838,32 +842,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         }
     };
 
-    let port = new_port(
-        req.xde_devname.clone(),
-        &cfg,
-        state.vpc_map.clone(),
-        port_v2p.clone(),
-        state.v2b.clone(),
-        state.ectx.clone(),
-        &req.dhcp,
-    )?;
-
-    let port_periodic = Periodic::new(
-        port.name_cstr().clone(),
-        expire_periodic,
-        Box::new(port.clone()),
-        ONE_SECOND,
-    );
-
-    let routes = RouteCache::default();
-
-    let routes_periodic = Periodic::new(
-        port.name_cstr().clone(),
-        expire_route_cache,
-        Box::new(routes.clone()),
-        ONE_SECOND,
-    );
-
     let mut guest_addr = cfg.guest_mac.bytes();
 
     let mut xde = Box::new(XdeDev {
@@ -871,8 +849,15 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         linkid: req.linkid,
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
-        port,
-        port_periodic,
+        port: new_port(
+            req.xde_devname.clone(),
+            &cfg,
+            state.vpc_map.clone(),
+            port_v2p.clone(),
+            state.v2b.clone(),
+            state.ectx.clone(),
+            &req.dhcp,
+        )?,
         port_v2p,
         vni: cfg.vni,
         vpc_cfg: cfg,
@@ -880,8 +865,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
         underlay_capab: underlay.shared_props,
-        routes,
-        routes_periodic,
+        routes: RouteCache::default(),
     });
     drop(underlay_);
 
@@ -904,7 +888,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_min_sdu = 1;
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
-    mreg.m_margin = 128; //sys::VLAN_TAGSZ;
+    mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     unsafe {
@@ -950,7 +934,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mac::mac_tx_update(xde.mh);
     }
 
-    devs.push(xde);
+    _ = devs.insert(xde);
     Ok(NoResp::default())
 }
 
@@ -958,11 +942,9 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
     let mut devs = unsafe { xde_devs.write() };
-    let index = match devs.iter().position(|x| x.devname == req.xde_devname) {
-        Some(index) => index,
-        None => return Err(OpteError::PortNotFound(req.xde_devname.clone())),
+    let Some(xde) = devs.get_by_name(&req.xde_devname) else {
+        return Err(OpteError::PortNotFound(req.xde_devname.clone()));
     };
-    let xde = &mut devs[index];
 
     // Destroy DLS devnet device.
     let ret = unsafe {
@@ -1015,7 +997,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     };
 
     // Remove the xde device entry.
-    devs.remove(index);
+    _ = devs.remove(&req.xde_devname);
     Ok(NoResp::default())
 }
 
@@ -1263,10 +1245,6 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
-    warn!(
-        "I'm seeing\ni1: {:?},\ni2: {:?}",
-        i1, i2
-    );
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
@@ -1570,7 +1548,7 @@ fn guest_loopback_probe(
 #[no_mangle]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KRwLockReadGuard<Vec<Box<XdeDev>>>,
+    devs: &KRwLockReadGuard<DevMap>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
@@ -1597,8 +1575,7 @@ fn guest_loopback(
     let flow = parsed_pkt.flow();
 
     let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let maybe_dest_dev =
-        devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst);
+    let maybe_dest_dev = devs.get(vni, ether_dst);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
@@ -1610,13 +1587,29 @@ fn guest_loopback(
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
                     let pkt = emit_spec.apply(pkt);
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk().as_ptr(),
-                        )
+
+                    // Having advertised offloads to our guest, looped back
+                    // packets are liable to have zero-checksums. Fill these
+                    // if necessary.
+                    let pkt = if pkt
+                        .cksum_flags()
+                        .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
+                    {
+                        mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
+                            .and_then(|v| v.unwrap_mblk())
+                    } else {
+                        Some(pkt.unwrap_mblk())
                     };
+
+                    if let Some(pkt) = pkt {
+                        unsafe {
+                            mac::mac_rx(
+                                dest_dev.mh,
+                                ptr::null_mut(),
+                                pkt.as_ptr(),
+                            )
+                        };
+                    }
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
@@ -1738,26 +1731,22 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         .as_ref()
         .map(|v| matches!(v, ValidUlp::Tcp(_)))
         .unwrap_or_default();
-    // let is_tcp = false;
     let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
 
-    // typedef enum mac_ether_offload_flags {
-    //     MEOI_L2INFO_SET     = 1 << 0,
-    //     MEOI_VLAN_TAGGED    = 1 << 1,
-    //     MEOI_L3INFO_SET     = 1 << 2,
-    //     MEOI_L4INFO_SET     = 1 << 3,
-    //     /* TODO(kyle) we do need this tracked, but this is the wrong place */
-    //     MEOI_TUNINFO_SET        = 1 << 4
-    // } mac_ether_offload_flags_t;
-
     let (l4_flag, l4_ty) = match &meta.inner_ulp {
-        Some(ValidUlp::Tcp(_)) => (0b01000, IpProtocol::TCP.0),
-        Some(ValidUlp::Udp(_)) => (0b01000, IpProtocol::UDP.0),
-        _ => (0, 0),
+        Some(ValidUlp::Tcp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP.0)
+        }
+        Some(ValidUlp::Udp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP.0)
+        }
+        _ => (MacEtherOffloadFlags::empty(), 0),
     };
 
     let ulp_meoi = mac_ether_offload_info_t {
-        meoi_flags: 0b00101 | l4_flag,
+        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+            | MacEtherOffloadFlags::L3INFO_SET
+            | l4_flag,
         meoi_len,
         meoi_l2hlen: meta.inner_eth.packet_length() as u8,
         meoi_l3proto: meta.inner_eth.ethertype().0,
@@ -1819,13 +1808,12 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
-            let devs = unsafe { xde_devs.read() };
-
+            let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
             let mut out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
-                // TODO(kyle): need to provide CSO emu here for these packets.
+                let devs = unsafe { xde_devs.read() };
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
             }
@@ -1837,32 +1825,34 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
 
             // CSO is a prerequisite for LSO.
             if cso_possible {
-                // TODO: actually scope MTU down by chosen V2P/V2B.
                 // Boost MSS to use full jumbo frames if we know our path
                 // can be served purely on internal links.
                 // Recall that SDU does not include L2 size, hence 'non_eth_payl'
 
-                let mss = src_dev.underlay_capab.mtu
-                    - 70
-                    - (non_eth_payl_bytes as u32);
-                // let mss = 1448;
+                let mss = if mtu_unrestricted {
+                    src_dev.underlay_capab.mtu
+                        - 70
+                        - (non_eth_payl_bytes as u32)
+                } else {
+                    1500 - (non_eth_payl_bytes as u32)
+                };
 
                 out_pkt.request_offload(is_tcp && lso_possible, mss);
 
                 let tun_meoi = mac_ether_tun_info_t {
-                    mett_flags: 0b10101,
-                    mett_l2hlen: 14,
+                    mett_flags: MacEtherOffloadFlags::L2INFO_SET
+                        | MacEtherOffloadFlags::L3INFO_SET
+                        | MacEtherOffloadFlags::TUNINFO_SET,
+                    mett_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
                     mett_l3proto: Ethertype::IPV6.0,
-                    mett_l3hlen: 40,
-                    mett_tuntype: 1,
+                    mett_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                    mett_tuntype: MacTunType::GENEVE,
 
                     ..Default::default()
                 };
 
                 out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
             }
-
-            drop(devs);
 
             // Currently the overlay layer leaves the outer frame
             // destination and source zero'd. Ask IRE for the route
@@ -1991,13 +1981,6 @@ unsafe extern "C" fn xde_mc_getcapab(
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
             let desired_lso = shared_underlay_caps.upstream_lso();
-
-            warn!(
-                "I'm advertising flags {:x?}, v4 {:?} v6 {:?}",
-                desired_lso.lso_flags,
-                desired_lso.lso_basic_tcp_ipv4,
-                desired_lso.lso_basic_tcp_ipv6
-            );
 
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt
@@ -2164,9 +2147,7 @@ unsafe fn xde_rx_one(
 
     let ether_dst = meta.inner_eth.destination();
 
-    let Some(dev) =
-        devs.iter().find(|x| x.vni == vni && x.port.mac_addr() == ether_dst)
-    else {
+    let Some(dev) = devs.get(vni, ether_dst) else {
         // TODO add SDT probe
         // TODO add stat
         opte::engine::dbg!(
@@ -2193,9 +2174,7 @@ unsafe fn xde_rx_one(
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let mut npkt = emit_spec.apply(pkt);
-
-            // npkt.mark_cksum_happy();
+            let npkt = emit_spec.apply(pkt);
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
         }
@@ -2210,10 +2189,8 @@ unsafe fn xde_rx_one(
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddRouterEntryReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     router::add_entry(&dev.port, req.dest, req.target, req.class)
@@ -2225,10 +2202,8 @@ fn del_router_entry_hdlr(
 ) -> Result<DelRouterEntryResp, OpteError> {
     let req: DelRouterEntryReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     router::del_entry(&dev.port, req.dest, req.target, req.class)
@@ -2238,10 +2213,8 @@ fn del_router_entry_hdlr(
 fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddFwRuleReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     firewall::add_fw_rule(&dev.port, &req)?;
@@ -2252,10 +2225,8 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: RemFwRuleReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     firewall::rem_fw_rule(&dev.port, &req)?;
@@ -2266,10 +2237,8 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetFwRulesReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     firewall::set_fw_rules(&dev.port, &req)?;
@@ -2332,10 +2301,8 @@ fn list_layers_hdlr(
 ) -> Result<api::ListLayersResp, OpteError> {
     let req: api::ListLayersReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     Ok(dev.port.list_layers())
@@ -2345,10 +2312,8 @@ fn list_layers_hdlr(
 fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearUftReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     dev.port.clear_uft()?;
@@ -2359,10 +2324,8 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearLftReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     dev.port.clear_lft(&req.layer_name)?;
@@ -2375,10 +2338,8 @@ fn dump_uft_hdlr(
 ) -> Result<api::DumpUftResp, OpteError> {
     let req: api::DumpUftReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     dev.port.dump_uft()
@@ -2390,10 +2351,8 @@ fn dump_layer_hdlr(
 ) -> Result<api::DumpLayerResp, OpteError> {
     let req: api::DumpLayerReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     api::dump_layer(&dev.port, &req)
@@ -2405,10 +2364,8 @@ fn dump_tcp_flows_hdlr(
 ) -> Result<api::DumpTcpFlowsResp, OpteError> {
     let req: api::DumpTcpFlowsReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     api::dump_tcp_flows(&dev.port, &req)
@@ -2418,10 +2375,8 @@ fn dump_tcp_flows_hdlr(
 fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
 
     nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
@@ -2432,10 +2387,8 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::AllowCidrReq = env.copy_in_req()?;
     let devs = unsafe { xde_devs.read() };
-    let mut iter = devs.iter();
-    let dev = match iter.find(|x| x.devname == req.port_name) {
-        Some(dev) => dev,
-        None => return Err(OpteError::PortNotFound(req.port_name)),
+    let Some(dev) = devs.get_by_name(&req.port_name) else {
+        return Err(OpteError::PortNotFound(req.port_name));
     };
     let state = get_xde_state();
 

@@ -29,6 +29,8 @@ use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
+use rand::Rng;
+use std::collections::HashSet;
 use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
@@ -242,6 +244,7 @@ impl TestNode {
 // Note: these fields have a *very* sensitive drop order.
 pub struct Topology {
     pub nodes: Vec<TestNode>,
+    pub null_ports: Vec<OptePort>,
     pub v6_routes: Vec<RouteV6>,
     pub xde: Xde,
     pub lls: Vec<LinkLocal>,
@@ -362,6 +365,7 @@ pub fn two_node_topology() -> Result<Topology> {
         ],
         v6_routes: vec![r0, r1],
         zfs,
+        null_ports: vec![],
     })
 }
 
@@ -425,17 +429,73 @@ pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
     peers: &[PortInfo],
+    null_port_count: u32,
     brand: &str,
 ) -> Result<Topology> {
     Xde::set_xde_underlay(&underlay[0], &underlay[1])?;
     let xde = Xde {};
 
+    let max_macs = (1 << 20) - peers.len() - 1;
+    if null_port_count > max_macs as u32 {
+        anyhow::bail!(
+            "Cannot allocate {null_port_count} ports: \
+            Oxide MAC space admits {max_macs} accounting for peers"
+        );
+    }
+
+    let mut null_ports = vec![];
+
+    // This is an absurd preallocation (~6MiB?) -- but it is deterministic,
+    // and if we want to test A Lot of ports then we can.
+    let forbidden_macs: HashSet<_> =
+        (&[my_info]).iter().chain(peers).map(|v| v.mac).collect();
+    let mut usable_macs: Vec<MacAddr> = (0..(1 << 20))
+        .filter_map(|n: u32| {
+            let raw = n.to_be_bytes();
+            let my_mac = MacAddr::from_const([
+                0xa8,
+                0x40,
+                0x25,
+                0xf0 + (raw[1] & 0xf),
+                raw[2],
+                raw[3],
+            ]);
+
+            if forbidden_macs.contains(&my_mac) {
+                None
+            } else {
+                Some(my_mac)
+            }
+        })
+        .collect();
+
+    // Create any null ports before our actual one, to get worst-case
+    // lookups in the linear case.
+    let underlay_addr = my_info.underlay_addr.to_string();
+    let mut rng = rand::thread_rng();
+    while null_ports.len() as u32 != null_port_count {
+        let i = rng.gen_range(0..usable_macs.len());
+        let taken_mac = usable_macs.swap_remove(i).to_string();
+
+        // VIP reuse is not an issue, we aren't using these ports for communication.
+        null_ports.push(OptePort::new(
+            &format!("opte{}", null_ports.len()),
+            &"172.20.0.1",
+            &taken_mac,
+            &underlay_addr,
+        )?);
+    }
+
     let ip = my_info.ip.to_string();
     let mac = my_info.mac.to_string();
-    let underlay_addr = my_info.underlay_addr.to_string();
     Xde::set_v2p(&ip, &mac, &underlay_addr)?;
 
-    let opte = OptePort::new("opte0", &ip, &mac, &underlay_addr)?;
+    let opte = OptePort::new(
+        &format!("opte{}", null_ports.len()),
+        &ip,
+        &mac,
+        &underlay_addr,
+    )?;
 
     let v6_routes = vec![];
     for peer in peers {
@@ -464,6 +524,7 @@ pub fn single_node_over_real_nic(
         lls: vec![],
         simnet: None,
         nodes: vec![TestNode { zone: a, port: opte }],
+        null_ports,
         v6_routes,
         zfs,
     })
