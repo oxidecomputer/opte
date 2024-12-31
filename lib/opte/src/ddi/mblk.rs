@@ -27,6 +27,12 @@ use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
+#[cfg(all(not(feature = "std"), not(test)))]
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::types::Emit;
@@ -35,6 +41,14 @@ use ingot::types::ParseError as IngotParseErr;
 use ingot::types::Read;
 
 pub static MBLK_MAX_SIZE: usize = u16::MAX as usize;
+
+/// Abstractions over an `mblk_t` which can be returned to their
+/// raw pointer representation.
+pub trait AsMblk {
+    /// Consume `self`, returning the underlying `mblk_t`. The caller of this
+    /// function now owns the underlying segment chain.
+    fn unwrap_mblk(self) -> Option<NonNull<mblk_t>>;
+}
 
 /// The head and tail of an mblk_t list.
 struct MsgBlkChainInner {
@@ -146,11 +160,10 @@ impl MsgBlkChain {
             self.0 = Some(MsgBlkChainInner { head: pkt, tail: pkt });
         }
     }
+}
 
-    /// Return the head of the underlying `mblk_t` packet chain and
-    /// consume `self`. The caller of this function now owns the
-    /// `mblk_t` segment chain.
-    pub fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
+impl AsMblk for MsgBlkChain {
+    fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
         self.0.take().map(|v| v.head)
     }
 }
@@ -615,9 +628,7 @@ impl MsgBlk {
     /// consume `self`. The caller of this function now owns the
     /// `mblk_t` segment chain.
     pub fn unwrap_mblk(self) -> NonNull<mblk_t> {
-        let ptr_out = self.0;
-        _ = ManuallyDrop::new(self);
-        ptr_out
+        AsMblk::unwrap_mblk(self).unwrap()
     }
 
     /// Wrap the `mblk_t` packet in a [`MsgBlk`], taking ownership of
@@ -706,6 +717,80 @@ impl MsgBlk {
         }
 
         self.0 = head;
+    }
+
+    #[allow(unused)]
+    pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
+        let ckflags = MblkOffloadFlags::HCK_IPV4_HDRCKSUM
+            | MblkOffloadFlags::HCK_FULLCKSUM;
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            illumos_sys_hdrs::mac::mac_hcksum_set(
+                self.0.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                ckflags.bits() as u32,
+            );
+            if is_tcp {
+                illumos_sys_hdrs::mac::lso_info_set(
+                    self.0.as_ptr(),
+                    mss,
+                    MblkOffloadFlags::HW_LSO.bits() as u32,
+                );
+            }
+        }
+    }
+
+    #[allow(unused)]
+    pub fn set_tuntype(&mut self, tuntype: MacTunType) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
+            (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |=
+                MacEtherOffloadFlags::TUNINFO_SET;
+        }
+    }
+
+    #[allow(unused)]
+    pub fn fill_offload_info(
+        &mut self,
+        tun_meoi: &mac_ether_tun_info_t,
+        ulp_meoi: &mac_ether_offload_info_t,
+    ) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            (*(*self.0.as_ptr()).b_datap).db_mett = *tun_meoi;
+            (*(*self.0.as_ptr()).b_datap).db_meoi = *ulp_meoi;
+        }
+    }
+
+    #[allow(unused)]
+    pub fn cksum_flags(&self) -> MblkOffloadFlags {
+        let mut out = 0u32;
+
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            illumos_sys_hdrs::mac::mac_hcksum_get(
+                self.0.as_ptr(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &raw mut out,
+            )
+        };
+
+        MblkOffloadFlags::from_bits_retain(out as u16)
+    }
+}
+
+impl AsMblk for MsgBlk {
+    fn unwrap_mblk(self) -> Option<NonNull<mblk_t>> {
+        let ptr_out = self.0;
+        _ = ManuallyDrop::new(self);
+        Some(ptr_out)
     }
 }
 
@@ -1046,6 +1131,8 @@ pub fn mock_desballoc(buf: Vec<u8>) -> *mut mblk_t {
         db_struioun: 0,
         db_fthdr: ptr::null(),
         db_credp: ptr::null(),
+
+        ..Default::default()
     });
 
     let dbp = Box::into_raw(dblk);

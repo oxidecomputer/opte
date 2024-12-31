@@ -21,7 +21,7 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::ENOENT;
-use opte::ddi::mblk::MsgBlk;
+use opte::ddi::mblk::AsMblk;
 pub use sys::*;
 
 /// An integer ID used by DLS to refer to a given link.
@@ -198,7 +198,7 @@ impl DlsStream {
     /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
-        pkt: MsgBlk,
+        pkt: impl AsMblk,
         hint: uintptr_t,
         flags: MacTxFlags,
     ) {
@@ -209,13 +209,16 @@ impl DlsStream {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
+        let Some(mblk) = pkt.unwrap_mblk() else {
+            return;
+        };
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {
             // mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
             str_mdata_fastpath_put(
                 inner.dld_str.as_ptr(),
-                pkt.unwrap_mblk().as_ptr(),
+                mblk.as_ptr(),
                 hint,
                 raw_flags,
             )

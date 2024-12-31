@@ -18,17 +18,26 @@ use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
+use crate::mac::lso_basic_tcp_ipv4_t;
+use crate::mac::lso_basic_tcp_ipv6_t;
+use crate::mac::lso_tunnel_tcp_ipv4_t;
+use crate::mac::lso_tunnel_tcp_ipv6_t;
+use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
+use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
+use crate::mac::ChecksumOffloadCapabs;
+use crate::mac::MacEmul;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::TcpLsoFlags;
+use crate::mac::TunnelTcpLsoFlags;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::stats::XdeStats;
-use crate::sys;
 use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
@@ -43,8 +52,16 @@ use core::ptr;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
+use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
+use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
+use ingot::ip::IpProtocol;
+use ingot::types::HeaderLen;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -57,6 +74,7 @@ use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
 use opte::ddi::kstat::KStatProvider;
+use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
@@ -66,14 +84,17 @@ use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ioctl::{self as api};
+use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
+use opte::engine::parse::ValidUlp;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
@@ -214,12 +235,129 @@ pub struct xde_underlay_port {
     /// The MAC address associated with this underlay port.
     pub mac: [u8; 6],
 
+    /// The MTU of this link.
+    pub mtu: u32,
+
     /// MAC promiscuous handle for receiving packets on the underlay link.
     mph: MacPromiscHandle<DlsStream>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
     stream: Arc<DlsStream>,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct OffloadInfo {
+    lso_flags: u32,
+    cso_flags: u32,
+    tun_v4_state: lso_tunnel_tcp_ipv4_t,
+    tun_v6_state: lso_tunnel_tcp_ipv6_t,
+    mtu: u32,
+}
+
+impl OffloadInfo {
+    /// Forwards the underlay's tunnel checksum offload capabilities into
+    /// standard capabilities.
+    fn upstream_csum(&self) -> ChecksumOffloadCapabs {
+        let base_capabs =
+            ChecksumOffloadCapabs::from_bits_truncate(self.cso_flags);
+
+        if base_capabs.contains(ChecksumOffloadCapabs::TUN_GENEVE) {
+            base_capabs & ChecksumOffloadCapabs::NON_TUN_CAPABS
+        } else {
+            ChecksumOffloadCapabs::empty()
+        }
+    }
+
+    /// Forwards the underlay's tunnel TCP LSO capabilities into
+    /// standard LSO capabilities.
+    fn upstream_lso(&self) -> mac_capab_lso_t {
+        let base_capabs = TcpLsoFlags::from_bits_truncate(self.lso_flags);
+        let mut out = mac_capab_lso_t::default();
+
+        // TODO: fold in v4 state.
+        // Only tunnelling out over v6 today.
+        if base_capabs.contains(TcpLsoFlags::TUN_IPV6) {
+            let tun_flags =
+                TunnelTcpLsoFlags::from_bits_truncate(self.tun_v6_state.flags);
+
+            if tun_flags.contains(
+                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
+            ) {
+                out.lso_flags |= TcpLsoFlags::BASIC_IPV4.bits();
+                out.lso_basic_tcp_ipv4 =
+                    lso_basic_tcp_ipv4_t { lso_max: self.tun_v6_state.lso_max };
+            }
+
+            if tun_flags.contains(
+                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV6,
+            ) {
+                out.lso_flags |= TcpLsoFlags::BASIC_IPV6.bits();
+                out.lso_basic_tcp_ipv6 =
+                    lso_basic_tcp_ipv6_t { lso_max: self.tun_v6_state.lso_max };
+            }
+        }
+
+        out
+    }
+
+    // TODO: insensitive to whether v4/v6 carried.
+    fn should_request_lso(&self) -> bool {
+        let base_capabs = TcpLsoFlags::from_bits_truncate(self.lso_flags);
+
+        if base_capabs.contains(TcpLsoFlags::TUN_IPV6) {
+            let tun_flags =
+                TunnelTcpLsoFlags::from_bits_truncate(self.tun_v6_state.flags);
+
+            tun_flags.contains(
+                // Inner v6 not yet supported, like.
+                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
+            )
+        } else {
+            false
+        }
+    }
+
+    fn should_request_cso(&self) -> bool {
+        let base_capabs =
+            ChecksumOffloadCapabs::from_bits_truncate(self.cso_flags);
+
+        base_capabs.contains(ChecksumOffloadCapabs::TUN_GENEVE)
+    }
+}
+
+impl core::ops::BitAnd for OffloadInfo {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self {
+            lso_flags: self.lso_flags & rhs.lso_flags,
+            cso_flags: self.cso_flags & rhs.cso_flags,
+            mtu: self.mtu.min(rhs.mtu),
+            tun_v4_state: lso_tunnel_tcp_ipv4_t {
+                lso_max: self
+                    .tun_v4_state
+                    .lso_max
+                    .min(rhs.tun_v4_state.lso_max),
+                encap_max: self
+                    .tun_v4_state
+                    .encap_max
+                    .min(rhs.tun_v4_state.encap_max),
+                flags: self.tun_v4_state.flags & rhs.tun_v4_state.flags,
+            },
+            tun_v6_state: lso_tunnel_tcp_ipv6_t {
+                lso_max: self
+                    .tun_v6_state
+                    .lso_max
+                    .min(rhs.tun_v6_state.lso_max),
+                encap_max: self
+                    .tun_v6_state
+                    .encap_max
+                    .min(rhs.tun_v6_state.encap_max),
+                flags: self.tun_v6_state.flags & rhs.tun_v6_state.flags,
+            },
+        }
+    }
 }
 
 struct XdeState {
@@ -237,6 +375,7 @@ struct UnderlayState {
     // onto the underlay network
     u1: Arc<xde_underlay_port>,
     u2: Arc<xde_underlay_port>,
+    shared_props: OffloadInfo,
 }
 
 fn get_xde_state() -> &'static XdeState {
@@ -305,6 +444,7 @@ pub struct XdeDev {
     // driver.
     pub u1: Arc<xde_underlay_port>,
     pub u2: Arc<xde_underlay_port>,
+    underlay_capab: OffloadInfo,
 
     // We make this a per-port cache rather than sharing between all
     // ports to theoretically reduce contention around route expiry
@@ -724,6 +864,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         passthrough: req.passthrough,
         u1: underlay.u1.clone(),
         u2: underlay.u2.clone(),
+        underlay_capab: underlay.shared_props,
         routes: RouteCache::default(),
     });
     drop(underlay_);
@@ -747,7 +888,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_min_sdu = 1;
     mreg.m_max_sdu = 1500; // TODO hardcode
     mreg.m_multicast_sdu = 0;
-    mreg.m_margin = sys::VLAN_TAGSZ;
+    mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
 
     unsafe {
@@ -1037,7 +1178,7 @@ fn create_underlay_port(
     link_name: String,
     // This parameter is likely to be used as part of the flows work.
     _mc_name: &str,
-) -> Result<xde_underlay_port, OpteError> {
+) -> Result<(xde_underlay_port, OffloadInfo), OpteError> {
     let link_cstr = CString::new(link_name.as_str()).unwrap();
 
     let link_id =
@@ -1075,12 +1216,26 @@ fn create_underlay_port(
         },
     )?;
 
-    Ok(xde_underlay_port {
-        name: link_name,
-        mac: mh.get_mac_addr(),
-        mph,
-        stream,
-    })
+    let (.., mtu) = mh.get_min_max_sdu();
+    let cso_flags = mh.get_cso_capabs();
+    let lso_state = mh.get_lso_capabs();
+
+    Ok((
+        xde_underlay_port {
+            name: link_name,
+            mac: mh.get_mac_addr(),
+            mtu,
+            mph,
+            stream,
+        },
+        OffloadInfo {
+            lso_flags: lso_state.lso_flags,
+            cso_flags,
+            tun_v4_state: lso_state.lso_tunnel_tcp_ipv4,
+            tun_v6_state: lso_state.lso_tunnel_tcp_ipv6,
+            mtu,
+        },
+    ))
 }
 
 #[no_mangle]
@@ -1088,9 +1243,9 @@ unsafe fn init_underlay_ingress_handlers(
     u1_name: String,
     u2_name: String,
 ) -> Result<UnderlayState, OpteError> {
-    let u1 = Arc::new(create_underlay_port(u1_name, "xdeu0")?);
-    let u2 = Arc::new(create_underlay_port(u2_name, "xdeu1")?);
-    Ok(UnderlayState { u1, u2 })
+    let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
+    let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
+    Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
 #[no_mangle]
@@ -1432,13 +1587,29 @@ fn guest_loopback(
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
                     let pkt = emit_spec.apply(pkt);
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk().as_ptr(),
-                        )
+
+                    // Having advertised offloads to our guest, looped back
+                    // packets are liable to have zero-checksums. Fill these
+                    // if necessary.
+                    let pkt = if pkt
+                        .cksum_flags()
+                        .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
+                    {
+                        mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
+                            .and_then(|v| v.unwrap_mblk())
+                    } else {
+                        Some(pkt.unwrap_mblk())
                     };
+
+                    if let Some(pkt) = pkt {
+                        unsafe {
+                            mac::mac_rx(
+                                dest_dev.mh,
+                                ptr::null_mut(),
+                                pkt.as_ptr(),
+                            )
+                        };
+                    }
                 }
 
                 Ok(ProcessResult::Drop { reason }) => {
@@ -1552,6 +1723,39 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             return ptr::null_mut();
         }
     };
+    let meoi_len = parsed_pkt.len() as u32;
+
+    let meta = parsed_pkt.meta();
+    let is_tcp = meta
+        .inner_ulp
+        .as_ref()
+        .map(|v| matches!(v, ValidUlp::Tcp(_)))
+        .unwrap_or_default();
+    let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
+
+    let (l4_flag, l4_ty) = match &meta.inner_ulp {
+        Some(ValidUlp::Tcp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP.0)
+        }
+        Some(ValidUlp::Udp(_)) => {
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP.0)
+        }
+        _ => (MacEtherOffloadFlags::empty(), 0),
+    };
+
+    let ulp_meoi = mac_ether_offload_info_t {
+        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+            | MacEtherOffloadFlags::L3INFO_SET
+            | l4_flag,
+        meoi_len,
+        meoi_l2hlen: meta.inner_eth.packet_length() as u8,
+        meoi_l3proto: meta.inner_eth.ethertype().0,
+        meoi_l3hlen: meta.inner_l3.packet_length() as u16,
+        meoi_l4proto: l4_ty,
+        meoi_l4hlen: meta.inner_ulp.packet_length() as u8,
+
+        ..Default::default()
+    };
 
     // Choose u1 as a starting point. This may be changed in the next_hop
     // function when we are actually able to determine what interface should be
@@ -1604,13 +1808,50 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 }
             };
 
+            let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
-            let out_pkt = emit_spec.apply(pkt);
+            let mut out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
                 let devs = unsafe { xde_devs.read() };
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
+            }
+
+            // TODO: should these not just be copied from the original input
+            //       mblk?
+            let cso_possible = src_dev.underlay_capab.should_request_cso();
+            let lso_possible = src_dev.underlay_capab.should_request_lso();
+
+            // CSO is a prerequisite for LSO.
+            if cso_possible {
+                // Boost MSS to use full jumbo frames if we know our path
+                // can be served purely on internal links.
+                // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+
+                let mss = if mtu_unrestricted {
+                    src_dev.underlay_capab.mtu
+                        - 70
+                        - (non_eth_payl_bytes as u32)
+                } else {
+                    1500 - (non_eth_payl_bytes as u32)
+                };
+
+                out_pkt.request_offload(is_tcp && lso_possible, mss);
+
+                let tun_meoi = mac_ether_tun_info_t {
+                    mett_flags: MacEtherOffloadFlags::L2INFO_SET
+                        | MacEtherOffloadFlags::L3INFO_SET
+                        | MacEtherOffloadFlags::TUNINFO_SET,
+                    mett_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
+                    mett_l3proto: Ethertype::IPV6.0,
+                    mett_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                    mett_tuntype: MacTunType::GENEVE,
+
+                    ..Default::default()
+                };
+
+                out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
             }
 
             // Currently the overlay layer leaves the outer frame
@@ -1712,11 +1953,51 @@ where
 
 #[no_mangle]
 unsafe extern "C" fn xde_mc_getcapab(
-    _arg: *mut c_void,
-    _cap: mac::mac_capab_t,
-    _capb_data: *mut c_void,
+    arg: *mut c_void,
+    cap: mac::mac_capab_t,
+    capb_data: *mut c_void,
 ) -> boolean_t {
-    boolean_t::B_FALSE
+    let dev = arg as *mut XdeDev;
+
+    let shared_underlay_caps = unsafe { (*dev).underlay_capab };
+
+    match cap {
+        // TODO: work out a safer interface for this.
+        mac::mac_capab_t::MAC_CAPAB_HCKSUM => {
+            // capab data is a *mut u32 (enum).
+            let capab = capb_data as *mut u32;
+
+            let desired_capabs = shared_underlay_caps.upstream_csum();
+            unsafe {
+                capab.write(desired_capabs.bits());
+            }
+
+            if desired_capabs.is_empty() {
+                boolean_t::B_FALSE
+            } else {
+                boolean_t::B_TRUE
+            }
+        }
+        mac::mac_capab_t::MAC_CAPAB_LSO => {
+            let capab = capb_data as *mut mac_capab_lso_t;
+            let desired_lso = shared_underlay_caps.upstream_lso();
+
+            unsafe {
+                // Don't write the newer capabs -- don't want to corrupt
+                // memory on older illumos and/or CI.
+                (*capab).lso_flags = desired_lso.lso_flags;
+                (*capab).lso_basic_tcp_ipv4 = desired_lso.lso_basic_tcp_ipv4;
+                (*capab).lso_basic_tcp_ipv6 = desired_lso.lso_basic_tcp_ipv6;
+            }
+
+            if desired_lso.lso_flags == 0 {
+                boolean_t::B_FALSE
+            } else {
+                boolean_t::B_TRUE
+            }
+        }
+        _ => boolean_t::B_FALSE,
+    }
 }
 
 #[no_mangle]
