@@ -517,6 +517,7 @@ impl CompiledEncap {
         *l4_len_slot = (l4_len as u16).to_be_bytes();
 
         if let Some(mut prepend) = prepend {
+            pkt.copy_offload_info_to(&mut prepend);
             prepend.append(pkt);
             prepend
         } else {

@@ -719,6 +719,15 @@ impl MsgBlk {
         self.0 = head;
     }
 
+    /// Copies the offload information from this message block to
+    /// another, including checksum/LSO flags and TCP MSS (if set).
+    pub fn copy_offload_info_to(&self, other: &mut Self) {
+        unsafe {
+            let info = offload_info(self.0);
+            set_offload_info(other.0, info);
+        }
+    }
+
     #[allow(unused)]
     pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
         let ckflags = MblkOffloadFlags::HCK_IPV4_HDRCKSUM

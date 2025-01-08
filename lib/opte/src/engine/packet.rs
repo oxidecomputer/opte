@@ -1764,6 +1764,7 @@ impl EmitSpec {
                 }
 
                 if let Some(mut prepend) = prepend {
+                    pkt.copy_offload_info_to(&mut prepend);
                     prepend.append(pkt);
                     prepend
                 } else {
