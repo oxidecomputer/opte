@@ -1837,7 +1837,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     1500 - (non_eth_payl_bytes as u32)
                 };
 
-                out_pkt.request_offload(is_tcp && lso_possible, mss);
+                out_pkt.request_offload(true, is_tcp && lso_possible, mss);
 
                 let tun_meoi = mac_ether_tun_info_t {
                     mett_flags: MacEtherOffloadFlags::L2INFO_SET
@@ -2158,6 +2158,9 @@ unsafe fn xde_rx_one(
         return;
     };
 
+    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
+    let mss_estimate = 1500 - (&meta.inner_l3, &meta.inner_ulp).packet_length();
+
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
@@ -2174,7 +2177,16 @@ unsafe fn xde_rx_one(
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let npkt = emit_spec.apply(pkt);
+            let mut npkt = emit_spec.apply(pkt);
+
+            // Due to possible pseudo-GRO, we need to inform mac/viona on how
+            // it can split up this packet, if the guest cannot receive it
+            // (e.g., no GRO/large frame support).
+            // HW_LSO will cause viona to treat this packet as though it were
+            // a locally delivered segment making use of LSO.
+            if is_tcp && npkt.len() > 1500 + Ethernet::MINIMUM_LENGTH {
+                npkt.request_offload(false, true, mss_estimate as u32);
+            }
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
         }

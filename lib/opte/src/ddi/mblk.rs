@@ -729,19 +729,30 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
-    pub fn request_offload(&mut self, is_tcp: bool, mss: u32) {
-        let ckflags = MblkOffloadFlags::HCK_IPV4_HDRCKSUM
-            | MblkOffloadFlags::HCK_FULLCKSUM;
+    pub fn request_offload(
+        &mut self,
+        cksum_needed: bool,
+        is_tcp: bool,
+        mss: u32,
+    ) {
+        let ckflags = if cksum_needed {
+            MblkOffloadFlags::HCK_IPV4_HDRCKSUM
+                | MblkOffloadFlags::HCK_FULLCKSUM
+        } else {
+            MblkOffloadFlags::empty()
+        };
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
-            illumos_sys_hdrs::mac::mac_hcksum_set(
-                self.0.as_ptr(),
-                0,
-                0,
-                0,
-                0,
-                ckflags.bits() as u32,
-            );
+            if !ckflags.is_empty() {
+                illumos_sys_hdrs::mac::mac_hcksum_set(
+                    self.0.as_ptr(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    ckflags.bits() as u32,
+                );
+            }
             if is_tcp {
                 illumos_sys_hdrs::mac::lso_info_set(
                     self.0.as_ptr(),
