@@ -66,6 +66,7 @@ pub struct mac_ether_tun_info_t {
 #[cfg(feature = "kernel")]
 extern "C" {
     pub fn lso_info_set(mp: *mut mblk_t, mss: u32, flags: u32);
+    pub fn lso_info_cleanup(mp: *mut mblk_t);
     pub fn mac_hcksum_set(
         mp: *mut mblk_t,
         start: u32,

@@ -203,6 +203,20 @@ extern "C" {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
+pub struct cso_tunnel_t {
+    pub ct_flags: u32,
+    pub ct_encap_max: u32,
+    pub ct_types: u32,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct mac_capab_cso_t {
+    pub cso_flags: u32,
+    pub cso_tunnel: cso_tunnel_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct lso_basic_tcp_ipv4_t {
     pub lso_max: t_uscalar_t,
 }
@@ -215,36 +229,28 @@ pub struct lso_basic_tcp_ipv6_t {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
-pub struct lso_tunnel_tcp_ipv4_t {
-    pub lso_max: t_uscalar_t,
-    pub encap_max: t_uscalar_t,
-    pub flags: t_uscalar_t,
+pub struct lso_tunnel_tcp_t {
+    pub tun_pay_max: u32,
+    pub tun_encap_max: u32,
+    pub tun_flags: u32,
+    pub tun_types: u32,
+    pub tun_pad: [u32; 2],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
-pub struct lso_tunnel_tcp_ipv6_t {
-    pub lso_max: t_uscalar_t,
-    pub encap_max: t_uscalar_t,
-    pub flags: t_uscalar_t,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
 pub struct mac_capab_lso_t {
     pub lso_flags: t_uscalar_t,
     pub lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t,
     pub lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t,
 
-    pub lso_tunnel_tcp_ipv4: lso_tunnel_tcp_ipv4_t,
-    pub lso_tunnel_tcp_ipv6: lso_tunnel_tcp_ipv6_t,
+    pub lso_tunnel_tcp: lso_tunnel_tcp_t,
 }
 
 // Currently supported flags for LSO.
 pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01;
 pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02;
-pub const LSO_TX_TUNNEL_TCP_IPV4: u32 = 0x04;
-pub const LSO_TX_TUNNEL_TCP_IPV6: u32 = 0x08;
+pub const LSO_TX_TUNNEL_TCP: u32 = 0x04;
 
 // Currently supported tunnel classes for tunnelled LSO offload.
 pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;

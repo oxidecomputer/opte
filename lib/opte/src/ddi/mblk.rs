@@ -764,6 +764,14 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
+    pub fn strip_lso(&mut self) {
+        #[cfg(all(not(feature = "std"), not(test)))]
+        unsafe {
+            illumos_sys_hdrs::mac::lso_info_cleanup(self.0.as_ptr());
+        }
+    }
+
+    #[allow(unused)]
     pub fn set_tuntype(&mut self, tuntype: MacTunType) {
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {

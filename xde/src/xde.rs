@@ -18,10 +18,11 @@ use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
+use crate::mac::cso_tunnel_t;
 use crate::mac::lso_basic_tcp_ipv4_t;
 use crate::mac::lso_basic_tcp_ipv6_t;
-use crate::mac::lso_tunnel_tcp_ipv4_t;
-use crate::mac::lso_tunnel_tcp_ipv6_t;
+use crate::mac::lso_tunnel_tcp_t;
+use crate::mac::mac_capab_cso_t;
 use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
@@ -33,6 +34,7 @@ use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::TcpLsoFlags;
 use crate::mac::TunnelTcpLsoFlags;
+use crate::mac::TunnelType;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -248,81 +250,85 @@ pub struct xde_underlay_port {
 
 #[derive(Copy, Clone, Debug)]
 struct OffloadInfo {
-    lso_flags: u32,
-    cso_flags: u32,
-    tun_v4_state: lso_tunnel_tcp_ipv4_t,
-    tun_v6_state: lso_tunnel_tcp_ipv6_t,
+    cso_state: mac_capab_cso_t,
+    lso_state: mac_capab_lso_t,
     mtu: u32,
 }
 
 impl OffloadInfo {
     /// Forwards the underlay's tunnel checksum offload capabilities into
     /// standard capabilities.
-    fn upstream_csum(&self) -> ChecksumOffloadCapabs {
+    fn upstream_csum(&self) -> mac_capab_cso_t {
         let base_capabs =
-            ChecksumOffloadCapabs::from_bits_truncate(self.cso_flags);
+            ChecksumOffloadCapabs::from_bits_truncate(self.cso_state.cso_flags);
+        let mut out = mac_capab_cso_t::default();
 
-        if base_capabs.contains(ChecksumOffloadCapabs::TUN_GENEVE) {
+        out.cso_flags = (if base_capabs
+            .contains(ChecksumOffloadCapabs::TUNNEL_VALID)
+            && TunnelType::from_bits_truncate(
+                self.cso_state.cso_tunnel.ct_types,
+            )
+            .contains(TunnelType::GENEVE)
+        {
             base_capabs & ChecksumOffloadCapabs::NON_TUN_CAPABS
         } else {
             ChecksumOffloadCapabs::empty()
-        }
+        })
+        .bits();
+
+        out
     }
 
     /// Forwards the underlay's tunnel TCP LSO capabilities into
     /// standard LSO capabilities.
     fn upstream_lso(&self) -> mac_capab_lso_t {
-        let base_capabs = TcpLsoFlags::from_bits_truncate(self.lso_flags);
+        let base_capabs =
+            TcpLsoFlags::from_bits_truncate(self.lso_state.lso_flags);
         let mut out = mac_capab_lso_t::default();
 
-        // TODO: fold in v4 state.
-        // Only tunnelling out over v6 today.
-        if base_capabs.contains(TcpLsoFlags::TUN_IPV6) {
-            let tun_flags =
-                TunnelTcpLsoFlags::from_bits_truncate(self.tun_v6_state.flags);
+        if base_capabs.contains(TcpLsoFlags::TUN) {
+            let tun_flags = TunnelTcpLsoFlags::from_bits_truncate(
+                self.lso_state.lso_tunnel_tcp.tun_flags,
+            );
+            let tun_types = TunnelType::from_bits_truncate(
+                self.lso_state.lso_tunnel_tcp.tun_types,
+            );
 
-            if tun_flags.contains(
-                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
-            ) {
-                out.lso_flags |= TcpLsoFlags::BASIC_IPV4.bits();
-                out.lso_basic_tcp_ipv4 =
-                    lso_basic_tcp_ipv4_t { lso_max: self.tun_v6_state.lso_max };
-            }
-
-            if tun_flags.contains(
-                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV6,
-            ) {
-                out.lso_flags |= TcpLsoFlags::BASIC_IPV6.bits();
-                out.lso_basic_tcp_ipv6 =
-                    lso_basic_tcp_ipv6_t { lso_max: self.tun_v6_state.lso_max };
+            if tun_types.contains(TunnelType::GENEVE) {
+                out.lso_flags |= TcpLsoFlags::BASIC_IPV4.bits()
+                    | TcpLsoFlags::BASIC_IPV6.bits();
+                out.lso_basic_tcp_ipv4 = lso_basic_tcp_ipv4_t {
+                    lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
+                };
+                out.lso_basic_tcp_ipv6 = lso_basic_tcp_ipv6_t {
+                    lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
+                };
             }
         }
 
         out
     }
 
-    // TODO: insensitive to whether v4/v6 carried.
     fn should_request_lso(&self) -> bool {
-        let base_capabs = TcpLsoFlags::from_bits_truncate(self.lso_flags);
+        let base_capabs =
+            TcpLsoFlags::from_bits_truncate(self.lso_state.lso_flags);
 
-        if base_capabs.contains(TcpLsoFlags::TUN_IPV6) {
-            let tun_flags =
-                TunnelTcpLsoFlags::from_bits_truncate(self.tun_v6_state.flags);
-
-            tun_flags.contains(
-                // Inner v6 not yet supported, like.
-                TunnelTcpLsoFlags::GENEVE | TunnelTcpLsoFlags::INNER_IPV4,
+        base_capabs.contains(TcpLsoFlags::TUN)
+            && TunnelType::from_bits_truncate(
+                self.lso_state.lso_tunnel_tcp.tun_types,
             )
-        } else {
-            false
-        }
+            .contains(TunnelType::GENEVE)
     }
 
     fn should_request_cso(&self) -> bool {
         let base_capabs =
-            ChecksumOffloadCapabs::from_bits_truncate(self.cso_flags);
+            ChecksumOffloadCapabs::from_bits_truncate(self.cso_state.cso_flags);
 
-        base_capabs.contains(ChecksumOffloadCapabs::TUN_GENEVE)
+        base_capabs.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
+            && TunnelType::from_bits_truncate(
+                self.cso_state.cso_tunnel.ct_types,
+            )
+            .contains(TunnelType::GENEVE)
     }
 }
 
@@ -331,31 +337,55 @@ impl core::ops::BitAnd for OffloadInfo {
 
     fn bitand(self, rhs: Self) -> Self::Output {
         Self {
-            lso_flags: self.lso_flags & rhs.lso_flags,
-            cso_flags: self.cso_flags & rhs.cso_flags,
+            cso_state: mac_capab_cso_t {
+                cso_flags: self.cso_state.cso_flags & rhs.cso_state.cso_flags,
+                cso_tunnel: cso_tunnel_t {
+                    ct_flags: self.cso_state.cso_tunnel.ct_flags
+                        & rhs.cso_state.cso_tunnel.ct_flags,
+                    ct_encap_max: self
+                        .cso_state
+                        .cso_tunnel
+                        .ct_encap_max
+                        .min(rhs.cso_state.cso_tunnel.ct_encap_max),
+                    ct_types: self.cso_state.cso_tunnel.ct_types
+                        & rhs.cso_state.cso_tunnel.ct_types,
+                },
+            },
+            lso_state: mac_capab_lso_t {
+                lso_flags: self.lso_state.lso_flags & rhs.lso_state.lso_flags,
+                lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
+                    lso_max: self
+                        .lso_state
+                        .lso_basic_tcp_ipv4
+                        .lso_max
+                        .min(rhs.lso_state.lso_basic_tcp_ipv4.lso_max),
+                },
+                lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
+                    lso_max: self
+                        .lso_state
+                        .lso_basic_tcp_ipv6
+                        .lso_max
+                        .min(rhs.lso_state.lso_basic_tcp_ipv6.lso_max),
+                },
+                lso_tunnel_tcp: lso_tunnel_tcp_t {
+                    tun_pay_max: self
+                        .lso_state
+                        .lso_tunnel_tcp
+                        .tun_pay_max
+                        .min(rhs.lso_state.lso_tunnel_tcp.tun_pay_max),
+                    tun_encap_max: self
+                        .lso_state
+                        .lso_tunnel_tcp
+                        .tun_encap_max
+                        .min(rhs.lso_state.lso_tunnel_tcp.tun_encap_max),
+                    tun_flags: self.lso_state.lso_tunnel_tcp.tun_flags
+                        & rhs.lso_state.lso_tunnel_tcp.tun_flags,
+                    tun_types: self.lso_state.lso_tunnel_tcp.tun_types
+                        & rhs.lso_state.lso_tunnel_tcp.tun_types,
+                    tun_pad: [0; 2],
+                },
+            },
             mtu: self.mtu.min(rhs.mtu),
-            tun_v4_state: lso_tunnel_tcp_ipv4_t {
-                lso_max: self
-                    .tun_v4_state
-                    .lso_max
-                    .min(rhs.tun_v4_state.lso_max),
-                encap_max: self
-                    .tun_v4_state
-                    .encap_max
-                    .min(rhs.tun_v4_state.encap_max),
-                flags: self.tun_v4_state.flags & rhs.tun_v4_state.flags,
-            },
-            tun_v6_state: lso_tunnel_tcp_ipv6_t {
-                lso_max: self
-                    .tun_v6_state
-                    .lso_max
-                    .min(rhs.tun_v6_state.lso_max),
-                encap_max: self
-                    .tun_v6_state
-                    .encap_max
-                    .min(rhs.tun_v6_state.encap_max),
-                flags: self.tun_v6_state.flags & rhs.tun_v6_state.flags,
-            },
         }
     }
 }
@@ -1217,7 +1247,7 @@ fn create_underlay_port(
     )?;
 
     let (.., mtu) = mh.get_min_max_sdu();
-    let cso_flags = mh.get_cso_capabs();
+    let cso_state = mh.get_cso_capabs();
     let lso_state = mh.get_lso_capabs();
 
     Ok((
@@ -1228,13 +1258,7 @@ fn create_underlay_port(
             mph,
             stream,
         },
-        OffloadInfo {
-            lso_flags: lso_state.lso_flags,
-            cso_flags,
-            tun_v4_state: lso_state.lso_tunnel_tcp_ipv4,
-            tun_v6_state: lso_state.lso_tunnel_tcp_ipv6,
-            mtu,
-        },
+        OffloadInfo { lso_state, cso_state, mtu },
     ))
 }
 
@@ -1245,6 +1269,7 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
+    opte::engine::err!("I have {:#?} and {:#?}", &i1, &i2);
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
@@ -1586,7 +1611,10 @@ fn guest_loopback(
             // destination Port.
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
-                    let pkt = emit_spec.apply(pkt);
+                    let mut pkt = emit_spec.apply(pkt);
+
+                    // BREAKS EVERYTHING.
+                    // pkt.strip_lso();
 
                     // Having advertised offloads to our guest, looped back
                     // packets are liable to have zero-checksums. Fill these
@@ -1965,22 +1993,52 @@ unsafe extern "C" fn xde_mc_getcapab(
         // TODO: work out a safer interface for this.
         mac::mac_capab_t::MAC_CAPAB_HCKSUM => {
             // capab data is a *mut u32 (enum).
-            let capab = capb_data as *mut u32;
+            let capab = capb_data as *mut mac_capab_cso_t;
+
+            opte::engine::err!("I see base as {:?}", &shared_underlay_caps);
 
             let desired_capabs = shared_underlay_caps.upstream_csum();
             unsafe {
-                capab.write(desired_capabs.bits());
+                // Don't write the newer capabs -- don't want to corrupt
+                // memory on older illumos and/or CI.
+                (*capab).cso_flags = desired_capabs.cso_flags;
             }
 
-            if desired_capabs.is_empty() {
-                boolean_t::B_FALSE
-            } else {
-                boolean_t::B_TRUE
-            }
+            opte::engine::err!("Adverising CSO {:?}", &desired_capabs);
+
+            // FORCE
+            // unsafe {
+            //     (*capab).cso_flags = ChecksumOffloadCapabs::NON_TUN_CAPABS
+            //         .difference(ChecksumOffloadCapabs::INET_PARTIAL).bits();
+            // }
+
+            // if desired_capabs.cso_flags == 0 {
+            //     boolean_t::B_FALSE
+            // } else {
+            //     boolean_t::B_TRUE
+            // }
+
+            boolean_t::B_TRUE
         }
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
             let desired_lso = shared_underlay_caps.upstream_lso();
+
+            opte::engine::err!("I see base as {:?}", &shared_underlay_caps);
+            opte::engine::err!("Adverising LSO {:?}", &desired_lso);
+
+            // FORCE
+            // let desired_lso = mac_capab_lso_t {
+            //     lso_flags: TcpLsoFlags::BASIC_IPV4.bits()
+            //         | TcpLsoFlags::BASIC_IPV6.bits(),
+            //     lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
+            //         lso_max: u16::MAX as u32,
+            //     },
+            //     lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
+            //         lso_max: u16::MAX as u32,
+            //     },
+            //     ..Default::default()
+            // };
 
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt

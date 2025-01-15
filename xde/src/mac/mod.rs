@@ -84,16 +84,16 @@ impl MacHandle {
         (min, max)
     }
 
-    pub fn get_cso_capabs(&self) -> u32 {
-        let mut flags = 0u32;
+    pub fn get_cso_capabs(&self) -> mac_capab_cso_t {
+        let mut cso = mac_capab_cso_t::default();
         unsafe {
             mac_capab_get(
                 self.0,
                 mac_capab_t::MAC_CAPAB_HCKSUM,
-                (&raw mut flags) as *mut _,
+                (&raw mut cso) as *mut _,
             );
         }
-        flags
+        cso
     }
 
     pub fn get_lso_capabs(&self) -> mac_capab_lso_t {
@@ -436,10 +436,8 @@ pub struct TcpLsoFlags: u32 {
     const BASIC_IPV4 = LSO_TX_BASIC_TCP_IPV4;
     /// The device supports TCP LSO over IPv6.
     const BASIC_IPV6 = LSO_TX_BASIC_TCP_IPV6;
-    /// The device supports LSO of TCP packets within IPv4-based tunnels.
-    const TUN_IPV4 = LSO_TX_TUNNEL_TCP_IPV4;
-    /// The device supports LSO of TCP packets within IPv6-based tunnels.
-    const TUN_IPV6 = LSO_TX_TUNNEL_TCP_IPV6;
+    /// The device supports LSO of TCP packets within IP-based tunnels.
+    const TUN = LSO_TX_TUNNEL_TCP;
 }
 
 /// Supported LSO use specific to [`TcpLsoFlags::TUN_IPV4`] or
@@ -479,9 +477,13 @@ pub struct ChecksumOffloadCapabs: u32 {
         Self::INET_HDRCKSUM.bits();
 
     /// Device can fill outer (UDP) checksum on tunnelled packets.
-    const TUN_OUTER_CSUM = 1 << 5;
-    /// Device can fill inner checksums (`NON_TUN_CAPABS`) for Geneve packets.
-    const TUN_GENEVE = 1 << 6;
+    const TUNNEL_VALID = 1 << 5;
+}
+
+/// Classes of tunnel suppported by a MAC provider.
+pub struct TunnelType: u32 {
+    const GENEVE = 1 << 0;
+    const VXLAN = 1 << 1;
 }
 }
 
