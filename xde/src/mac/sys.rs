@@ -67,6 +67,8 @@ pub enum link_state_t {
 #[allow(unused_imports)]
 use mac_client_promisc_type_t::*;
 
+use crate::ip::t_uscalar_t;
+
 pub type mac_tx_cookie_t = uintptr_t;
 pub type mac_rx_fn = unsafe extern "C" fn(
     *mut c_void,
@@ -159,6 +161,12 @@ extern "C" {
         mp_chain: *mut mblk_t,
     );
     pub fn mac_private_minor() -> minor_t;
+
+    pub fn mac_sdu_get(
+        mh: *mut mac_handle,
+        min_sdu: *mut c_uint,
+        max_sdu: *mut c_uint,
+    );
 }
 
 // Private MAC functions needed to get us a Tx path.
@@ -177,7 +185,79 @@ extern "C" {
     ) -> c_int;
     pub fn mac_perim_exit(mph: mac_perim_handle);
     pub fn mac_perim_held(mh: mac_handle) -> boolean_t;
+
+    pub fn mac_hw_emul(
+        mp_chain: *mut *mut mblk_t,
+        otail: *mut *mut mblk_t,
+        ocount: *mut c_uint,
+        mac_emul: u32,
+    );
+
+    // VERY private to MAC.
+    pub fn mac_capab_get(
+        mh: *mut mac_handle,
+        capab: mac_capab_t,
+        data: *mut c_void,
+    ) -> boolean_t;
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct cso_tunnel_t {
+    pub ct_flags: u32,
+    pub ct_encap_max: u32,
+    pub ct_types: u32,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+pub struct mac_capab_cso_t {
+    pub cso_flags: u32,
+    pub cso_tunnel: cso_tunnel_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct lso_basic_tcp_ipv4_t {
+    pub lso_max: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct lso_basic_tcp_ipv6_t {
+    pub lso_max: t_uscalar_t,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct lso_tunnel_tcp_t {
+    pub tun_pay_max: u32,
+    pub tun_encap_max: u32,
+    pub tun_flags: u32,
+    pub tun_types: u32,
+    pub tun_pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct mac_capab_lso_t {
+    pub lso_flags: t_uscalar_t,
+    pub lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t,
+    pub lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t,
+
+    pub lso_tunnel_tcp: lso_tunnel_tcp_t,
+}
+
+// Currently supported flags for LSO.
+pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01;
+pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02;
+pub const LSO_TX_TUNNEL_TCP: u32 = 0x04;
+
+// Currently supported tunnel classes for tunnelled LSO offload.
+pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;
+pub const LSO_TX_TUNNEL_INNER_IP4: u32 = 0x02;
+pub const LSO_TX_TUNNEL_INNER_IP6: u32 = 0x04;
+pub const LSO_TX_TUNNEL_GENEVE: u32 = 0x08;
+pub const LSO_TX_TUNNEL_VXLAN: u32 = 0x10;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -461,3 +541,10 @@ pub struct mac_register_t {
     pub m_v12n: u32,
     pub m_multicast_sdu: c_uint,
 }
+
+// ======================================================================
+// uts/common/sys/mac_client.h
+// ======================================================================
+pub const MAC_HWCKSUM_EMUL: u32 = 1 << 0;
+pub const MAC_IPCKSUM_EMUL: u32 = 1 << 1;
+pub const MAC_LSO_EMUL: u32 = 1 << 2;
