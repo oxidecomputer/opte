@@ -63,10 +63,12 @@ use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
+use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -800,6 +802,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::RemoveCidr => {
             let resp = remove_cidr_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::TestPkt => {
+            let resp = testpkt_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -2480,6 +2487,145 @@ fn remove_cidr_hdlr(
     let state = get_xde_state();
 
     gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
+}
+
+#[no_mangle]
+fn testpkt_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<oxide_vpc::api::TestPktResp, OpteError> {
+    let oxide_vpc::api::TestPkt {
+        underlay_idx,
+        tuntype,
+        ip_version,
+        src_mac,
+        dst_mac,
+    } = env.copy_in_req()?;
+
+    if underlay_idx >= 2 {
+        return Err(OpteError::NoRequestBody);
+    }
+
+    let body = "Ivalice-".repeat(5000);
+    let i_body = body.as_bytes();
+
+    let i_tcp = ingot::tcp::Tcp {
+        source: 1212,
+        destination: 1010,
+        sequence: 12345,
+        acknowledgement: 67890,
+        flags: ingot::tcp::TcpFlags::ACK,
+        window_size: 2041,
+        checksum: 0,
+
+        ..Default::default()
+    };
+
+    let i_ip4 = opte::engine::ip::v4::Ipv4 {
+        total_len: (opte::engine::ip::v4::Ipv4::MINIMUM_LENGTH
+            + i_tcp.packet_length()
+            + i_body.len()) as u16,
+        identification: 909,
+        protocol: IpProtocol::TCP,
+        source: "172.30.0.1".parse().unwrap(),
+        destination: "172.30.0.2".parse().unwrap(),
+
+        ..Default::default()
+    };
+
+    let i_eth = Ethernet {
+        destination: MacAddr::from_const([0x0a, 0, 0, 0, 0, 1]),
+        source: MacAddr::from_const([0x0a, 0, 0, 0, 0, 2]),
+        ethertype: Ethertype::IPV4,
+    };
+
+    let (o_tun, dport, tt) = match tuntype {
+        // Geneve
+        0 => {
+            let g = ingot::geneve::Geneve {
+                vni: Vni::new(7777u32).unwrap(),
+                ..Default::default()
+            };
+            (g.emit_vec(), 6081, MacTunType::GENEVE)
+        }
+        // VXLAN
+        1 => (
+            [1 << 3, 0, 0, 0, 0, 0x1e, 0x61, 0].to_vec(),
+            4789,
+            MacTunType::VXLAN,
+        ),
+        _ => return Err(OpteError::InvalidIpCfg),
+    };
+
+    let o_udp = ingot::udp::Udp {
+        source: 0xff11,
+        destination: dport,
+        length: (ingot::udp::Udp::MINIMUM_LENGTH
+            + o_tun.len()
+            + i_eth.packet_length()
+            + (i_ip4.total_len as usize)) as u16,
+        checksum: 0,
+    };
+
+    let (ethertype, o_ip) = match ip_version {
+        4 => (
+            Ethertype::IPV4,
+            (opte::engine::ip::v4::Ipv4 {
+                total_len: opte::engine::ip::v4::Ipv4::MINIMUM_LENGTH as u16
+                    + o_udp.length,
+                identification: 9922,
+                protocol: IpProtocol::UDP,
+                source: "1.1.1.1".parse().unwrap(),
+                destination: "2.2.2.2".parse().unwrap(),
+
+                ..Default::default()
+            })
+            .emit_vec(),
+        ),
+        6 => (
+            Ethertype::IPV6,
+            (Ipv6 {
+                payload_len: o_udp.length,
+                next_header: IpProtocol::UDP,
+                source: "fd0a::1".parse().unwrap(),
+                destination: "fd0a::2".parse().unwrap(),
+
+                ..Default::default()
+            })
+            .emit_vec(),
+        ),
+        _ => return Err(OpteError::InvalidIpCfg),
+    };
+
+    let o_eth = Ethernet { destination: dst_mac, source: src_mac, ethertype };
+
+    let mut out = MsgBlk::new_ethernet_pkt(&(
+        o_eth,
+        &o_ip[..],
+        o_udp,
+        &o_tun[..],
+        i_eth,
+        i_ip4,
+        i_tcp,
+        i_body,
+    ));
+    out.request_offload(true, true, 1448);
+    out.set_tuntype(tt);
+
+    let len = out.byte_len() as u64;
+
+    let state = get_xde_state();
+    let ulay = state.underlay.lock();
+    let Some(ulay) = ulay.as_ref() else {
+        return Err(OpteError::CopyoutResp);
+    };
+    let ulay_p: &xde_underlay_port = match underlay_idx {
+        0 => &ulay.u1,
+        1 => &ulay.u2,
+        _ => unreachable!(),
+    };
+    ulay_p.stream.tx_drop_on_no_desc(out, 0, MacTxFlags::empty());
+
+    Ok(oxide_vpc::api::TestPktResp::Ok(len))
 }
 
 #[no_mangle]

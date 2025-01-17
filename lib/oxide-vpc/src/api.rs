@@ -976,6 +976,25 @@ pub enum RemoveCidrResp {
 
 impl opte::api::cmd::CmdOk for RemoveCidrResp {}
 
+/// Remove entries from the gateway allowing a port to send or receive
+/// traffic on a specific CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TestPkt {
+    pub underlay_idx: u8,
+    pub tuntype: u8,
+    pub ip_version: u8,
+    pub src_mac: MacAddr,
+    pub dst_mac: MacAddr,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum TestPktResp {
+    Ok(u64),
+    NotFound,
+}
+
+impl opte::api::cmd::CmdOk for TestPktResp {}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;

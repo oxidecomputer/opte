@@ -274,6 +274,17 @@ enum Command {
         #[arg(long = "dir")]
         direction: Option<Direction>,
     },
+
+    TestPkt {
+        #[arg(short)]
+        underlay_idx: u8,
+        #[arg(short, default_value = "0")]
+        tuntype: u8,
+        #[arg(short, default_value = "6")]
+        ip_version: u8,
+        src_mac: MacAddr,
+        dst_mac: MacAddr,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -856,6 +867,16 @@ fn main() -> anyhow::Result<()> {
                                 of {prefix} after {e}"));
                 })?;
             }
+        }
+
+        Command::TestPkt {
+            underlay_idx,
+            tuntype,
+            ip_version,
+            src_mac,
+            dst_mac,
+        } => {
+            hdl.testpkt(underlay_idx, tuntype, ip_version, src_mac, dst_mac)?;
         }
     }
 

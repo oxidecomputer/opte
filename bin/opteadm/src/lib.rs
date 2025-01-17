@@ -9,6 +9,7 @@
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::Direction;
 use opte::api::IpCidr;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::SetXdeUnderlayReq;
@@ -38,6 +39,7 @@ use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::TestPkt;
 use oxide_vpc::api::VpcCfg;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -324,6 +326,28 @@ impl OpteAdm {
             self.device.as_raw_fd(),
             cmd,
             Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
+    }
+
+    pub fn testpkt(
+        &self,
+        underlay_idx: u8,
+        tuntype: u8,
+        ip_version: u8,
+        src_mac: MacAddr,
+        dst_mac: MacAddr,
+    ) -> Result<RemoveCidrResp, Error> {
+        let cmd = OpteCmd::TestPkt;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&TestPkt {
+                underlay_idx,
+                tuntype,
+                ip_version,
+                src_mac,
+                dst_mac,
+            }),
         )
     }
 }
