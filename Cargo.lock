@@ -932,12 +932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ipnetwork"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
-
-[[package]]
 name = "is-terminal"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -977,15 +971,6 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -1286,7 +1271,7 @@ dependencies = [
  "heapless",
  "illumos-sys-hdrs",
  "ingot",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "kstat-macro",
  "opte",
  "opte-api",
@@ -1305,7 +1290,7 @@ version = "0.1.0"
 dependencies = [
  "illumos-sys-hdrs",
  "ingot",
- "ipnetwork 0.21.1",
+ "ipnetwork",
  "postcard",
  "serde",
  "smoltcp",
@@ -1319,7 +1304,7 @@ dependencies = [
  "clap",
  "criterion",
  "ctor",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "nix",
  "opte",
  "opte-test-utils",
@@ -1407,7 +1392,7 @@ name = "oxnet"
 version = "0.1.0"
 source = "git+https://github.com/oxidecomputer/oxnet#49ee85dcd294901031c3395ee773363db1cdc289"
 dependencies = [
- "ipnetwork 0.20.0",
+ "ipnetwork",
  "schemars",
  "serde",
  "serde_json",
@@ -1927,9 +1912,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.135"
+version = "1.0.137"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b0d7ba2887406110130a978386c4e1befb98c674b4fba677954e4db976630d9"
+checksum = "930cfb6e6abf99298aaad7d29abbef7a9999a9a8806a40088f55f0dcec03146b"
 dependencies = [
  "itoa",
  "memchr",
