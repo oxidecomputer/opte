@@ -284,6 +284,8 @@ enum Command {
         ip_version: u8,
         src_mac: MacAddr,
         dst_mac: MacAddr,
+        #[arg(short, default_value = "5000")]
+        body_copies: u64,
     },
 }
 
@@ -875,8 +877,16 @@ fn main() -> anyhow::Result<()> {
             ip_version,
             src_mac,
             dst_mac,
+            body_copies,
         } => {
-            hdl.testpkt(underlay_idx, tuntype, ip_version, src_mac, dst_mac)?;
+            hdl.testpkt(
+                underlay_idx,
+                tuntype,
+                ip_version,
+                src_mac,
+                dst_mac,
+                body_copies,
+            )?;
         }
     }
 

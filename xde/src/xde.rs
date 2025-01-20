@@ -2499,14 +2499,16 @@ fn testpkt_hdlr(
         ip_version,
         src_mac,
         dst_mac,
+        body_copies,
     } = env.copy_in_req()?;
 
     if underlay_idx >= 2 {
         return Err(OpteError::NoRequestBody);
     }
 
-    let body = "Ivalice-".repeat(5000);
+    let body = "Ivalice-".repeat(body_copies as usize);
     let i_body = body.as_bytes();
+    let do_lso = i_body.len() > 1448;
 
     let i_tcp = ingot::tcp::Tcp {
         source: 1212,
@@ -2567,20 +2569,24 @@ fn testpkt_hdlr(
     };
 
     let (ethertype, o_ip) = match ip_version {
-        4 => (
-            Ethertype::IPV4,
-            (opte::engine::ip::v4::Ipv4 {
-                total_len: opte::engine::ip::v4::Ipv4::MINIMUM_LENGTH as u16
-                    + o_udp.length,
+        4 => {
+            let total_len = if false {
+                0
+            } else {
+                opte::engine::ip::v4::Ipv4::MINIMUM_LENGTH as u16 + o_udp.length
+            };
+            let mut ip = opte::engine::ip::v4::Ipv4 {
+                total_len,
                 identification: 9922,
                 protocol: IpProtocol::UDP,
                 source: "1.1.1.1".parse().unwrap(),
                 destination: "2.2.2.2".parse().unwrap(),
 
                 ..Default::default()
-            })
-            .emit_vec(),
-        ),
+            };
+
+            (Ethertype::IPV4, ip.emit_vec())
+        }
         6 => (
             Ethertype::IPV6,
             (Ipv6 {
@@ -2608,10 +2614,9 @@ fn testpkt_hdlr(
         i_tcp,
         i_body,
     ));
-    out.request_offload(true, true, 1448);
-    out.set_tuntype(tt);
-
     let len = out.byte_len() as u64;
+    out.request_offload(true, do_lso, 1448);
+    out.set_tuntype(tt);
 
     let state = get_xde_state();
     let ulay = state.underlay.lock();

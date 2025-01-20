@@ -985,6 +985,7 @@ pub struct TestPkt {
     pub ip_version: u8,
     pub src_mac: MacAddr,
     pub dst_mac: MacAddr,
+    pub body_copies: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

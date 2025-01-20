@@ -336,6 +336,7 @@ impl OpteAdm {
         ip_version: u8,
         src_mac: MacAddr,
         dst_mac: MacAddr,
+        body_copies: u64,
     ) -> Result<RemoveCidrResp, Error> {
         let cmd = OpteCmd::TestPkt;
         run_cmd_ioctl(
@@ -347,6 +348,7 @@ impl OpteAdm {
                 ip_version,
                 src_mac,
                 dst_mac,
+                body_copies,
             }),
         )
     }
