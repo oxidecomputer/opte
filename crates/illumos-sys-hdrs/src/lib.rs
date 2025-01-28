@@ -11,8 +11,6 @@
 pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
-use mac::mac_ether_offload_info_t;
-use mac::mac_ether_tun_info_t;
 
 pub mod mac;
 
@@ -241,8 +239,7 @@ pub struct dblk_t {
     pub db_fthdr: *const c_void, // imprecise
     pub db_credp: *const c_void, // imprecise
 
-    pub db_meoi: mac_ether_offload_info_t,
-    pub db_mett: mac_ether_tun_info_t,
+    pub db_meoi: [u8; 16], // imprecise
 }
 
 impl Default for dblk_t {
@@ -268,7 +265,6 @@ impl Default for dblk_t {
             db_credp: ptr::null(),
 
             db_meoi: Default::default(),
-            db_mett: Default::default(),
         }
     }
 }

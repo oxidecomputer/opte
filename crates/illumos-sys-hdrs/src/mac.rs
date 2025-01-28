@@ -4,6 +4,8 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use core::ffi::c_int;
+
 #[cfg(feature = "kernel")]
 use crate::mblk_t;
 use bitflags::bitflags;
@@ -17,7 +19,7 @@ bitflags! {
 #[derive(Clone, Copy, Debug, Default)]
 /// Flags which denote the valid fields of a `mac_ether_offload_info_t`
 /// or `mac_ether_tun_info_t`.
-pub struct MacEtherOffloadFlags: u8 {
+pub struct MacEtherOffloadFlags: u32 {
     /// `l2hlen` and `l3proto` are set.
     const L2INFO_SET     = 1 << 0;
     /// The ethernet header contains a VLAN tag.
@@ -26,14 +28,14 @@ pub struct MacEtherOffloadFlags: u8 {
     const L3INFO_SET     = 1 << 2;
     /// `l4hlen` is set.
     const L4INFO_SET     = 1 << 3;
-    /// `tuntype` is set.
+    /// `tunhlen` is set.
     const TUNINFO_SET    = 1 << 4;
 }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct MacTunType(u8);
+pub struct MacTunType(u32);
 
 impl MacTunType {
     pub const NONE: Self = Self(0);
@@ -45,22 +47,14 @@ impl MacTunType {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct mac_ether_offload_info_t {
     pub meoi_flags: MacEtherOffloadFlags,
+    pub meoi_tuntype: MacTunType,
+    pub meoi_len: u32,
     pub meoi_l2hlen: u8,
     pub meoi_l3proto: u16,
     pub meoi_l3hlen: u16,
     pub meoi_l4proto: u8,
     pub meoi_l4hlen: u8,
-    pub meoi_len: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct mac_ether_tun_info_t {
-    pub mett_flags: MacEtherOffloadFlags,
-    pub mett_tuntype: MacTunType,
-    pub mett_l2hlen: u8,
-    pub mett_l3proto: u16,
-    pub mett_l3hlen: u16,
+    pub meoi_tunhlen: u16,
 }
 
 #[cfg(feature = "kernel")]
@@ -83,6 +77,11 @@ extern "C" {
         value: *mut u32,
         flags: *mut u32,
     );
+    pub fn mac_ether_set_fullpktinfo(
+        mp: *mut mblk_t,
+        outer_info: *const mac_ether_offload_info_t,
+        inner_info: *const mac_ether_offload_info_t,
+    ) -> c_int;
 }
 
 // ======================================================================
@@ -91,6 +90,7 @@ extern "C" {
 
 bitflags! {
 /// Flags which denote checksum and LSO state for an `mblk_t`.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct MblkOffloadFlags: u16 {
     /// Tx: IPv4 header checksum must be computer by hardware.
     const HCK_IPV4_HDRCKSUM = 1 << 0;
@@ -106,17 +106,33 @@ pub struct MblkOffloadFlags: u16 {
     const HCK_FULLCKSUM_OK = 1 << 3;
     /// Tx: Hardware must perform LSO.
     const HW_LSO = 1 << 4;
-    /// Tx: Hardware must compute all checksum for the outer tunnel
-    /// encapsulation of this packet.
-    const HCK_FULLOUTERCKSUM = 1 << 5;
+
+    const HCK_INNER_V4CKSUM = 1 << 5;
+
+    const HCK_INNER_V4CKSUM_OK = 1 << 6;
+
+    const HCK_INNER_PARTIAL = 1 << 7;
+
+    const HCK_INNER_FULL = 1 << 8;
+
+    const HCK_INNER_FULL_OK = 1 << 9;
 
     const HCK_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits() |
-        Self::HCK_FULLCKSUM_OK.bits() | Self::HCK_FULLOUTERCKSUM.bits();
+        Self::HCK_FULLCKSUM_OK.bits() | Self::HCK_INNER_V4CKSUM.bits() |
+        Self::HCK_INNER_V4CKSUM_OK.bits() | Self::HCK_INNER_PARTIAL.bits() |
+        Self::HCK_INNER_FULL.bits() | Self::HCK_INNER_FULL_OK.bits();
 
     const HCK_TX_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits() |
-        Self::HCK_FULLOUTERCKSUM.bits();
+        Self::HCK_INNER_V4CKSUM.bits() | Self::HCK_INNER_PARTIAL.bits() |
+        Self::HCK_INNER_FULL.bits();
+
+    const HCK_OUTER_TX_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
+        Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits();
+
+    const HCK_INNER_TX_FLAGS = Self::HCK_INNER_V4CKSUM.bits() |
+        Self::HCK_INNER_PARTIAL.bits() | Self::HCK_INNER_FULL.bits();
 
     const HW_LSO_FLAGS = Self::HW_LSO.bits();
 }

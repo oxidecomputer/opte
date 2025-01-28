@@ -28,7 +28,6 @@ use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
-use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
@@ -729,18 +728,9 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
-    pub fn request_offload(
-        &mut self,
-        cksum_needed: bool,
-        is_tcp: bool,
-        mss: u32,
-    ) {
-        let ckflags = if cksum_needed {
-            MblkOffloadFlags::HCK_IPV4_HDRCKSUM
-                | MblkOffloadFlags::HCK_FULLCKSUM
-        } else {
-            MblkOffloadFlags::empty()
-        };
+    pub fn request_offload(&mut self, flags: MblkOffloadFlags, mss: u32) {
+        let ckflags = flags & MblkOffloadFlags::HCK_FLAGS;
+
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
             if !ckflags.is_empty() {
@@ -753,7 +743,7 @@ impl MsgBlk {
                     ckflags.bits() as u32,
                 );
             }
-            if is_tcp {
+            if flags.contains(MblkOffloadFlags::HW_LSO) {
                 illumos_sys_hdrs::mac::lso_info_set(
                     self.0.as_ptr(),
                     mss,
@@ -774,23 +764,36 @@ impl MsgBlk {
     #[allow(unused)]
     pub fn set_tuntype(&mut self, tuntype: MacTunType) {
         #[cfg(all(not(feature = "std"), not(test)))]
-        unsafe {
-            (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
-            (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |=
-                MacEtherOffloadFlags::TUNINFO_SET;
-        }
+        // unsafe {
+        //     (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
+        //     (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |=
+        //         MacEtherOffloadFlags::TUNINFO_SET;
+        // }
+        todo!()
     }
 
     #[allow(unused)]
     pub fn fill_offload_info(
         &mut self,
-        tun_meoi: &mac_ether_tun_info_t,
-        ulp_meoi: &mac_ether_offload_info_t,
-    ) {
+        outer_meoi: &mac_ether_offload_info_t,
+        inner_meoi: Option<&mac_ether_offload_info_t>,
+    ) -> Result<(), ()> {
         #[cfg(all(not(feature = "std"), not(test)))]
-        unsafe {
-            (*(*self.0.as_ptr()).b_datap).db_mett = *tun_meoi;
-            (*(*self.0.as_ptr()).b_datap).db_meoi = *ulp_meoi;
+        let res = unsafe {
+            illumos_sys_hdrs::mac::mac_ether_set_fullpktinfo(
+                self.0.as_ptr(),
+                outer_meoi,
+                inner_meoi.map(|v| v as *const _).unwrap_or_else(ptr::null),
+            )
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let res = 0;
+
+        if res == 0 {
+            Ok(())
+        } else {
+            Err(())
         }
     }
 

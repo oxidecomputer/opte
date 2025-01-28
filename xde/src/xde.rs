@@ -55,15 +55,16 @@ use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
-use illumos_sys_hdrs::mac::mac_ether_tun_info_t;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
+use ingot::geneve::Geneve;
 use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
+use ingot::udp::Udp;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -1865,21 +1866,39 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     1500 - (non_eth_payl_bytes as u32)
                 };
 
-                out_pkt.request_offload(true, is_tcp && lso_possible, mss);
+                let meoi_len = out_pkt.byte_len() as u32;
 
-                let tun_meoi = mac_ether_tun_info_t {
-                    mett_flags: MacEtherOffloadFlags::L2INFO_SET
+                let flags = MblkOffloadFlags::HCK_INNER_V4CKSUM
+                    | MblkOffloadFlags::HCK_INNER_FULL
+                    | if is_tcp && lso_possible {
+                        MblkOffloadFlags::HW_LSO
+                    } else {
+                        MblkOffloadFlags::empty()
+                    };
+
+                out_pkt.request_offload(flags, mss);
+
+                let tun_meoi = mac_ether_offload_info_t {
+                    meoi_flags: MacEtherOffloadFlags::L2INFO_SET
                         | MacEtherOffloadFlags::L3INFO_SET
+                        | MacEtherOffloadFlags::L4INFO_SET
                         | MacEtherOffloadFlags::TUNINFO_SET,
-                    mett_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
-                    mett_l3proto: Ethertype::IPV6.0,
-                    mett_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
-                    mett_tuntype: MacTunType::GENEVE,
-
-                    ..Default::default()
+                    meoi_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
+                    meoi_l3proto: Ethertype::IPV6.0,
+                    meoi_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                    meoi_l4proto: IpProtocol::UDP.0,
+                    meoi_l4hlen: Udp::MINIMUM_LENGTH as u8,
+                    meoi_tuntype: MacTunType::GENEVE,
+                    meoi_tunhlen: Geneve::MINIMUM_LENGTH as u16,
+                    meoi_len,
                 };
 
-                out_pkt.fill_offload_info(&tun_meoi, &ulp_meoi);
+                if out_pkt
+                    .fill_offload_info(&tun_meoi, Some(&ulp_meoi))
+                    .is_err()
+                {
+                    opte::engine::err!("failed to set offload info?!");
+                }
             }
 
             // Currently the overlay layer leaves the outer frame
@@ -2243,7 +2262,10 @@ unsafe fn xde_rx_one(
             // HW_LSO will cause viona to treat this packet as though it were
             // a locally delivered segment making use of LSO.
             if is_tcp && npkt.len() > 1500 + Ethernet::MINIMUM_LENGTH {
-                npkt.request_offload(false, true, mss_estimate as u32);
+                npkt.request_offload(
+                    MblkOffloadFlags::HW_LSO,
+                    mss_estimate as u32,
+                );
             }
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
