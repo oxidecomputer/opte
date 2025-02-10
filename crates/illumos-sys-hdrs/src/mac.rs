@@ -22,14 +22,16 @@ bitflags! {
 pub struct MacEtherOffloadFlags: u32 {
     /// `l2hlen` and `l3proto` are set.
     const L2INFO_SET     = 1 << 0;
-    /// The ethernet header contains a VLAN tag.
-    const VLAN_TAGGED    = 1 << 1;
     /// `l3hlen` and `l4proto` are set.
-    const L3INFO_SET     = 1 << 2;
+    const L3INFO_SET     = 1 << 1;
     /// `l4hlen` is set.
-    const L4INFO_SET     = 1 << 3;
+    const L4INFO_SET     = 1 << 2;
     /// `tunhlen` is set.
-    const TUNINFO_SET    = 1 << 4;
+    const TUNINFO_SET    = 1 << 3;
+    /// The ethernet header contains a VLAN tag.
+    const VLAN_TAGGED    = 1 << 4;
+    /// The packet is fragmented at L3.
+    const L3_FRAGMENT    = 1 << 5;
 }
 }
 
