@@ -33,6 +33,7 @@ use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::TcpLsoFlags;
+use crate::mac::TunnelCsoFlags;
 use crate::mac::TunnelTcpLsoFlags;
 use crate::mac::TunnelType;
 use crate::route::Route;
@@ -260,22 +261,29 @@ impl OffloadInfo {
     /// Forwards the underlay's tunnel checksum offload capabilities into
     /// standard capabilities.
     fn upstream_csum(&self) -> mac_capab_cso_t {
-        let base_capabs =
-            ChecksumOffloadCapabs::from_bits_truncate(self.cso_state.cso_flags);
+        let base_capabs = self.cso_state.cso_flags;
         let mut out = mac_capab_cso_t::default();
 
-        out.cso_flags = (if base_capabs
-            .contains(ChecksumOffloadCapabs::TUNNEL_VALID)
-            && TunnelType::from_bits_truncate(
-                self.cso_state.cso_tunnel.ct_types,
-            )
-            .contains(TunnelType::GENEVE)
+        if base_capabs.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
+            && self.cso_state.cso_tunnel.ct_types.contains(TunnelType::GENEVE)
         {
-            base_capabs & ChecksumOffloadCapabs::NON_TUN_CAPABS
-        } else {
-            ChecksumOffloadCapabs::empty()
-        })
-        .bits();
+            let tsco_flags = self.cso_state.cso_tunnel.ct_flags;
+            if tsco_flags.contains(TunnelCsoFlags::INNER_IPHDR) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_HDRCKSUM;
+            }
+            if tsco_flags.contains(
+                TunnelCsoFlags::INNER_TCP_PARTIAL
+                    | TunnelCsoFlags::INNER_UDP_PARTIAL,
+            ) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_PARTIAL;
+            }
+            if tsco_flags.contains(
+                TunnelCsoFlags::INNER_TCP_FULL | TunnelCsoFlags::INNER_UDP_FULL,
+            ) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_FULL_V4
+                    | ChecksumOffloadCapabs::INET_FULL_V6;
+            }
+        }
 
         out
     }
@@ -283,21 +291,17 @@ impl OffloadInfo {
     /// Forwards the underlay's tunnel TCP LSO capabilities into
     /// standard LSO capabilities.
     fn upstream_lso(&self) -> mac_capab_lso_t {
-        let base_capabs =
-            TcpLsoFlags::from_bits_truncate(self.lso_state.lso_flags);
         let mut out = mac_capab_lso_t::default();
 
-        if base_capabs.contains(TcpLsoFlags::TUN) {
-            let tun_flags = TunnelTcpLsoFlags::from_bits_truncate(
-                self.lso_state.lso_tunnel_tcp.tun_flags,
-            );
-            let tun_types = TunnelType::from_bits_truncate(
-                self.lso_state.lso_tunnel_tcp.tun_types,
-            );
-
-            if tun_types.contains(TunnelType::GENEVE) {
-                out.lso_flags |= TcpLsoFlags::BASIC_IPV4.bits()
-                    | TcpLsoFlags::BASIC_IPV6.bits();
+        if self.lso_state.lso_flags.contains(TcpLsoFlags::TUNNEL_TCP) {
+            if self
+                .lso_state
+                .lso_tunnel_tcp
+                .tun_types
+                .contains(TunnelType::GENEVE)
+            {
+                out.lso_flags |=
+                    TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6;
                 out.lso_basic_tcp_ipv4 = lso_basic_tcp_ipv4_t {
                     lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
                 };
@@ -311,25 +315,17 @@ impl OffloadInfo {
     }
 
     fn should_request_lso(&self) -> bool {
-        let base_capabs =
-            TcpLsoFlags::from_bits_truncate(self.lso_state.lso_flags);
-
-        base_capabs.contains(TcpLsoFlags::TUN)
-            && TunnelType::from_bits_truncate(
-                self.lso_state.lso_tunnel_tcp.tun_types,
-            )
-            .contains(TunnelType::GENEVE)
+        self.lso_state.lso_flags.contains(TcpLsoFlags::TUNNEL_TCP)
+            && self
+                .lso_state
+                .lso_tunnel_tcp
+                .tun_types
+                .contains(TunnelType::GENEVE)
     }
 
     fn should_request_cso(&self) -> bool {
-        let base_capabs =
-            ChecksumOffloadCapabs::from_bits_truncate(self.cso_state.cso_flags);
-
-        base_capabs.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
-            && TunnelType::from_bits_truncate(
-                self.cso_state.cso_tunnel.ct_types,
-            )
-            .contains(TunnelType::GENEVE)
+        self.cso_state.cso_flags.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
+            && self.cso_state.cso_tunnel.ct_types.contains(TunnelType::GENEVE)
     }
 }
 
@@ -2067,7 +2063,7 @@ unsafe extern "C" fn xde_mc_getcapab(
                 (*capab).lso_basic_tcp_ipv6 = desired_lso.lso_basic_tcp_ipv6;
             }
 
-            if desired_lso.lso_flags == 0 {
+            if desired_lso.lso_flags.is_empty() {
                 boolean_t::B_FALSE
             } else {
                 boolean_t::B_TRUE
