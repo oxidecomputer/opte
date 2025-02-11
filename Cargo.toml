@@ -54,7 +54,7 @@ ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "bff93247fe7
 ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.14", default-features = false }
 libc = "0.2"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 nix = { version = "0.29", features = ["signal", "user"] }
 pcap-parser = "0.16"
 postcard = { version = "1", features = ["alloc"], default-features = false }
