@@ -482,13 +482,14 @@ impl CompiledEncap {
             return pkt;
         };
 
-        let mut prepend = if pkt.head_capacity() < bytes.len() {
-            let mut pkt = MsgBlk::new_ethernet(bytes.len());
-            pkt.pop_all();
-            Some(pkt)
-        } else {
-            None
-        };
+        let mut prepend =
+            if pkt.ref_count() > 1 || pkt.head_capacity() < bytes.len() {
+                let mut pkt = MsgBlk::new_ethernet(bytes.len());
+                pkt.pop_all();
+                Some(pkt)
+            } else {
+                None
+            };
 
         let target = if let Some(prepend) = prepend.as_mut() {
             prepend

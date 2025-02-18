@@ -79,6 +79,7 @@ extern "C" {
         value: *mut u32,
         flags: *mut u32,
     );
+    pub fn mac_lso_get(mp: *mut mblk_t, mss: *mut u32, flags: *mut u32);
     pub fn mac_ether_set_fullpktinfo(
         mp: *mut mblk_t,
         outer_info: *const mac_ether_offload_info_t,
@@ -133,9 +134,42 @@ pub struct MblkOffloadFlags: u16 {
     const HCK_OUTER_TX_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits();
 
+    const HCK_OUTER_FLAGS = Self::HCK_OUTER_TX_FLAGS.bits() |
+        Self::HCK_IPV4_HDRCKSUM_OK.bits() | Self::HCK_FULLCKSUM_OK.bits();
+
     const HCK_INNER_TX_FLAGS = Self::HCK_INNER_V4CKSUM.bits() |
         Self::HCK_INNER_PARTIAL.bits() | Self::HCK_INNER_FULL.bits();
 
+    const HCK_INNER_FLAGS = Self::HCK_INNER_TX_FLAGS.bits() |
+        Self::HCK_INNER_V4CKSUM_OK.bits() | Self::HCK_INNER_FULL_OK.bits();
+
     const HW_LSO_FLAGS = Self::HW_LSO.bits();
 }
+}
+
+impl MblkOffloadFlags {
+    /// Move any outer offload flags to the inner layer, as part of
+    /// encapsulation.
+    pub fn shift_in(self) -> Self {
+        let mut out =
+            self.difference(Self::HCK_INNER_FLAGS.union(Self::HCK_OUTER_FLAGS));
+
+        if self.contains(Self::HCK_IPV4_HDRCKSUM) {
+            out |= Self::HCK_INNER_V4CKSUM;
+        }
+
+        if self.contains(Self::HCK_PARTIALCKSUM) {
+            out |= Self::HCK_INNER_PARTIAL;
+        }
+
+        if self.contains(Self::HCK_FULLCKSUM) {
+            out |= Self::HCK_INNER_FULL;
+        }
+
+        if self.contains(Self::HCK_FULLCKSUM_OK) {
+            out |= Self::HCK_INNER_FULL_OK;
+        }
+
+        out
+    }
 }

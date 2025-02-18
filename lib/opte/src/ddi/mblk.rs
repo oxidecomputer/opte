@@ -727,22 +727,25 @@ impl MsgBlk {
         }
     }
 
+    /// Return the number of active [`MsgBlk`] referents to the underlying data.
+    pub fn ref_count(&self) -> usize {
+        (unsafe { (*(*self.0.as_ptr()).b_datap).db_ref }) as usize
+    }
+
     #[allow(unused)]
     pub fn request_offload(&mut self, flags: MblkOffloadFlags, mss: u32) {
         let ckflags = flags & MblkOffloadFlags::HCK_FLAGS;
 
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
-            if !ckflags.is_empty() {
-                illumos_sys_hdrs::mac::mac_hcksum_set(
-                    self.0.as_ptr(),
-                    0,
-                    0,
-                    0,
-                    0,
-                    ckflags.bits() as u32,
-                );
-            }
+            illumos_sys_hdrs::mac::mac_hcksum_set(
+                self.0.as_ptr(),
+                0,
+                0,
+                0,
+                0,
+                ckflags.bits() as u32,
+            );
             if flags.contains(MblkOffloadFlags::HW_LSO) {
                 illumos_sys_hdrs::mac::lso_info_set(
                     self.0.as_ptr(),
@@ -762,18 +765,7 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
-    pub fn set_tuntype(&mut self, tuntype: MacTunType) {
-        #[cfg(all(not(feature = "std"), not(test)))]
-        // unsafe {
-        //     (*(*self.0.as_ptr()).b_datap).db_mett.mett_tuntype = tuntype;
-        //     (*(*self.0.as_ptr()).b_datap).db_mett.mett_flags |=
-        //         MacEtherOffloadFlags::TUNINFO_SET;
-        // }
-        todo!()
-    }
-
-    #[allow(unused)]
-    pub fn fill_offload_info(
+    pub fn fill_parse_info(
         &mut self,
         outer_meoi: &mac_ether_offload_info_t,
         inner_meoi: Option<&mac_ether_offload_info_t>,
@@ -798,8 +790,9 @@ impl MsgBlk {
     }
 
     #[allow(unused)]
-    pub fn cksum_flags(&self) -> MblkOffloadFlags {
-        let mut out = 0u32;
+    pub fn offload_flags(&self) -> MblkOffloadFlags {
+        let mut cso_out = 0u32;
+        let mut lso_out = 0u32;
 
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
@@ -809,11 +802,16 @@ impl MsgBlk {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                &raw mut out,
-            )
+                &raw mut cso_out,
+            );
+            illumos_sys_hdrs::mac::mac_lso_get(
+                self.0.as_ptr(),
+                ptr::null_mut(),
+                &raw mut lso_out,
+            );
         };
 
-        MblkOffloadFlags::from_bits_retain(out as u16)
+        MblkOffloadFlags::from_bits_retain((cso_out | lso_out) as u16)
     }
 }
 

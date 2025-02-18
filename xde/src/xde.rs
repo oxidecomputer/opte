@@ -1610,14 +1610,11 @@ fn guest_loopback(
                 Ok(ProcessResult::Modified(emit_spec)) => {
                     let mut pkt = emit_spec.apply(pkt);
 
-                    // BREAKS EVERYTHING.
-                    // pkt.strip_lso();
-
                     // Having advertised offloads to our guest, looped back
                     // packets are liable to have zero-checksums. Fill these
                     // if necessary.
                     let pkt = if pkt
-                        .cksum_flags()
+                        .offload_flags()
                         .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
                     {
                         mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
@@ -1730,6 +1727,7 @@ unsafe extern "C" fn xde_mc_tx(
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
+    let offload_flags = pkt.offload_flags();
     let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
@@ -1751,21 +1749,16 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let meoi_len = parsed_pkt.len() as u32;
 
     let meta = parsed_pkt.meta();
-    let is_tcp = meta
-        .inner_ulp
-        .as_ref()
-        .map(|v| matches!(v, ValidUlp::Tcp(_)))
-        .unwrap_or_default();
     let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
 
     let (l4_flag, l4_ty) = match &meta.inner_ulp {
         Some(ValidUlp::Tcp(_)) => {
-            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP.0)
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP)
         }
         Some(ValidUlp::Udp(_)) => {
-            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP.0)
+            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP)
         }
-        _ => (MacEtherOffloadFlags::empty(), 0),
+        _ => (MacEtherOffloadFlags::empty(), IpProtocol(0)),
     };
 
     let ulp_meoi = mac_ether_offload_info_t {
@@ -1776,7 +1769,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         meoi_l2hlen: meta.inner_eth.packet_length() as u8,
         meoi_l3proto: meta.inner_eth.ethertype().0,
         meoi_l3hlen: meta.inner_l3.packet_length() as u16,
-        meoi_l4proto: l4_ty,
+        meoi_l4proto: l4_ty.0,
         meoi_l4hlen: meta.inner_ulp.packet_length() as u8,
 
         ..Default::default()
@@ -1843,58 +1836,34 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 return ptr::null_mut();
             }
 
-            // TODO: should these not just be copied from the original input
-            //       mblk?
-            let cso_possible = src_dev.underlay_capab.should_request_cso();
-            let lso_possible = src_dev.underlay_capab.should_request_lso();
+            // Boost MSS to use full jumbo frames if we know our path
+            // can be served purely on internal links.
+            // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+            let mss = if mtu_unrestricted {
+                src_dev.underlay_capab.mtu - 70 - (non_eth_payl_bytes as u32)
+            } else {
+                1500 - (non_eth_payl_bytes as u32)
+            };
 
-            // CSO is a prerequisite for LSO.
-            if cso_possible {
-                // Boost MSS to use full jumbo frames if we know our path
-                // can be served purely on internal links.
-                // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+            out_pkt.request_offload(offload_flags.shift_in(), mss);
 
-                let mss = if mtu_unrestricted {
-                    src_dev.underlay_capab.mtu
-                        - 70
-                        - (non_eth_payl_bytes as u32)
-                } else {
-                    1500 - (non_eth_payl_bytes as u32)
-                };
+            let tun_meoi = mac_ether_offload_info_t {
+                meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+                    | MacEtherOffloadFlags::L3INFO_SET
+                    | MacEtherOffloadFlags::L4INFO_SET
+                    | MacEtherOffloadFlags::TUNINFO_SET,
+                meoi_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
+                meoi_l3proto: Ethertype::IPV6.0,
+                meoi_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                meoi_l4proto: IpProtocol::UDP.0,
+                meoi_l4hlen: Udp::MINIMUM_LENGTH as u8,
+                meoi_tuntype: MacTunType::GENEVE,
+                meoi_tunhlen: Geneve::MINIMUM_LENGTH as u16,
+                meoi_len: out_pkt.byte_len() as u32,
+            };
 
-                let meoi_len = out_pkt.byte_len() as u32;
-
-                let flags = MblkOffloadFlags::HCK_INNER_V4CKSUM
-                    | MblkOffloadFlags::HCK_INNER_FULL
-                    | if is_tcp && lso_possible {
-                        MblkOffloadFlags::HW_LSO
-                    } else {
-                        MblkOffloadFlags::empty()
-                    };
-
-                out_pkt.request_offload(flags, mss);
-
-                let tun_meoi = mac_ether_offload_info_t {
-                    meoi_flags: MacEtherOffloadFlags::L2INFO_SET
-                        | MacEtherOffloadFlags::L3INFO_SET
-                        | MacEtherOffloadFlags::L4INFO_SET
-                        | MacEtherOffloadFlags::TUNINFO_SET,
-                    meoi_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
-                    meoi_l3proto: Ethertype::IPV6.0,
-                    meoi_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
-                    meoi_l4proto: IpProtocol::UDP.0,
-                    meoi_l4hlen: Udp::MINIMUM_LENGTH as u8,
-                    meoi_tuntype: MacTunType::GENEVE,
-                    meoi_tunhlen: Geneve::MINIMUM_LENGTH as u16,
-                    meoi_len,
-                };
-
-                if out_pkt
-                    .fill_offload_info(&tun_meoi, Some(&ulp_meoi))
-                    .is_err()
-                {
-                    opte::engine::err!("failed to set offload info?!");
-                }
+            if out_pkt.fill_parse_info(&tun_meoi, Some(&ulp_meoi)).is_err() {
+                opte::engine::err!("failed to set offload info?!");
             }
 
             // Currently the overlay layer leaves the outer frame
