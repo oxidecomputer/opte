@@ -119,7 +119,8 @@ impl<T> KMutex<T> {
         // Safety: ???.
         unsafe {
             // MUTEX_DRIVER is the only type currently sanctioned by the DDI
-            // for use here. Other types require the priority argument to be set.
+            // for use here. The priority argument, when we provide it, will
+            // control whether we get adaptive/spin behaviour.
             mutex_init(
                 &mut kmutex,
                 ptr::null(),
