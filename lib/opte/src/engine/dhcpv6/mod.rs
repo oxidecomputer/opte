@@ -79,11 +79,11 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use core::ops::Deref;
-pub use opte_api::dhcpv6::AddressInfo;
-pub use opte_api::dhcpv6::LeasedAddress;
 use opte_api::DhcpCfg;
 use opte_api::Ipv6Addr;
 use opte_api::MacAddr;
+pub use opte_api::dhcpv6::AddressInfo;
+pub use opte_api::dhcpv6::LeasedAddress;
 
 /// The All-DHCP-Relay-Agents-And-Servers IPv6 address.
 pub const ALL_RELAYS_AND_SERVERS: Ipv6Addr =

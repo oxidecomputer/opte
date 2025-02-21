@@ -164,11 +164,7 @@ impl GeneveMeta {
     /// all Geneve options attached to this packet.
     pub fn options_len(&self) -> usize {
         // XXX: This is very special-cased just to enable testing.
-        if self.oxide_external_pkt {
-            GeneveOpt::MINIMUM_LENGTH
-        } else {
-            0
-        }
+        if self.oxide_external_pkt { GeneveOpt::MINIMUM_LENGTH } else { 0 }
     }
 }
 

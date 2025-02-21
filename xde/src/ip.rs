@@ -54,11 +54,7 @@ where
             index % 8
         };
         let mask = 1 << bit_index;
-        if val {
-            byte | mask
-        } else {
-            byte & !mask
-        }
+        if val { byte | mask } else { byte & !mask }
     }
     #[inline]
     pub fn set_bit(&mut self, index: usize, val: bool) {
@@ -10256,7 +10252,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn vmem_size(arg1: *mut vmem_t, arg2: illumos_sys_hdrs::c_int)
-        -> usize;
+    -> usize;
 }
 unsafe extern "C" {
     pub fn vmem_qcache_reap(vmp: *mut vmem_t);
@@ -10468,11 +10464,11 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn list_remove_head(arg1: *mut list_t)
-        -> *mut illumos_sys_hdrs::c_void;
+    -> *mut illumos_sys_hdrs::c_void;
 }
 unsafe extern "C" {
     pub fn list_remove_tail(arg1: *mut list_t)
-        -> *mut illumos_sys_hdrs::c_void;
+    -> *mut illumos_sys_hdrs::c_void;
 }
 unsafe extern "C" {
     pub fn list_move_tail(arg1: *mut list_t, arg2: *mut list_t);
@@ -14573,7 +14569,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn atomic_or_ushort_nv(arg1: *mut ushort_t, arg2: ushort_t)
-        -> ushort_t;
+    -> ushort_t;
 }
 unsafe extern "C" {
     pub fn atomic_or_32_nv(arg1: *mut u32, arg2: u32) -> u32;
@@ -15846,7 +15842,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn net_inject_alloc(arg1: illumos_sys_hdrs::c_int)
-        -> *mut net_inject_t;
+    -> *mut net_inject_t;
 }
 unsafe extern "C" {
     pub fn net_inject_free(arg1: *mut net_inject_t);
@@ -15919,7 +15915,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn net_protocol_walk(arg1: netid_t, arg2: net_handle_t)
-        -> net_handle_t;
+    -> net_handle_t;
 }
 unsafe extern "C" {
     pub fn net_protocol_notify_register(
@@ -17166,11 +17162,11 @@ pub struct refstr {
 pub type refstr_t = refstr;
 unsafe extern "C" {
     pub fn refstr_alloc(arg1: *const illumos_sys_hdrs::c_char)
-        -> *mut refstr_t;
+    -> *mut refstr_t;
 }
 unsafe extern "C" {
     pub fn refstr_value(arg1: *mut refstr_t)
-        -> *const illumos_sys_hdrs::c_char;
+    -> *const illumos_sys_hdrs::c_char;
 }
 unsafe extern "C" {
     pub fn refstr_hold(arg1: *mut refstr_t);
@@ -18051,7 +18047,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn rctl_set_dup_prealloc(arg1: *mut rctl_set_t)
-        -> *mut rctl_alloc_gp_t;
+    -> *mut rctl_alloc_gp_t;
 }
 unsafe extern "C" {
     pub fn rctl_set_dup_ready(
@@ -20052,7 +20048,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn brk_internal(arg1: caddr_t, arg2: uint_t)
-        -> illumos_sys_hdrs::c_int;
+    -> illumos_sys_hdrs::c_int;
 }
 pub type callout_id_t = u64;
 unsafe extern "C" {
@@ -20538,7 +20534,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn __ipltospl(arg1: illumos_sys_hdrs::c_int)
-        -> illumos_sys_hdrs::c_int;
+    -> illumos_sys_hdrs::c_int;
 }
 unsafe extern "C" {
     pub fn spl_xcall() -> illumos_sys_hdrs::c_int;
@@ -25284,7 +25280,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn ip_type_v6(arg1: *const in6_addr_t, arg2: *mut ip_stack_t)
-        -> uint_t;
+    -> uint_t;
 }
 unsafe extern "C" {
     pub fn ip_wput_nondata(
@@ -26191,7 +26187,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn ip_laddr_fanout_insert(arg1: *mut conn_t)
-        -> illumos_sys_hdrs::c_int;
+    -> illumos_sys_hdrs::c_int;
 }
 unsafe extern "C" {
     pub fn ip_verify_src(

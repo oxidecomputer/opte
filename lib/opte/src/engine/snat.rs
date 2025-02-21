@@ -316,7 +316,7 @@ where
             proto => {
                 return Err(GenDescError::Unexpected {
                     msg: format!("SNAT pool (unexpected ULP: {})", proto),
-                })
+                });
             }
         };
 

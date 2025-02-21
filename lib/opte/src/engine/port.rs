@@ -7,6 +7,9 @@
 //! A virtual switch port.
 
 use self::meta::ActionMeta;
+use super::HdlPktAction;
+use super::LightweightMeta;
+use super::NetworkImpl;
 use super::ether::Ethernet;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
@@ -21,9 +24,9 @@ use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
 use super::ioctl::UftEntryDump;
+use super::ip::L3Repr;
 use super::ip::v4::Ipv4;
 use super::ip::v6::Ipv6;
-use super::ip::L3Repr;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
@@ -32,6 +35,7 @@ use super::layer::LayerStatsSnap;
 use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
+use super::packet::FLOW_ID_DEFAULT;
 use super::packet::FullParsed;
 use super::packet::InnerFlowId;
 use super::packet::LiteParsed;
@@ -39,21 +43,18 @@ use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
 use super::packet::Pullup;
-use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
 use super::rule::CompiledTransform;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
-use super::tcp::TcpState;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
+use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
-use super::HdlPktAction;
-use super::LightweightMeta;
-use super::NetworkImpl;
+use crate::ExecCtx;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -70,7 +71,6 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
-use crate::ExecCtx;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -2301,11 +2301,11 @@ impl<N: NetworkImpl> Port<N> {
             Ok(LayerResult::Deny { name, reason }) => {
                 return Ok(InternalProcessResult::Drop {
                     reason: DropReason::Layer { name, reason },
-                })
+                });
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                return Ok(InternalProcessResult::Hairpin(hppkt))
+                return Ok(InternalProcessResult::Hairpin(hppkt));
             }
 
             Ok(LayerResult::HandlePkt) => {
@@ -2508,7 +2508,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
 
                 // Continue with processing.
-                Ok(TcpMaybeClosed::NewState (_, flow)) => Some(flow),
+                Ok(TcpMaybeClosed::NewState(_, flow)) => Some(flow),
 
                 // Unlike for existing flows, we don't allow through
                 // unexpected packets here for now -- the `TcpState` FSM

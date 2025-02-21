@@ -7,22 +7,21 @@
 //! A layer in a port.
 
 use super::flow_table::Dump;
+use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
-use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
+use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
-use super::packet::FLOW_ID_DEFAULT;
-use super::port::meta::ActionMeta;
 use super::port::Transforms;
+use super::port::meta::ActionMeta;
 use super::rule;
-use super::rule::ht_probe;
 use super::rule::Action;
 use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
@@ -30,6 +29,9 @@ use super::rule::Finalized;
 use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use super::rule::ht_probe;
+use crate::ExecCtx;
+use crate::LogLevel;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -38,8 +40,6 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
-use crate::ExecCtx;
-use crate::LogLevel;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -1829,8 +1829,8 @@ mod test {
     use ingot::tcp::Tcp;
     use ingot::types::HeaderLen;
 
-    use crate::engine::ip::v4::Ipv4;
     use crate::engine::GenericUlp;
+    use crate::engine::ip::v4::Ipv4;
 
     use super::*;
 

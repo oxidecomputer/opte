@@ -22,11 +22,11 @@ use super::headers::IpPush;
 use super::headers::Transform;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ip::v4::Ipv4Mut;
-use super::ip::v6::v6_set_next_header;
-use super::ip::v6::Ipv6Mut;
-use super::ip::ValidL3;
 use super::ip::L3;
+use super::ip::ValidL3;
+use super::ip::v4::Ipv4Mut;
+use super::ip::v6::Ipv6Mut;
+use super::ip::v6::v6_set_next_header;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
@@ -113,7 +113,7 @@ pub trait FiniteResource: Resource {
     /// Return an error if no entry can be mapped to this key or if
     /// the resource is exhausted.
     fn obtain_raw(&self, key: &Self::Key)
-        -> Result<Self::Entry, ResourceError>;
+    -> Result<Self::Entry, ResourceError>;
 
     /// Obtain a smart handle to an entry given the key.
     ///
@@ -1112,11 +1112,11 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 
 #[test]
 fn rule_matching() {
+    use crate::engine::GenericUlp;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Mut;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
-    use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;

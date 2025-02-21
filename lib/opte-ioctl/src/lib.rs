@@ -4,6 +4,7 @@
 
 // Copyright 2025 Oxide Computer Company
 
+use opte::api::API_VERSION;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -12,7 +13,6 @@ use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
-use opte::api::API_VERSION;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::AllowCidrReq;
@@ -34,8 +34,8 @@ use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
@@ -377,11 +377,13 @@ unsafe fn ioctl<T>(
     fd: libc::c_int,
     req: libc::c_int,
     arg: *mut T,
-) -> libc::c_int { unsafe {
-    // Most other OSes define the request argument to be ulong_t rather than int
-    // Cast that away here so that it compiles in both places
-    #[cfg(not(target_os = "illumos"))]
-    let req = req as libc::c_ulong;
+) -> libc::c_int {
+    unsafe {
+        // Most other OSes define the request argument to be ulong_t rather than int
+        // Cast that away here so that it compiles in both places
+        #[cfg(not(target_os = "illumos"))]
+        let req = req as libc::c_ulong;
 
-    libc::ioctl(fd, req, arg)
-}}
+        libc::ioctl(fd, req, arg)
+    }
+}

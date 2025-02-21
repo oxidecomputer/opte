@@ -95,7 +95,7 @@ impl StatefulAction for OutboundNat {
                 return Err(rule::GenDescError::Unexpected {
                     msg: "Outbound NAT: no external IP addresses specified"
                         .into(),
-                })
+                });
             }
             1 => 0,
             n => {
@@ -217,11 +217,11 @@ mod test {
     use super::*;
 
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::GenericUlp;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
-    use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;

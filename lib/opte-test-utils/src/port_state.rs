@@ -9,9 +9,9 @@
 use super::*;
 use opte::engine::port::*;
 use opte::engine::print::*;
+use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::overlay::VpcMappings;
 use oxide_vpc::engine::print::*;
-use oxide_vpc::engine::VpcNetwork;
 use std::collections::BTreeMap;
 use std::io::Write;
 
@@ -333,9 +333,7 @@ macro_rules! set_field_na {
                 Some(v) => match val.parse() {
                     Ok(val) => *v = val,
                     Err(_) => {
-                        panic!(
-                            "not a number: field: '{field}' val: '{val}'"
-                        );
+                        panic!("not a number: field: '{field}' val: '{val}'");
                     }
                 },
 

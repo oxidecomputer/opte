@@ -19,30 +19,30 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::time::Moment;
+use opte::engine::Direction;
+use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::arp::ArpEthIpv4;
 use opte::engine::arp::ArpEthIpv4Ref;
 use opte::engine::arp::ValidArpEthIpv4;
-use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::dhcpv6;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::flow_table::FLOW_DEF_EXPIRE_SECS;
 use opte::engine::geneve::Vni;
+use opte::engine::ip::L3;
+use opte::engine::ip::ValidL3;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::ip::v4::Ipv4Ref;
 use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Ref;
-use opte::engine::ip::ValidL3;
-use opte::engine::ip::L3;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkFullParsed;
 use opte::engine::packet::MismatchError;
 use opte::engine::packet::Packet;
 use opte::engine::parse::ValidUlp;
 use opte::engine::port::ProcessError;
-use opte::engine::tcp::TcpState;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
-use opte::engine::Direction;
+use opte::engine::tcp::TcpState;
 use opte::ingot::geneve::GeneveRef;
 use opte::ingot::icmp::IcmpV6Ref;
 use opte::ingot::tcp::TcpRef;
@@ -2864,119 +2864,125 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 parse_outbound(&mut request_pkt_m, VpcParser {}).unwrap();
             let res = g1.port.process(Out, request_pkt).unwrap();
 
-            match res { Hairpin(mut hp) => {
-                // In this case we are parsing a hairpin reply, so we
-                // can't use the VpcParser since it would expect any
-                // inbound packet to be encapsulated.
-                pcap.add_pkt(&hp);
+            match res {
+                Hairpin(mut hp) => {
+                    // In this case we are parsing a hairpin reply, so we
+                    // can't use the VpcParser since it would expect any
+                    // inbound packet to be encapsulated.
+                    pcap.add_pkt(&hp);
 
-                let reply_pkt = parse_inbound(&mut hp, GenericUlp {})
-                    .unwrap()
-                    .to_full_meta();
-                let out_body = reply_pkt.meta().copy_remaining();
-                drop(reply_pkt);
+                    let reply_pkt = parse_inbound(&mut hp, GenericUlp {})
+                        .unwrap()
+                        .to_full_meta();
+                    let out_body = reply_pkt.meta().copy_remaining();
+                    drop(reply_pkt);
 
-                let reply =
-                    dhcpv6::protocol::Message::from_bytes(&out_body).unwrap();
-                verify_dhcpv6_essentials(
-                    &g1_cfg,
-                    &mut request_pkt_m,
-                    &request,
-                    &mut hp,
-                    &reply,
-                );
-
-                // Verify the message type of the reply:
-                //
-                // Solicit - Rapid Commit -> Advertise
-                // Solicit + Rapid Commit -> Reply
-                // Request + either -> Reply
-                if has_rapid_commit
-                    || msg_type == dhcpv6::protocol::MessageType::Request
-                {
-                    assert_eq!(reply.typ, dhcpv6::protocol::MessageType::Reply);
-                } else {
-                    assert_eq!(
-                        reply.typ,
-                        dhcpv6::protocol::MessageType::Advertise
+                    let reply =
+                        dhcpv6::protocol::Message::from_bytes(&out_body)
+                            .unwrap();
+                    verify_dhcpv6_essentials(
+                        &g1_cfg,
+                        &mut request_pkt_m,
+                        &request,
+                        &mut hp,
+                        &reply,
                     );
-                }
 
-                // In the case of Solicit + Rapid Commit, we are required to
-                // send the Rapid Commit option back in our reply.
-                if has_rapid_commit
-                    && msg_type == dhcpv6::protocol::MessageType::Solicit
-                {
-                    assert!(
-                        reply.has_option(dhcpv6::options::Code::RapidCommit)
-                    );
-                }
-
-                // Regardless of the message type, we are supposed to
-                // include answers for each Option the client
-                // requested (and that we support). That's mostly just
-                // the actual VPC-private IPv6 address, but we also check the
-                // Domain Search List option.
-                let iana =
-                    reply.find_option(dhcpv6::options::Code::IaNa).unwrap();
-                if let dhcpv6::options::Option::IaNa(dhcpv6::options::IaNa {
-                    id,
-                    t1,
-                    t2,
-                    options,
-                }) = iana
-                {
-                    assert_eq!(id, &requested_iana.id);
-                    assert!(t1.is_infinite());
-                    assert!(t2.is_infinite());
-                    assert!(!options.is_empty());
-
-                    if let Some(dhcpv6::options::Option::IaAddr(
-                        dhcpv6::options::IaAddr {
-                            addr,
-                            valid,
-                            preferred,
-                            options: opts,
-                        },
-                    )) = options.first()
+                    // Verify the message type of the reply:
+                    //
+                    // Solicit - Rapid Commit -> Advertise
+                    // Solicit + Rapid Commit -> Reply
+                    // Request + either -> Reply
+                    if has_rapid_commit
+                        || msg_type == dhcpv6::protocol::MessageType::Request
                     {
                         assert_eq!(
-                            addr,
-                            &g1_cfg.ipv6_cfg().unwrap().private_ip
+                            reply.typ,
+                            dhcpv6::protocol::MessageType::Reply
                         );
-                        assert!(valid.is_infinite());
-                        assert!(preferred.is_infinite());
-                        assert!(opts.is_empty());
                     } else {
-                        panic!(
-                            "Expected an IA Addr option, found {:#?}",
-                            options
+                        assert_eq!(
+                            reply.typ,
+                            dhcpv6::protocol::MessageType::Advertise
                         );
                     }
-                } else {
-                    panic!("Expected an IANA option, found {:?}", iana);
-                }
 
-                let used_dhcp = base_dhcp_config();
+                    // In the case of Solicit + Rapid Commit, we are required to
+                    // send the Rapid Commit option back in our reply.
+                    if has_rapid_commit
+                        && msg_type == dhcpv6::protocol::MessageType::Solicit
+                    {
+                        assert!(
+                            reply
+                                .has_option(dhcpv6::options::Code::RapidCommit)
+                        );
+                    }
 
-                let domain_list = reply
-                    .find_option(dhcpv6::options::Code::DomainList)
-                    .expect("Expected a Domain Search List option");
-                let dhcpv6::options::Option::DomainList(bytes) = domain_list
-                else {
-                    panic!("Expected an Option::DomainList");
-                };
-                let mut expected_bytes = Vec::new();
-                for name in used_dhcp.domain_search_list.iter() {
-                    expected_bytes.extend_from_slice(name.encode());
+                    // Regardless of the message type, we are supposed to
+                    // include answers for each Option the client
+                    // requested (and that we support). That's mostly just
+                    // the actual VPC-private IPv6 address, but we also check the
+                    // Domain Search List option.
+                    let iana =
+                        reply.find_option(dhcpv6::options::Code::IaNa).unwrap();
+                    if let dhcpv6::options::Option::IaNa(
+                        dhcpv6::options::IaNa { id, t1, t2, options },
+                    ) = iana
+                    {
+                        assert_eq!(id, &requested_iana.id);
+                        assert!(t1.is_infinite());
+                        assert!(t2.is_infinite());
+                        assert!(!options.is_empty());
+
+                        if let Some(dhcpv6::options::Option::IaAddr(
+                            dhcpv6::options::IaAddr {
+                                addr,
+                                valid,
+                                preferred,
+                                options: opts,
+                            },
+                        )) = options.first()
+                        {
+                            assert_eq!(
+                                addr,
+                                &g1_cfg.ipv6_cfg().unwrap().private_ip
+                            );
+                            assert!(valid.is_infinite());
+                            assert!(preferred.is_infinite());
+                            assert!(opts.is_empty());
+                        } else {
+                            panic!(
+                                "Expected an IA Addr option, found {:#?}",
+                                options
+                            );
+                        }
+                    } else {
+                        panic!("Expected an IANA option, found {:?}", iana);
+                    }
+
+                    let used_dhcp = base_dhcp_config();
+
+                    let domain_list = reply
+                        .find_option(dhcpv6::options::Code::DomainList)
+                        .expect("Expected a Domain Search List option");
+                    let dhcpv6::options::Option::DomainList(bytes) =
+                        domain_list
+                    else {
+                        panic!("Expected an Option::DomainList");
+                    };
+                    let mut expected_bytes = Vec::new();
+                    for name in used_dhcp.domain_search_list.iter() {
+                        expected_bytes.extend_from_slice(name.encode());
+                    }
+                    assert_eq!(
+                        *bytes, expected_bytes,
+                        "Domain Search List option not correctly encoded"
+                    );
                 }
-                assert_eq!(
-                    *bytes, expected_bytes,
-                    "Domain Search List option not correctly encoded"
-                );
-            } _ => {
-                panic!("Expected a Hairpin, found {:?}", res);
-            }}
+                _ => {
+                    panic!("Expected a Hairpin, found {:?}", res);
+                }
+            }
         }
     }
 }
@@ -4585,8 +4591,10 @@ fn select_eip_conditioned_on_igw() {
     let res = g1.port.process(Out, pkt2);
     expect_modified!(res, pkt2_m);
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap().to_full_meta();
-    assert!(&g1_cfg.ipv4().external_ips.floating_ips[..2]
-        .contains(&pkt2.meta().inner_ip4().unwrap().source()));
+    assert!(
+        &g1_cfg.ipv4().external_ips.floating_ips[..2]
+            .contains(&pkt2.meta().inner_ip4().unwrap().source())
+    );
     incr!(
         g1,
         [
@@ -4664,8 +4672,10 @@ fn select_eip_conditioned_on_igw() {
     let res = g1.port.process(Out, pkt5);
     expect_modified!(res, pkt5_m);
     let pkt5 = parse_inbound(&mut pkt5_m, VpcParser {}).unwrap().to_full_meta();
-    assert!(&g1_cfg.ipv4().external_ips.floating_ips[..]
-        .contains(&pkt5.meta().inner_ip4().unwrap().source()));
+    assert!(
+        &g1_cfg.ipv4().external_ips.floating_ips[..]
+            .contains(&pkt5.meta().inner_ip4().unwrap().source())
+    );
     incr!(
         g1,
         [

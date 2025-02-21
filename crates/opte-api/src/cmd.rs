@@ -4,10 +4,10 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use super::API_VERSION;
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
-use super::API_VERSION;
 use alloc::string::String;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;

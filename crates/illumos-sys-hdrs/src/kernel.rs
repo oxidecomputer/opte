@@ -243,12 +243,12 @@ unsafe impl Sync for dev_ops {}
 // correct function signatures in order to bridge the gap.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_identify(_dip: *mut dev_info) -> c_int {
-    unsafe {nulldev()}
+    unsafe { nulldev() }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_probe(_dip: *mut dev_info) -> c_int {
-    unsafe {nulldev()}
+    unsafe { nulldev() }
 }
 
 #[unsafe(no_mangle)]
@@ -258,7 +258,7 @@ pub unsafe extern "C" fn nulldev_open(
     _otype: c_int,
     _credp: *mut cred_t,
 ) -> c_int {
-    unsafe {nulldev()}
+    unsafe { nulldev() }
 }
 
 #[unsafe(no_mangle)]
@@ -268,7 +268,7 @@ pub unsafe extern "C" fn nulldev_close(
     _otype: c_int,
     _credp: *mut cred_t,
 ) -> c_int {
-    unsafe {nulldev()}
+    unsafe { nulldev() }
 }
 
 #[unsafe(no_mangle)]
@@ -276,7 +276,7 @@ pub unsafe extern "C" fn nodev_reset(
     _dip: *mut dev_info,
     _cmd: ddi_reset_cmd_t,
 ) -> c_int {
-    unsafe {nodev()}
+    unsafe { nodev() }
 }
 
 #[unsafe(no_mangle)]
@@ -285,7 +285,7 @@ pub unsafe extern "C" fn nodev_power(
     _component: c_int,
     _level: c_int,
 ) -> c_int {
-    unsafe {nodev()}
+    unsafe { nodev() }
 }
 
 #[unsafe(no_mangle)]
@@ -294,7 +294,7 @@ pub unsafe extern "C" fn nodev_read(
     _uiop: *mut uio,
     _credp: *mut cred_t,
 ) -> c_int {
-    unsafe {nodev()}
+    unsafe { nodev() }
 }
 
 #[unsafe(no_mangle)]
@@ -306,7 +306,7 @@ pub unsafe extern "C" fn nodev_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    unsafe {nodev()}
+    unsafe { nodev() }
 }
 
 #[unsafe(no_mangle)]
@@ -315,7 +315,7 @@ pub unsafe extern "C" fn nodev_write(
     _uiop: *mut uio,
     _credp: *mut cred_t,
 ) -> c_int {
-    unsafe {nodev()}
+    unsafe { nodev() }
 }
 
 #[repr(C)]

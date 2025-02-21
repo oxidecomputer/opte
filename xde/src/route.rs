@@ -6,11 +6,11 @@
 
 use crate::ip;
 use crate::sys;
-use crate::xde::xde_underlay_port;
 use crate::xde::DropRef;
 use crate::xde::XdeDev;
-use alloc::collections::btree_map::Entry;
+use crate::xde::xde_underlay_port;
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::sync::Arc;
 use core::ffi::CStr;
 use core::ptr;

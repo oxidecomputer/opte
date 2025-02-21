@@ -10,8 +10,8 @@
 //! tables: UFT, LFT, and the TCP Flow Table.
 
 use super::packet::InnerFlowId;
-use crate::ddi::time::Moment;
 use crate::ddi::time::MILLIS;
+use crate::ddi::time::Moment;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
@@ -26,8 +26,8 @@ use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::OpteError;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 // XXX This really shouldn't be pub but for now we are leaking this
 // info for the purpose of testing until the Port API has support for

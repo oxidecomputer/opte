@@ -8,8 +8,8 @@ use darling::FromDeriveInput;
 use proc_macro2::TokenStream;
 use quote::format_ident;
 use quote::quote;
-use syn::parse_macro_input;
 use syn::DeriveInput;
+use syn::parse_macro_input;
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(derror))]
@@ -130,15 +130,18 @@ pub fn derive_derror(
         child_arms.push(child_block);
     }
 
-    let leaf_data_impl = match parsed_args.leaf_data { Some(data_fn) => {
-        quote! {
-            fn leaf_data(&self, data: &mut [u64]) {
-                #data_fn(self, data);
+    let leaf_data_impl = match parsed_args.leaf_data {
+        Some(data_fn) => {
+            quote! {
+                fn leaf_data(&self, data: &mut [u64]) {
+                    #data_fn(self, data);
+                }
             }
         }
-    } _ => {
-        quote! {}
-    }};
+        _ => {
+            quote! {}
+        }
+    };
 
     quote! {
         impl DError for #ident {

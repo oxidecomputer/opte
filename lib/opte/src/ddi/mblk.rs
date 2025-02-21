@@ -1112,9 +1112,9 @@ fn mock_freeb(mp: *mut mblk_t) {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::engine::GenericUlp;
     use crate::engine::packet::Packet;
     use crate::engine::packet::ParseError;
-    use crate::engine::GenericUlp;
     use ingot::types::ParseError as IngotParseError;
 
     #[test]

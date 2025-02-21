@@ -14,15 +14,15 @@ use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
 use crate::engine::predicate::MatchRangeVal;
+use ingot::Ingot;
 use ingot::ip::Ecn;
 use ingot::ip::IpProtocol;
 use ingot::ip::Ipv4Flags;
-use ingot::types::primitives::*;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::types::Vec;
-use ingot::Ingot;
+use ingot::types::primitives::*;
 pub use opte_api::Ipv4Addr;
 pub use opte_api::Ipv4Cidr;
 pub use opte_api::Ipv4PrefixLen;
@@ -206,7 +206,9 @@ mod test {
     fn match_check() {
         let ip = "192.168.2.11".parse::<Ipv4Addr>().unwrap();
         assert!(ip.match_exact(&ip));
-        assert!(ip.match_prefix(&"192.168.2.0/24".parse::<Ipv4Cidr>().unwrap()));
+        assert!(
+            ip.match_prefix(&"192.168.2.0/24".parse::<Ipv4Cidr>().unwrap())
+        );
     }
 
     #[test]

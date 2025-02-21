@@ -18,11 +18,11 @@ use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
 use crate::mac;
-use crate::mac::mac_getinfo;
-use crate::mac::mac_private_minor;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::mac_getinfo;
+use crate::mac::mac_private_minor;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -45,6 +45,7 @@ use core::ptr::addr_of_mut;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
 use ingot::geneve::GeneveRef;
+use opte::ExecCtx;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
@@ -66,6 +67,7 @@ use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::NetworkImpl;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
@@ -77,8 +79,6 @@ use opte::engine::packet::ParseError;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
-use opte::engine::NetworkImpl;
-use opte::ExecCtx;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -102,13 +102,13 @@ use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::cfg::IpCfg;
 use oxide_vpc::cfg::VpcCfg;
+use oxide_vpc::engine::VpcNetwork;
+use oxide_vpc::engine::VpcParser;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
-use oxide_vpc::engine::VpcNetwork;
-use oxide_vpc::engine::VpcParser;
 
 // Entry limits for the various flow tables.
 //
@@ -132,9 +132,7 @@ static mut XDE_DEVS: KRwLock<DevMap> = KRwLock::new(DevMap::new());
 fn xde_devs() -> &'static KRwLock<DevMap> {
     // SAFETY: this field is used mutably only once, during _init.
     // From there onwards, the lock is initialised.
-    unsafe {
-        &*(&raw const XDE_DEVS)
-    }
+    unsafe { &*(&raw const XDE_DEVS) }
 }
 
 /// DDI dev info pointer to the attached xde device.
@@ -666,7 +664,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             return Err(OpteError::System {
                 errno: EINVAL,
                 msg: "underlay not initialized".to_string(),
-            })
+            });
         }
     };
 

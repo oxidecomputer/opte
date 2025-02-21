@@ -31,14 +31,14 @@ use alloc::ffi::CString;
 use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
 use core::panic::PanicInfo;
+use illumos_sys_hdrs::CE_WARN;
+use illumos_sys_hdrs::KM_SLEEP;
 use illumos_sys_hdrs::c_void;
 use illumos_sys_hdrs::cmn_err;
 use illumos_sys_hdrs::kmem_alloc;
 use illumos_sys_hdrs::kmem_free;
 use illumos_sys_hdrs::panic;
 use illumos_sys_hdrs::size_t;
-use illumos_sys_hdrs::CE_WARN;
-use illumos_sys_hdrs::KM_SLEEP;
 
 pub mod dev_map;
 pub mod dls;
