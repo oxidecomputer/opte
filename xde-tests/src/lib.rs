@@ -461,11 +461,7 @@ pub fn single_node_over_real_nic(
                 raw[3],
             ]);
 
-            if forbidden_macs.contains(&my_mac) {
-                None
-            } else {
-                Some(my_mac)
-            }
+            if forbidden_macs.contains(&my_mac) { None } else { Some(my_mac) }
         })
         .collect();
 

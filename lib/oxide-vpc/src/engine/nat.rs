@@ -4,10 +4,10 @@
 
 // Copyright 2023 Oxide Computer Company
 
+use super::VpcNetwork;
+use super::router::ROUTER_LAYER_NAME;
 use super::router::RouterTargetClass;
 use super::router::RouterTargetInternal;
-use super::router::ROUTER_LAYER_NAME;
-use super::VpcNetwork;
 use crate::api::ExternalIpCfg;
 use crate::api::SetExternalIpsReq;
 use crate::cfg::IpCfg;
@@ -33,10 +33,10 @@ use opte::engine::layer::LayerActions;
 use opte::engine::nat::InboundNat;
 use opte::engine::nat::OutboundNat;
 use opte::engine::nat::VerifyAddr;
-use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::Ipv6AddrMatch;

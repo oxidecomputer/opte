@@ -19,14 +19,14 @@ use std::net::Ipv6Addr;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 #[cfg(target_os = "illumos")]
-use xde_tests::get_linklocal_addr;
-#[cfg(target_os = "illumos")]
 use xde_tests::Topology;
+#[cfg(target_os = "illumos")]
+use xde_tests::get_linklocal_addr;
 
 const DEFAULT_PORT: u16 = 0x1dee;
 

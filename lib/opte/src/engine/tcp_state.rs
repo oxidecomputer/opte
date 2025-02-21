@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Basic TCP state machine.
 
@@ -678,7 +678,7 @@ impl From<&TcpFlowState> for tcp_flow_state_sdt_arg {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_tcp__flow__state(
         port: uintptr_t,
         flow_id: *const InnerFlowId,

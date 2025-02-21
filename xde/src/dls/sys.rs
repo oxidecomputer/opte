@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 // stuff we need from dls
 
@@ -17,7 +17,7 @@ use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use illumos_sys_hdrs::zoneid_t;
 
-extern "C" {
+unsafe extern "C" {
     pub fn dls_devnet_create(
         mh: *mut mac::mac_handle,
         linkid: datalink_id_t,
@@ -38,7 +38,7 @@ extern "C" {
 
 // Private DLS functions needed to have a Tx path on top of
 // an existing link while circumventing `ip`.
-extern "C" {
+unsafe extern "C" {
     pub type dls_devnet_s;
     pub type dld_str_s;
     pub type dls_link;

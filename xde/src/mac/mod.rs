@@ -324,11 +324,7 @@ impl<P: MacClient> MacPromiscHandle<P> {
             mac_promisc_add(mch, ptype, promisc_fn, arg, &mut mph, flags)
         };
 
-        if ret == 0 {
-            Ok(Self { mph, parent })
-        } else {
-            Err(ret)
-        }
+        if ret == 0 { Ok(Self { mph, parent }) } else { Err(ret) }
     }
 }
 
@@ -374,11 +370,7 @@ impl MacPerimeterHandle {
     pub fn from_linkid(link: LinkId) -> Result<Self, c_int> {
         let mut mph = 0;
         let res = unsafe { mac_perim_enter_by_linkid(link.into(), &mut mph) };
-        if res == 0 {
-            Ok(Self { mph, link })
-        } else {
-            Err(res)
-        }
+        if res == 0 { Ok(Self { mph, link }) } else { Err(res) }
     }
 
     /// Returns the ID of the link whose MAC perimeter is held.

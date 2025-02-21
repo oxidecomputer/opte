@@ -7,13 +7,14 @@
 //! Constructs used in packet parsing, such as choices over protocol
 //! and complete packet definitions.
 
+use super::LightweightMeta;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
 use super::ether::EthernetPacket;
 use super::ether::EthernetRef;
 use super::ether::ValidEthernet;
-use super::geneve::validate_geneve;
 use super::geneve::GENEVE_PORT;
+use super::geneve::validate_geneve;
 use super::headers::HasInnerCksum;
 use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
@@ -22,19 +23,19 @@ use super::headers::ValidEncapMeta;
 use super::icmp::IcmpEchoMut;
 use super::icmp::QueryEcho;
 use super::icmp::ValidIcmpEcho;
+use super::ip::L3;
+use super::ip::ValidL3;
 use super::ip::v4::Ipv4Ref;
 use super::ip::v6::Ipv6Packet;
 use super::ip::v6::Ipv6Ref;
-use super::ip::ValidL3;
-use super::ip::L3;
 use super::packet::AddrPair;
+use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
 use super::packet::MismatchError;
 use super::packet::OpteMeta;
 use super::packet::ParseError;
-use super::packet::FLOW_ID_DEFAULT;
 use super::rule::CompiledTransform;
-use super::LightweightMeta;
+use ingot::Parse;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::GenevePacket;
@@ -64,7 +65,6 @@ use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
-use ingot::Parse;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
 

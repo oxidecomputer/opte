@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The engine in OPTE.
 //!
@@ -56,7 +56,7 @@ use zerocopy::ByteSliceMut;
 /// When set to 1 we will panic in some situations instead of just
 /// flagging in error. This can be useful for debugging certain
 /// scenarios in development.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
@@ -82,7 +82,7 @@ cfg_if! {
         }
     } else if #[cfg(feature = "kernel")] {
         /// When set to 1 enables debug messages.
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub static mut opte_debug: i32 = 0;
 
         #[macro_export]

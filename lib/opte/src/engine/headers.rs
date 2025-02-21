@@ -6,12 +6,12 @@
 
 //! Header metadata modifications for IP, ULP, and Encap.
 
+use super::geneve::GENEVE_OPT_CLASS_OXIDE;
+use super::geneve::GENEVE_PORT;
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
 use super::geneve::OxideOption;
-use super::geneve::GENEVE_OPT_CLASS_OXIDE;
-use super::geneve::GENEVE_PORT;
 use super::ip::v4::Ipv4Mod;
 use super::ip::v4::Ipv4Push;
 use super::ip::v6::Ipv6Mod;
@@ -27,11 +27,11 @@ use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptionType;
 use ingot::geneve::ValidGeneve;
-use ingot::types::util::Repeated;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
+use ingot::types::util::Repeated;
 use ingot::udp::Udp;
 use ingot::udp::ValidUdp;
 pub use opte_api::IpAddr;

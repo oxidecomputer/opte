@@ -14,9 +14,9 @@ use std::io::Read;
 use std::io::Write;
 use std::net::Ipv6Addr;
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 #[cfg(target_os = "illumos")]
 use xde_tests::RouteV6;
@@ -170,7 +170,9 @@ pub fn exchange_routes(
     }
 
     if nics_used.len() < 2 {
-        eprintln!("only found routes to other side over {nics_used:?}. multipath may be degraded.")
+        eprintln!(
+            "only found routes to other side over {nics_used:?}. multipath may be degraded."
+        )
     }
 
     Ok(routes)
