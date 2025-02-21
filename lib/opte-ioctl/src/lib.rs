@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
@@ -377,11 +377,11 @@ unsafe fn ioctl<T>(
     fd: libc::c_int,
     req: libc::c_int,
     arg: *mut T,
-) -> libc::c_int {
+) -> libc::c_int { unsafe {
     // Most other OSes define the request argument to be ulong_t rather than int
     // Cast that away here so that it compiles in both places
     #[cfg(not(target_os = "illumos"))]
     let req = req as libc::c_ulong;
 
     libc::ioctl(fd, req, arg)
-}
+}}

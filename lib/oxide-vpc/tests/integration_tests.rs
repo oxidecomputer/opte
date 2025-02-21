@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -2864,7 +2864,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                 parse_outbound(&mut request_pkt_m, VpcParser {}).unwrap();
             let res = g1.port.process(Out, request_pkt).unwrap();
 
-            if let Hairpin(mut hp) = res {
+            match res { Hairpin(mut hp) => {
                 // In this case we are parsing a hairpin reply, so we
                 // can't use the VpcParser since it would expect any
                 // inbound packet to be encapsulated.
@@ -2974,9 +2974,9 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     *bytes, expected_bytes,
                     "Domain Search List option not correctly encoded"
                 );
-            } else {
+            } _ => {
                 panic!("Expected a Hairpin, found {:?}", res);
-            }
+            }}
         }
     }
 }

@@ -108,7 +108,7 @@ static A: KmemAlloc = KmemAlloc;
 //
 // https://github.com/rust-lang/rust/issues/47493
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn _Unwind_Resume() -> ! {
     panic!("_Unwind_Resume called");
 }

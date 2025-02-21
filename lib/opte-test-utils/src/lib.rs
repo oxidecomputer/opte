@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Common routines for integration tests.
 
@@ -337,7 +337,7 @@ pub fn oxide_net_setup2(
         IpCfg::Ipv6(ipv6) => {
             vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
         }
-        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
+        IpCfg::DualStack { ipv4, ipv6 } => {
             vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net);
             vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
         }
@@ -1050,7 +1050,7 @@ fn _encap(
 /// the port state is printed on failure.
 #[macro_export]
 macro_rules! chk {
-    ($pav:expr, $check:expr) => {
+    ($pav:expr_2021, $check:expr_2021) => {
         if !$check {
             print_port(&$pav.port, &$pav.vpc_map).unwrap();
             panic!("assertion failed: {}", stringify!($check));
@@ -1060,7 +1060,7 @@ macro_rules! chk {
 
 #[macro_export]
 macro_rules! assert_drop {
-    ($res:expr, $expected:expr) => {
+    ($res:expr_2021, $expected:expr_2021) => {
         match &$res {
             Ok(ProcessResult::Drop { reason }) => match (reason, &$expected) {
                 (

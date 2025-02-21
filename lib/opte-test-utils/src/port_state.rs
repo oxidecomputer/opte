@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Routines for verifying various Port state.
 
@@ -203,7 +203,7 @@ pub fn port_stats_val(stats: PortStatsSnap, stat: &str) -> u64 {
 /// state stored in the VpcPortState.
 #[macro_export]
 macro_rules! assert_port {
-    ($pav:expr) => {
+    ($pav:expr_2021) => {
         for (field, expected_val) in $pav.vps.counts.iter() {
             let val = match split_field(field) {
                 SplitField::One("epoch") => $pav.port.epoch(),
@@ -257,7 +257,7 @@ macro_rules! assert_port {
 /// Increment a field in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! incr_field_na {
-    ($vps:expr, $field:expr) => {
+    ($vps:expr_2021, $field:expr_2021) => {
         match $vps.counts.get_mut($field) {
             Some(v) => *v += 1,
             None => panic!("field is not a counter: '{}'", $field),
@@ -268,7 +268,7 @@ macro_rules! incr_field_na {
 /// Increment a list of fields in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! incr_na {
-    ($pav:expr, $fields:expr) => {
+    ($pav:expr_2021, $fields:expr_2021) => {
         let fields_v: Vec<&str> = $fields.split(", ").collect();
         for f in fields_v {
             incr_field_na!($pav.vps, f);
@@ -280,7 +280,7 @@ macro_rules! incr_na {
 /// assert the port state.
 #[macro_export]
 macro_rules! incr {
-    ($pav:expr, $fields_slice:expr) => {
+    ($pav:expr_2021, $fields_slice:expr_2021) => {
         for fields_str in &$fields_slice {
             incr_na!($pav, fields_str);
         }
@@ -291,7 +291,7 @@ macro_rules! incr {
 /// Decrement a field in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! decr_field_na {
-    ($vps:expr, $field:expr) => {
+    ($vps:expr_2021, $field:expr_2021) => {
         match $vps.counts.get_mut($field) {
             Some(v) => *v -= 1,
             None => panic!("field is not a counter: '{}'", $field),
@@ -302,7 +302,7 @@ macro_rules! decr_field_na {
 /// Decrement a list of fields in the `VpcPortState.counts` map.
 #[macro_export]
 macro_rules! decr_na {
-    ($pav:expr, $fields:expr) => {
+    ($pav:expr_2021, $fields:expr_2021) => {
         let fields_v: Vec<&str> = $fields.split(", ").collect();
         for f in fields_v {
             decr_field_na!($pav.vps, f);
@@ -314,7 +314,7 @@ macro_rules! decr_na {
 /// assert the port state.
 #[macro_export]
 macro_rules! decr {
-    ($pav:expr, $fields:expr) => {
+    ($pav:expr_2021, $fields:expr_2021) => {
         decr_na!($pav, $fields);
         assert_port!($pav);
     };
@@ -323,7 +323,7 @@ macro_rules! decr {
 /// Set the value of a field.
 #[macro_export]
 macro_rules! set_field_na {
-    ($pav:expr, $field:expr) => {
+    ($pav:expr_2021, $field:expr_2021) => {
         match $field.split_once("=") {
             Some(("port_state", val)) => {
                 $pav.vps.port_state = val.parse().unwrap();
@@ -350,7 +350,7 @@ macro_rules! set_field_na {
 /// Set the values of a list of fields.
 #[macro_export]
 macro_rules! set_na {
-    ($pav:expr, $fields:expr) => {
+    ($pav:expr_2021, $fields:expr_2021) => {
         let fields_v: Vec<&str> = $fields.split(", ").collect();
         for f in fields_v {
             set_field_na!($pav, f);
@@ -365,7 +365,7 @@ macro_rules! set_na {
 /// ```
 #[macro_export]
 macro_rules! set {
-    ($pav:expr, $fields:expr) => {
+    ($pav:expr_2021, $fields:expr_2021) => {
         set_na!($pav, $fields);
         assert_port!($pav);
     };
@@ -374,7 +374,7 @@ macro_rules! set {
 /// Set all flow counts to zero.
 #[macro_export]
 macro_rules! zero_flows_na {
-    ($pav:expr) => {
+    ($pav:expr_2021) => {
         for layer in &VPC_LAYERS {
             $pav.vps.counts.insert(format!("{layer}.flows.in"), 0);
             $pav.vps.counts.insert(format!("{layer}.flows.out"), 0);
@@ -388,7 +388,7 @@ macro_rules! zero_flows_na {
 // Set all flow counts to zero and assert the port state.
 #[macro_export]
 macro_rules! zero_flows {
-    ($pav:expr) => {
+    ($pav:expr_2021) => {
         zero_flows_na!($pav);
         assert_port!($pav);
     };
@@ -406,7 +406,7 @@ macro_rules! zero_flows {
 /// ```
 #[macro_export]
 macro_rules! update {
-    ($pav:expr, $instructions:expr) => {
+    ($pav:expr_2021, $instructions:expr_2021) => {
         for inst in $instructions {
             match inst.split_once(":") {
                 Some(("incr", fields)) => {

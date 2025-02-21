@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use crate::engine::packet::BufferState;
 use crate::engine::packet::Pullup;
@@ -87,7 +87,7 @@ impl MsgBlkChain {
     /// Removes the next packet from the top of the chain and returns
     /// it, taking ownership.
     pub fn pop_front(&mut self) -> Option<MsgBlk> {
-        if let Some(ref mut list) = &mut self.0 {
+        if let Some(list) = &mut self.0 {
             unsafe {
                 let curr_b = list.head;
                 let curr = curr_b.as_ptr();
@@ -133,7 +133,7 @@ impl MsgBlkChain {
             assert!((*pkt.as_ptr()).b_next.is_null());
         }
 
-        if let Some(ref mut list) = &mut self.0 {
+        if let Some(list) = &mut self.0 {
             let pkt_p = pkt.as_ptr();
             let tail_p = list.tail.as_ptr();
             unsafe {

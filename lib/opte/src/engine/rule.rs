@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -452,7 +452,7 @@ impl CompiledEncap {
     #[inline]
     pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> MsgBlk {
         let Self::Push {
-            ref bytes,
+            bytes,
             l3_len_offset,
             l3_extra_bytes,
             l4_len_offset,
@@ -507,7 +507,7 @@ impl CompiledEncap {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_ht__run(arg: uintptr_t);
 }
 

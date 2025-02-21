@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -128,13 +128,20 @@ const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 static mut XDE_CTL_MINOR: minor_t = 0;
 
 /// A list of xde devices instantiated through xde_ioc_create.
-static mut xde_devs: KRwLock<DevMap> = KRwLock::new(DevMap::new());
+static mut XDE_DEVS: KRwLock<DevMap> = KRwLock::new(DevMap::new());
+fn xde_devs() -> &'static KRwLock<DevMap> {
+    // SAFETY: this field is used mutably only once, during _init.
+    // From there onwards, the lock is initialised.
+    unsafe {
+        &*(&raw const XDE_DEVS)
+    }
+}
 
 /// DDI dev info pointer to the attached xde device.
 static mut xde_dip: *mut dev_info = ptr::null_mut();
 
 // This block is purely for SDT probes.
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_bad__packet(
         port: uintptr_t,
         dir: uintptr_t,
@@ -313,28 +320,30 @@ pub struct XdeDev {
 }
 
 #[cfg(not(test))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn _init() -> c_int {
-    xde_devs.init(KRwLockType::Driver);
-    mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
+    unsafe {
+        KRwLock::init(&mut *(&raw mut XDE_DEVS), KRwLockType::Driver);
+        mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
-    match mod_install(&xde_linkage) {
-        0 => 0,
-        err => {
-            warn!("mod_install failed: {}", err);
-            mac::mac_fini_ops(addr_of_mut!(xde_devops));
-            err
+        match mod_install(&xde_linkage) {
+            0 => 0,
+            err => {
+                warn!("mod_install failed: {}", err);
+                mac::mac_fini_ops(addr_of_mut!(xde_devops));
+                err
+            }
         }
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
     mod_info(&xde_linkage, modinfop)
 }
 
 #[cfg(not(test))]
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn _fini() -> c_int {
     match mod_remove(&xde_linkage) {
         0 => {
@@ -358,7 +367,7 @@ unsafe extern "C" fn _fini() -> c_int {
 /// MAC will return `ENOSTR` from its STREAMS-based `open(9E)` routine if
 /// passed a minor node reserved for driver private use. In that case,
 /// the system will retry the open with the driver's `cb_open` routine.
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_open(
     devp: *mut dev_t,
     flags: c_int,
@@ -391,7 +400,7 @@ unsafe extern "C" fn xde_open(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_close(
     dev: dev_t,
     _flag: c_int,
@@ -412,7 +421,7 @@ unsafe extern "C" fn xde_close(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_ioctl(
     dev: dev_t,
     cmd: c_int,
@@ -492,7 +501,7 @@ fn clear_xde_underlay_hdlr(
 
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
     let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
     let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
@@ -637,16 +646,16 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
 const ONE_SECOND: Interval = Interval::from_duration(Duration::new(1, 0));
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn shared_periodic_expire(_: &mut ()) {
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     for dev in devs.iter() {
         let _ = dev.port.expire_flows();
         dev.routes.remove_routes();
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     let state = get_xde_state();
@@ -667,7 +676,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     //
     // This does mean that the current Rx path is blocked on device
     // creation, but that's a price we need to pay for the moment.
-    let mut devs = unsafe { xde_devs.write() };
+    let mut devs = xde_devs().write();
     if devs.get_by_name(&req.xde_devname).is_some() {
         return Err(OpteError::PortExists(req.xde_devname.clone()));
     }
@@ -797,10 +806,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
-    let mut devs = unsafe { xde_devs.write() };
+    let mut devs = xde_devs().write();
     let Some(xde) = devs.get_by_name(&req.xde_devname) else {
         return Err(OpteError::PortNotFound(req.xde_devname.clone()));
     };
@@ -860,7 +869,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
@@ -878,7 +887,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn clear_xde_underlay() -> Result<NoResp, OpteError> {
     let state = get_xde_state();
     let mut underlay = state.underlay.lock();
@@ -888,7 +897,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             msg: "underlay not yet initialized".into(),
         });
     }
-    if unsafe { !xde_devs.read().is_empty() } {
+    if !xde_devs().read().is_empty() {
         return Err(OpteError::System {
             errno: EBUSY,
             msg: "underlay in use by attached ports".into(),
@@ -944,7 +953,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
 
 const IOCTL_SZ: usize = core::mem::size_of::<OpteCmdIoctl>();
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_getinfo(
     dip: *mut dev_info,
     cmd: ddi_info_cmd_t,
@@ -989,7 +998,7 @@ unsafe extern "C" fn xde_getinfo(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_attach(
     dip: *mut dev_info,
     cmd: ddi_attach_cmd_t,
@@ -1083,7 +1092,7 @@ fn create_underlay_port(
     })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe fn init_underlay_ingress_handlers(
     u1_name: String,
     u2_name: String,
@@ -1093,7 +1102,7 @@ unsafe fn init_underlay_ingress_handlers(
     Ok(UnderlayState { u1, u2 })
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
     let name = match CString::new(pname) {
         Ok(s) => s,
@@ -1113,7 +1122,7 @@ unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
     ret == 1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe fn get_driver_prop_bool(
     dip: *mut dev_info,
     pname: &str,
@@ -1150,7 +1159,7 @@ unsafe fn get_driver_prop_bool(
     Some(ret == 1)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe fn get_driver_prop_string(
     dip: *mut dev_info,
     pname: &str,
@@ -1189,7 +1198,7 @@ unsafe fn get_driver_prop_string(
     Some(s.into())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_detach(
     _dip: *mut dev_info,
     cmd: ddi_detach_cmd_t,
@@ -1201,7 +1210,7 @@ unsafe extern "C" fn xde_detach(
         _ => return DDI_FAILURE,
     }
 
-    if !xde_devs.read().is_empty() {
+    if !xde_devs().read().is_empty() {
         warn!("failed to detach: outstanding ports");
         return DDI_FAILURE;
     }
@@ -1234,7 +1243,7 @@ unsafe extern "C" fn xde_detach(
     DDI_SUCCESS
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static mut xde_cb_ops: cb_ops = cb_ops {
     cb_open: xde_open,
     cb_close: xde_close,
@@ -1256,7 +1265,7 @@ static mut xde_cb_ops: cb_ops = cb_ops {
     cb_awrite: nodev,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static mut xde_devops: dev_ops = dev_ops {
     devo_rev: DEVO_REV,
     devo_refcnt: 0,
@@ -1275,14 +1284,14 @@ static mut xde_devops: dev_ops = dev_ops {
     devo_quiesce: ddi_quiesce_not_needed,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static xde_modldrv: modldrv = modldrv {
     drv_modops: addr_of!(mod_driverops),
     drv_linkinfo: XDE_STR,
     drv_dev_ops: addr_of!(xde_devops),
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static xde_linkage: modlinkage = modlinkage {
     ml_rev: MODREV_1,
     ml_linkage: [
@@ -1296,7 +1305,7 @@ static xde_linkage: modlinkage = modlinkage {
     ],
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 static mut xde_mac_callbacks: mac::mac_callbacks_t = mac::mac_callbacks_t {
     mc_callbacks: (mac::MC_GETCAPAB | mac::MC_PROPERTIES) as c_uint,
     mc_reserved: core::ptr::null_mut(),
@@ -1316,7 +1325,7 @@ static mut xde_mac_callbacks: mac::mac_callbacks_t = mac::mac_callbacks_t {
     mc_propinfo: Some(xde_mc_propinfo),
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_getstat(
     _arg: *mut c_void,
     _stat: c_uint,
@@ -1328,7 +1337,7 @@ unsafe extern "C" fn xde_mc_getstat(
 // The mac framework calls this when the first client has opened the
 // xde device. From ths point on we know that this port is in use and
 // remains in use until `xde_mc_stop()` is called.
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
     (*dev).port.start();
@@ -1337,13 +1346,13 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
 
 // The mac framework calls this when the last client closes its handle
 // to the device. At this point we know the port is no longer in use.
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
     (*dev).port.reset();
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_setpromisc(
     _arg: *mut c_void,
     _val: boolean_t,
@@ -1351,7 +1360,7 @@ unsafe extern "C" fn xde_mc_setpromisc(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_multicst(
     _arg: *mut c_void,
     _add: boolean_t,
@@ -1360,7 +1369,7 @@ unsafe extern "C" fn xde_mc_multicst(
     ENOTSUP
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_unicst(
     arg: *mut c_void,
     macaddr: *const u8,
@@ -1390,7 +1399,7 @@ fn guest_loopback_probe(
     };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
     devs: &KRwLockReadGuard<DevMap>,
@@ -1485,7 +1494,7 @@ fn guest_loopback(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_tx(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
@@ -1608,7 +1617,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
-                let devs = unsafe { xde_devs.read() };
+                let devs = xde_devs().read();
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
             }
@@ -1710,7 +1719,7 @@ where
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_getcapab(
     _arg: *mut c_void,
     _cap: mac::mac_capab_t,
@@ -1719,7 +1728,7 @@ unsafe extern "C" fn xde_mc_getcapab(
     boolean_t::B_FALSE
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_setprop(
     _arg: *mut c_void,
     _prop_name: *const c_char,
@@ -1730,7 +1739,7 @@ unsafe extern "C" fn xde_mc_setprop(
     ENOTSUP
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_getprop(
     _arg: *mut c_void,
     _prop_name: *const c_char,
@@ -1741,7 +1750,7 @@ unsafe extern "C" fn xde_mc_getprop(
     ENOTSUP
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_propinfo(
     _arg: *mut c_void,
     _prop_name: *const c_char,
@@ -1750,7 +1759,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 ) {
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn new_port(
     name: String,
     cfg: &VpcCfg,
@@ -1793,7 +1802,7 @@ fn new_port(
     Ok(Arc::new(pb.create(net, limit, limit)?))
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn xde_rx(
     arg: *mut c_void,
     mrh: *mut mac::mac_resource_handle,
@@ -1858,7 +1867,7 @@ unsafe fn xde_rx_one(
     };
 
     let meta = parsed_pkt.meta();
-    let devs = xde_devs.read();
+    let devs = xde_devs().read();
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
@@ -1904,10 +1913,10 @@ unsafe fn xde_rx_one(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddRouterEntryReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -1915,12 +1924,12 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     router::add_entry(&dev.port, req.dest, req.target, req.class)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn del_router_entry_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<DelRouterEntryResp, OpteError> {
     let req: DelRouterEntryReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -1928,10 +1937,10 @@ fn del_router_entry_hdlr(
     router::del_entry(&dev.port, req.dest, req.target, req.class)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddFwRuleReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -1940,10 +1949,10 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: RemFwRuleReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -1952,10 +1961,10 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetFwRulesReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -1964,7 +1973,7 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
@@ -1972,7 +1981,7 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
@@ -1980,7 +1989,7 @@ fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn dump_v2p_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<DumpVirt2PhysResp, OpteError> {
@@ -1989,7 +1998,7 @@ fn dump_v2p_hdlr(
     Ok(state.vpc_map.dump())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
@@ -1997,7 +2006,7 @@ fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
@@ -2005,7 +2014,7 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn dump_v2b_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<DumpVirt2BoundaryResp, OpteError> {
@@ -2014,12 +2023,12 @@ fn dump_v2b_hdlr(
     Ok(state.v2b.dump())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn list_layers_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::ListLayersResp, OpteError> {
     let req: api::ListLayersReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2027,10 +2036,10 @@ fn list_layers_hdlr(
     Ok(dev.port.list_layers())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearUftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2039,10 +2048,10 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: api::ClearLftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2051,12 +2060,12 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn dump_uft_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpUftResp, OpteError> {
     let req: api::DumpUftReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2064,12 +2073,12 @@ fn dump_uft_hdlr(
     dev.port.dump_uft()
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn dump_layer_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpLayerResp, OpteError> {
     let req: api::DumpLayerReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2077,12 +2086,12 @@ fn dump_layer_hdlr(
     api::dump_layer(&dev.port, &req)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn dump_tcp_flows_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<api::DumpTcpFlowsResp, OpteError> {
     let req: api::DumpTcpFlowsReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2090,10 +2099,10 @@ fn dump_tcp_flows_hdlr(
     api::dump_tcp_flows(&dev.port, &req)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2102,10 +2111,10 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::AllowCidrReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
@@ -2115,12 +2124,12 @@ fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn remove_cidr_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<RemoveCidrResp, OpteError> {
     let req: oxide_vpc::api::RemoveCidrReq = env.copy_in_req()?;
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     let mut iter = devs.iter();
     let dev = match iter.find(|x| x.devname == req.port_name) {
         Some(dev) => dev,
@@ -2131,10 +2140,10 @@ fn remove_cidr_hdlr(
     gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
-    let devs = unsafe { xde_devs.read() };
+    let devs = xde_devs().read();
     for dev in devs.iter() {
         let ipv4_state =
             dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());

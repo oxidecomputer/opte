@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use alloc::ffi::CString;
 use alloc::vec::Vec;
@@ -20,7 +20,7 @@ use opte::api::OPTE_CMD_RESP_COPY_OUT;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-extern "C" {
+unsafe extern "C" {
     fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
 }
 

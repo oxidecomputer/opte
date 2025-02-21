@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! A layer in a port.
 
@@ -1762,7 +1762,7 @@ impl RuleTable {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_gen__desc__fail(
         port: uintptr_t,
         layer: uintptr_t,

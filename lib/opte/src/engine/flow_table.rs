@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The flow table implementation.
 //!
@@ -365,7 +365,7 @@ pub trait StateSummary {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_flow__expired(
         port: uintptr_t,
         layer: uintptr_t,

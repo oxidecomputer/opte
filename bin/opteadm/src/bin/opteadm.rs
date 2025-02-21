@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use anyhow::Context;
 use clap::Args;
@@ -788,9 +788,8 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::SetExternalIps { port, external_net } => {
-            if let Ok(cfg) =
-                ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone())
-            {
+            match ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone())
+            { Ok(cfg) => {
                 let req = SetExternalIpsReq {
                     port_name: port,
                     external_ips_v4: Some(cfg),
@@ -801,9 +800,8 @@ fn main() -> anyhow::Result<()> {
                     inet_gw_map: None,
                 };
                 hdl.set_external_ips(&req)?;
-            } else if let Ok(cfg) =
-                ExternalIpCfg::<Ipv6Addr>::try_from(external_net)
-            {
+            } _ => { match ExternalIpCfg::<Ipv6Addr>::try_from(external_net)
+            { Ok(cfg) => {
                 let req = SetExternalIpsReq {
                     port_name: port,
                     external_ips_v6: Some(cfg),
@@ -812,10 +810,10 @@ fn main() -> anyhow::Result<()> {
                     inet_gw_map: None,
                 };
                 hdl.set_external_ips(&req)?;
-            } else {
+            } _ => {
                 // TODO: show *actual* parse failure.
                 anyhow::bail!("expected IPv4 *or* IPv6 config.");
-            }
+            }}}}
         }
 
         Command::AllowCidr { port, prefix, direction } => {
