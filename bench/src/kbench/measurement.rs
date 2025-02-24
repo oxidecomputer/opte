@@ -2,15 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use super::*;
 use crate::dtrace::DTraceHisto;
 use clap::ValueEnum;
 use criterion::Criterion;
-use rand::distributions::Distribution;
-use rand::distributions::WeightedIndex;
-use rand::thread_rng;
+use rand::distr::weighted::WeightedIndex;
+use rand::distr::Distribution;
+use rand::rng;
 use rand::Rng;
 use std::fs;
 use std::fs::File;
@@ -242,7 +242,7 @@ pub fn process_output(
         let mut c =
             Criterion::default().measurement_time(Duration::from_secs(20));
 
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let idx =
             WeightedIndex::new(histo.buckets.iter().map(|x| x.1)).unwrap();
 
@@ -255,11 +255,9 @@ pub fn process_output(
                         let sample = &histo.buckets[chosen_bucket].0;
 
                         // uniformly distribute within bucket.
-                        Duration::from_nanos(
-                            rng.gen_range(
-                                *sample..*sample + histo.bucket_width,
-                            ),
-                        )
+                        Duration::from_nanos(rng.random_range(
+                            *sample..*sample + histo.bucket_width,
+                        ))
                     })
                     .sum()
             })
