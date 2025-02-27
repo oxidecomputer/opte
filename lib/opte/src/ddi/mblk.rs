@@ -772,7 +772,7 @@ impl MsgBlk {
     ) -> Result<(), ()> {
         #[cfg(all(not(feature = "std"), not(test)))]
         let res = unsafe {
-            illumos_sys_hdrs::mac::mac_ether_set_fullpktinfo(
+            illumos_sys_hdrs::mac::mac_ether_set_pktinfo(
                 self.0.as_ptr(),
                 outer_meoi,
                 inner_meoi.map(|v| v as *const _).unwrap_or_else(ptr::null),

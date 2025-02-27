@@ -80,7 +80,7 @@ extern "C" {
         flags: *mut u32,
     );
     pub fn mac_lso_get(mp: *mut mblk_t, mss: *mut u32, flags: *mut u32);
-    pub fn mac_ether_set_fullpktinfo(
+    pub fn mac_ether_set_pktinfo(
         mp: *mut mblk_t,
         outer_info: *const mac_ether_offload_info_t,
         inner_info: *const mac_ether_offload_info_t,

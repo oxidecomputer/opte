@@ -1991,10 +1991,10 @@ unsafe extern "C" fn xde_mc_getcapab(
             opte::engine::err!("Adverising CSO {:?}", &desired_capabs);
 
             // FORCE
-            // unsafe {
-            //     (*capab).cso_flags = ChecksumOffloadCapabs::NON_TUN_CAPABS
-            //         .difference(ChecksumOffloadCapabs::INET_PARTIAL).bits();
-            // }
+            unsafe {
+                (*capab).cso_flags = ChecksumOffloadCapabs::NON_TUN_CAPABS
+                    .difference(ChecksumOffloadCapabs::INET_PARTIAL);
+            }
 
             // if desired_capabs.cso_flags == 0 {
             //     boolean_t::B_FALSE
@@ -2012,17 +2012,16 @@ unsafe extern "C" fn xde_mc_getcapab(
             opte::engine::err!("Adverising LSO {:?}", &desired_lso);
 
             // FORCE
-            // let desired_lso = mac_capab_lso_t {
-            //     lso_flags: TcpLsoFlags::BASIC_IPV4.bits()
-            //         | TcpLsoFlags::BASIC_IPV6.bits(),
-            //     lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
-            //         lso_max: u16::MAX as u32,
-            //     },
-            //     lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
-            //         lso_max: u16::MAX as u32,
-            //     },
-            //     ..Default::default()
-            // };
+            let desired_lso = mac_capab_lso_t {
+                lso_flags: TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6,
+                lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
+                    lso_max: u16::MAX as u32,
+                },
+                lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
+                    lso_max: u16::MAX as u32,
+                },
+                ..Default::default()
+            };
 
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt
