@@ -1839,13 +1839,23 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // Boost MSS to use full jumbo frames if we know our path
             // can be served purely on internal links.
             // Recall that SDU does not include L2 size, hence 'non_eth_payl'
-            let mss = if mtu_unrestricted {
-                src_dev.underlay_capab.mtu - 70 - (non_eth_payl_bytes as u32)
+            let mut flags = offload_flags;
+            let inner_mtu = if mtu_unrestricted {
+                src_dev.underlay_capab.mtu - 70
             } else {
-                1500 - (non_eth_payl_bytes as u32)
+                1500
             };
+            let mss = inner_mtu - (non_eth_payl_bytes as u32);
 
-            out_pkt.request_offload(offload_flags.shift_in(), mss);
+            // As underlay devices may need to emulate tunnelled LSO, then we
+            // need to strip the flag to prevent a drop, in cases where we'd
+            // ask to split a packet back into... 1 segment.
+            // Hardware tends to handle this without issue.
+            if meoi_len - (Ethernet::MINIMUM_LENGTH as u32) <= inner_mtu {
+                flags.remove(MblkOffloadFlags::HW_LSO);
+            }
+
+            out_pkt.request_offload(flags.shift_in(), mss);
 
             let tun_meoi = mac_ether_offload_info_t {
                 meoi_flags: MacEtherOffloadFlags::L2INFO_SET
