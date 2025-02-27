@@ -419,14 +419,13 @@ impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
         XdeState {
-            underlay: KMutex::new(None, KMutexType::Driver),
+            underlay: KMutex::new(None),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
             stats: KMutex::new(
                 KStatNamed::new("xde", "xde", XdeStats::new())
                     .expect("Name is well-constructed (len, no NUL bytes)"),
-                KMutexType::Driver,
             ),
             cleanup: Periodic::new(
                 c"XDE flow/cache expiry".to_owned(),

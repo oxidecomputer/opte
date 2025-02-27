@@ -64,7 +64,6 @@ use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
-use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
@@ -351,7 +350,7 @@ impl PortBuilder {
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
             net,
-            data: KMutex::new(data, KMutexType::Driver),
+            data: KMutex::new(data),
         })
     }
 
@@ -403,7 +402,7 @@ impl PortBuilder {
             name_cstr,
             mac,
             ectx,
-            layers: KMutex::new(Vec::new(), KMutexType::Driver),
+            layers: KMutex::new(Vec::new()),
         }
     }
 
@@ -2335,7 +2334,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
-            pair: KMutex::new(Some(ufid_out), KMutexType::Driver),
+            pair: KMutex::new(Some(ufid_out)),
             xforms: xforms.compile(flags),
             epoch,
             l4_hash: ufid_in.crc32(),
@@ -2568,7 +2567,7 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         let hte = UftEntry {
-            pair: KMutex::new(None, KMutexType::Driver),
+            pair: KMutex::new(None),
             xforms: xforms.compile(flags),
             epoch,
             l4_hash: flow_before.crc32(),
@@ -2876,7 +2875,6 @@ impl TcpFlowEntryState {
                     bytes_in,
                     bytes_out: 0,
                 },
-                KMutexType::Driver,
             ),
         }
     }
@@ -2897,7 +2895,6 @@ impl TcpFlowEntryState {
                     bytes_in: 0,
                     bytes_out,
                 },
-                KMutexType::Driver,
             ),
         }
     }
