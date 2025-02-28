@@ -2865,17 +2865,15 @@ impl TcpFlowEntryState {
         bytes_in: u64,
     ) -> Self {
         Self {
-            inner: KMutex::new(
-                TcpFlowEntryStateInner {
-                    outbound_ufid,
-                    inbound_ufid: Some(inbound_ufid),
-                    tcp_state,
-                    segs_in: 1,
-                    segs_out: 0,
-                    bytes_in,
-                    bytes_out: 0,
-                },
-            ),
+            inner: KMutex::new(TcpFlowEntryStateInner {
+                outbound_ufid,
+                inbound_ufid: Some(inbound_ufid),
+                tcp_state,
+                segs_in: 1,
+                segs_out: 0,
+                bytes_in,
+                bytes_out: 0,
+            }),
         }
     }
 
@@ -2885,17 +2883,15 @@ impl TcpFlowEntryState {
         bytes_out: u64,
     ) -> Self {
         Self {
-            inner: KMutex::new(
-                TcpFlowEntryStateInner {
-                    outbound_ufid,
-                    inbound_ufid: None,
-                    tcp_state,
-                    segs_in: 0,
-                    segs_out: 1,
-                    bytes_in: 0,
-                    bytes_out,
-                },
-            ),
+            inner: KMutex::new(TcpFlowEntryStateInner {
+                outbound_ufid,
+                inbound_ufid: None,
+                tcp_state,
+                segs_in: 0,
+                segs_out: 1,
+                bytes_in: 0,
+                bytes_out,
+            }),
         }
     }
 
