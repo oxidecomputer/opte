@@ -77,8 +77,10 @@ impl MsgBlkChain {
 
         // Walk the chain to find the tail, and support faster append.
         let mut tail = head;
-        while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
-            tail = next_ptr;
+        unsafe {
+            while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
+                tail = next_ptr;
+            }
         }
 
         Ok(Self(Some(MsgBlkChainInner { head, tail })))
@@ -455,7 +457,9 @@ impl MsgBlk {
 
         f(in_slice);
 
-        (*mut_out).b_rptr = new_head;
+        unsafe {
+            (*mut_out).b_rptr = new_head;
+        }
 
         Ok(())
     }
@@ -651,10 +655,12 @@ impl MsgBlk {
         let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
         let inner_ref = inner.as_ptr();
 
-        if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
-            Ok(Self(inner))
-        } else {
-            Err(WrapError::Chain)
+        unsafe {
+            if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
+                Ok(Self(inner))
+            } else {
+                Err(WrapError::Chain)
+            }
         }
     }
 
@@ -852,7 +858,9 @@ unsafe fn count_mblk_chain(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         count += 1;
-        head = NonNull::new((*valid_head.as_ptr()).b_cont);
+        unsafe {
+            head = NonNull::new((*valid_head.as_ptr()).b_cont);
+        }
     }
     count
 }
@@ -866,9 +874,11 @@ unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         let headref = valid_head.as_ptr();
-        count +=
-            (*headref).b_wptr.offset_from((*headref).b_rptr).max(0) as usize;
-        head = NonNull::new((*headref).b_cont);
+        unsafe {
+            count += (*headref).b_wptr.offset_from((*headref).b_rptr).max(0)
+                as usize;
+            head = NonNull::new((*headref).b_cont);
+        }
     }
     count
 }

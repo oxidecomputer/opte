@@ -61,7 +61,6 @@ use opte::ddi::kstat::KStatProvider;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
-use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
@@ -114,8 +113,8 @@ use oxide_vpc::engine::router;
 //
 // Safety: Despite the name of `new_unchecked`, there actually is a compile-time
 // check that these values are non-zero.
-const FW_FT_LIMIT: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8096) };
-const FT_LIMIT_ONE: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
+const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
+const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// The name of this driver.
 const XDE_STR: *const c_char = c"xde".as_ptr();
@@ -132,7 +131,10 @@ static mut XDE_DEVS: KRwLock<DevMap> = KRwLock::new(DevMap::new());
 fn xde_devs() -> &'static KRwLock<DevMap> {
     // SAFETY: this field is used mutably only once, during _init.
     // From there onwards, the lock is initialised.
-    unsafe { &*(&raw const XDE_DEVS) }
+    #[allow(clippy::deref_addrof)]
+    unsafe {
+        &*(&raw const XDE_DEVS)
+    }
 }
 
 /// DDI dev info pointer to the attached xde device.
@@ -320,6 +322,7 @@ pub struct XdeDev {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn _init() -> c_int {
     unsafe {
+        #[allow(clippy::deref_addrof)]
         KRwLock::init(&mut *(&raw mut XDE_DEVS), KRwLockType::Driver);
         mac::mac_init_ops(addr_of_mut!(xde_devops), XDE_STR);
 
@@ -336,20 +339,22 @@ unsafe extern "C" fn _init() -> c_int {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn _info(modinfop: *mut modinfo) -> c_int {
-    mod_info(&xde_linkage, modinfop)
+    unsafe { mod_info(&xde_linkage, modinfop) }
 }
 
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn _fini() -> c_int {
-    match mod_remove(&xde_linkage) {
-        0 => {
-            mac::mac_fini_ops(addr_of_mut!(xde_devops));
-            0
-        }
-        err => {
-            warn!("mod remove failed: {}", err);
-            err
+    unsafe {
+        match mod_remove(&xde_linkage) {
+            0 => {
+                mac::mac_fini_ops(addr_of_mut!(xde_devops));
+                0
+            }
+            err => {
+                warn!("mod remove failed: {}", err);
+                err
+            }
         }
     }
 }
@@ -371,22 +376,26 @@ unsafe extern "C" fn xde_open(
     otyp: c_int,
     credp: *mut cred_t,
 ) -> c_int {
-    assert!(!xde_dip.is_null());
+    unsafe {
+        assert!(!xde_dip.is_null());
+    }
 
     if otyp != OTYP_CHR {
         return EINVAL;
     }
 
-    let minor = getminor(*devp);
-    if minor != XDE_CTL_MINOR {
-        return ENXIO;
-    }
+    unsafe {
+        let minor = getminor(*devp);
+        if minor != XDE_CTL_MINOR {
+            return ENXIO;
+        }
 
-    match secpolicy::secpolicy_dl_config(credp) {
-        0 => {}
-        err => {
-            warn!("secpolicy_dl_config failed: {err}");
-            return err;
+        match secpolicy::secpolicy_dl_config(credp) {
+            0 => {}
+            err => {
+                warn!("secpolicy_dl_config failed: {err}");
+                return err;
+            }
         }
     }
 
@@ -404,15 +413,19 @@ unsafe extern "C" fn xde_close(
     otyp: c_int,
     _credp: *mut cred_t,
 ) -> c_int {
-    assert!(!xde_dip.is_null());
+    unsafe {
+        assert!(!xde_dip.is_null());
+    }
 
     if otyp != OTYP_CHR {
         return EINVAL;
     }
 
-    let minor = getminor(dev);
-    if minor != XDE_CTL_MINOR {
-        return ENXIO;
+    unsafe {
+        let minor = getminor(dev);
+        if minor != XDE_CTL_MINOR {
+            return ENXIO;
+        }
     }
 
     0
@@ -427,11 +440,13 @@ unsafe extern "C" fn xde_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    assert!(!xde_dip.is_null());
+    unsafe {
+        assert!(!xde_dip.is_null());
 
-    let minor = getminor(dev);
-    if minor != XDE_CTL_MINOR {
-        return ENXIO;
+        let minor = getminor(dev);
+        if minor != XDE_CTL_MINOR {
+            return ENXIO;
+        }
     }
 
     if cmd != XDE_IOC_OPTE_CMD {
@@ -440,18 +455,23 @@ unsafe extern "C" fn xde_ioctl(
 
     // TODO: this is using KM_SLEEP, is that ok?
     let mut buf = Vec::<u8>::with_capacity(IOCTL_SZ);
-    if ddi_copyin(arg as _, buf.as_mut_ptr() as _, IOCTL_SZ, mode) != 0 {
-        return EFAULT;
+    unsafe {
+        if ddi_copyin(arg as _, buf.as_mut_ptr() as _, IOCTL_SZ, mode) != 0 {
+            return EFAULT;
+        }
     }
 
-    let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, mode);
+    unsafe {
+        let err = xde_ioc_opte_cmd(buf.as_mut_ptr() as _, mode);
 
-    if ddi_copyout(buf.as_ptr() as _, arg as _, IOCTL_SZ, mode) != 0 && err == 0
-    {
-        return EFAULT;
+        if ddi_copyout(buf.as_ptr() as _, arg as _, IOCTL_SZ, mode) != 0
+            && err == 0
+        {
+            return EFAULT;
+        }
+
+        err
     }
-
-    err
 }
 
 fn dtrace_probe_hdlr_resp<T>(resp: &Result<T, OpteError>)
@@ -500,10 +520,12 @@ fn clear_xde_underlay_hdlr(
 // version and then multiplexes the command to its appropriate handler.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
-    let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
-    let mut env = match IoctlEnvelope::wrap(ioctl, mode) {
-        Ok(v) => v,
-        Err(errno) => return errno,
+    let mut env = unsafe {
+        let ioctl: &mut OpteCmdIoctl = &mut *(karg as *mut OpteCmdIoctl);
+        match IoctlEnvelope::wrap(ioctl, mode) {
+            Ok(v) => v,
+            Err(errno) => return errno,
+        }
     };
 
     match env.ioctl_cmd() {
@@ -957,40 +979,46 @@ unsafe extern "C" fn xde_getinfo(
     arg: *mut c_void,
     resultp: *mut *mut c_void,
 ) -> c_int {
-    if xde_dip.is_null() {
-        return DDI_FAILURE;
+    unsafe {
+        if xde_dip.is_null() {
+            return DDI_FAILURE;
+        }
     }
 
     let minor = match cmd {
         ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO
-        | ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => getminor(arg as dev_t),
+        | ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => unsafe {
+            getminor(arg as dev_t)
+        },
         // We call into `mac_getinfo` here rather than just fail
         // with `DDI_FAILURE` to let it handle if ever there's a new
         // `ddi_info_cmd_t` variant.
-        _ => return mac_getinfo(dip, cmd, arg, resultp),
+        _ => return unsafe { mac_getinfo(dip, cmd, arg, resultp) },
     };
 
-    // If this isn't one of our private minors,
-    // let the GLDv3 framework handle it.
-    if minor < mac_private_minor() {
-        return mac_getinfo(dip, cmd, arg, resultp);
-    }
+    unsafe {
+        // If this isn't one of our private minors,
+        // let the GLDv3 framework handle it.
+        if minor < mac_private_minor() {
+            return mac_getinfo(dip, cmd, arg, resultp);
+        }
 
-    // We currently only expose a single minor node,
-    // bail on anything else.
-    if minor != XDE_CTL_MINOR {
-        return DDI_FAILURE;
+        // We currently only expose a single minor node,
+        // bail on anything else.
+        if minor != XDE_CTL_MINOR {
+            return DDI_FAILURE;
+        }
     }
 
     match cmd {
-        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO => {
+        ddi_info_cmd_t::DDI_INFO_DEVT2DEVINFO => unsafe {
             *resultp = xde_dip.cast();
             DDI_SUCCESS
-        }
-        ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => {
+        },
+        ddi_info_cmd_t::DDI_INFO_DEVT2INSTANCE => unsafe {
             *resultp = ddi_get_instance(xde_dip) as _;
             DDI_SUCCESS
-        }
+        },
         _ => DDI_FAILURE,
     }
 }
@@ -1006,21 +1034,26 @@ unsafe extern "C" fn xde_attach(
         _ => return DDI_FAILURE,
     }
 
-    assert!(xde_dip.is_null());
-
-    // We need to share the minor number space with the GLDv3 framework.
-    // We'll use the first private minor number for our control device.
-    XDE_CTL_MINOR = mac_private_minor();
+    unsafe {
+        assert!(xde_dip.is_null());
+    }
 
     // Create xde control device
-    match ddi_create_minor_node(
-        dip,
-        XDE_CTL_STR,
-        S_IFCHR,
-        XDE_CTL_MINOR,
-        DDI_PSEUDO,
-        0,
-    ) {
+    let res = unsafe {
+        // We need to share the minor number space with the GLDv3 framework.
+        // We'll use the first private minor number for our control device.
+        XDE_CTL_MINOR = mac_private_minor();
+
+        ddi_create_minor_node(
+            dip,
+            XDE_CTL_STR,
+            S_IFCHR,
+            XDE_CTL_MINOR,
+            DDI_PSEUDO,
+            0,
+        )
+    };
+    match res {
         0 => {}
         err => {
             warn!("failed to create xde control device: {err}");
@@ -1028,12 +1061,12 @@ unsafe extern "C" fn xde_attach(
         }
     }
 
-    xde_dip = dip;
-
     let state = Box::new(XdeState::new());
-    ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
-
-    ddi_report_dev(xde_dip);
+    unsafe {
+        xde_dip = dip;
+        ddi_set_driver_private(xde_dip, Box::into_raw(state) as *mut c_void);
+        ddi_report_dev(xde_dip);
+    }
 
     DDI_SUCCESS
 }
@@ -1109,12 +1142,14 @@ unsafe fn driver_prop_exists(dip: *mut dev_info, pname: &str) -> bool {
         }
     };
 
-    let ret = ddi_prop_exists(
-        DDI_DEV_T_ANY,
-        dip,
-        DDI_PROP_DONTPASS,
-        name.as_ptr() as *const c_char,
-    );
+    let ret = unsafe {
+        ddi_prop_exists(
+            DDI_DEV_T_ANY,
+            dip,
+            DDI_PROP_DONTPASS,
+            name.as_ptr() as *const c_char,
+        )
+    };
 
     ret == 1
 }
@@ -1132,13 +1167,15 @@ unsafe fn get_driver_prop_bool(
         }
     };
 
-    let ret = ddi_prop_get_int(
-        DDI_DEV_T_ANY,
-        dip,
-        DDI_PROP_DONTPASS,
-        name.as_ptr() as *const c_char,
-        99,
-    );
+    let ret = unsafe {
+        ddi_prop_get_int(
+            DDI_DEV_T_ANY,
+            dip,
+            DDI_PROP_DONTPASS,
+            name.as_ptr() as *const c_char,
+            99,
+        )
+    };
 
     // Technically, the system could also return DDI_PROP_NOT_FOUND,
     // which indicates the property cannot be decoded as an int.
@@ -1170,18 +1207,20 @@ unsafe fn get_driver_prop_string(
     };
 
     let mut value: *const c_char = ptr::null();
-    let ret = ddi_prop_lookup_string(
-        DDI_DEV_T_ANY,
-        dip,
-        DDI_PROP_DONTPASS,
-        name.as_ptr() as *const c_char,
-        &mut value,
-    );
-    if ret != DDI_PROP_SUCCESS {
-        warn!("failed to get driver property {}", pname);
-        return None;
-    }
-    let s = CStr::from_ptr(value);
+    let s = unsafe {
+        let ret = ddi_prop_lookup_string(
+            DDI_DEV_T_ANY,
+            dip,
+            DDI_PROP_DONTPASS,
+            name.as_ptr() as *const c_char,
+            &mut value,
+        );
+        if ret != DDI_PROP_SUCCESS {
+            warn!("failed to get driver property {}", pname);
+            return None;
+        }
+        CStr::from_ptr(value)
+    };
     let s = match s.to_str() {
         Ok(s) => s,
         Err(e) => {
@@ -1200,7 +1239,9 @@ unsafe extern "C" fn xde_detach(
     _dip: *mut dev_info,
     cmd: ddi_detach_cmd_t,
 ) -> c_int {
-    assert!(!xde_dip.is_null());
+    unsafe {
+        assert!(!xde_dip.is_null());
+    }
 
     match cmd {
         ddi_detach_cmd_t::DDI_DETACH => {}
@@ -1212,13 +1253,13 @@ unsafe extern "C" fn xde_detach(
         return DDI_FAILURE;
     }
 
-    let state = ddi_get_driver_private(xde_dip) as *mut XdeState;
+    let state = unsafe { ddi_get_driver_private(xde_dip) as *mut XdeState };
     assert!(!state.is_null());
 
     // Lock a *reference* to the XdeState, and ensure we are ready
     // to detach and cleanup.
     {
-        let state_ref = &*(state);
+        let state_ref = unsafe { &*(state) };
         let underlay = state_ref.underlay.lock();
 
         if underlay.is_some() {
@@ -1229,14 +1270,16 @@ unsafe extern "C" fn xde_detach(
     // Drop the lock, and ensure we only have the raw ptr (and not
     // a `&'static XdeState`) again.
 
-    // Reattach the XdeState to a Box, which takes ownership and will
-    // free it on drop.
-    drop(Box::from_raw(state));
+    unsafe {
+        // Reattach the XdeState to a Box, which takes ownership and will
+        // free it on drop.
+        drop(Box::from_raw(state));
 
-    // Remove control device
-    ddi_remove_minor_node(xde_dip, XDE_STR);
+        // Remove control device
+        ddi_remove_minor_node(xde_dip, XDE_STR);
+        xde_dip = ptr::null_mut();
+    }
 
-    xde_dip = ptr::null_mut();
     DDI_SUCCESS
 }
 
@@ -1337,7 +1380,9 @@ unsafe extern "C" fn xde_mc_getstat(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
-    (*dev).port.start();
+    unsafe {
+        (*dev).port.start();
+    }
     0
 }
 
@@ -1346,7 +1391,9 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
-    (*dev).port.reset();
+    unsafe {
+        (*dev).port.reset();
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1372,11 +1419,13 @@ unsafe extern "C" fn xde_mc_unicst(
     macaddr: *const u8,
 ) -> c_int {
     let dev = arg as *mut XdeDev;
-    (*dev)
-        .port
-        .mac_addr()
-        .bytes()
-        .copy_from_slice(core::slice::from_raw_parts(macaddr, 6));
+    unsafe {
+        (*dev)
+            .port
+            .mac_addr()
+            .bytes()
+            .copy_from_slice(core::slice::from_raw_parts(macaddr, 6));
+    }
     0
 }
 
@@ -1497,7 +1546,7 @@ unsafe extern "C" fn xde_mc_tx(
     mp_chain: *mut mblk_t,
 ) -> *mut mblk_t {
     // The device must be started before we can transmit.
-    let src_dev = &*(arg as *mut XdeDev);
+    let src_dev = unsafe { &*(arg as *mut XdeDev) };
 
     // ================================================================
     // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
@@ -1514,8 +1563,11 @@ unsafe extern "C" fn xde_mc_tx(
     //     We *will* still need to remain careful here and `xde_rx` as
     //     pointers are `Copy`.
     // ================================================================
-    __dtrace_probe_tx(mp_chain as uintptr_t);
-    let Ok(mut chain) = MsgBlkChain::new(mp_chain) else {
+    unsafe {
+        __dtrace_probe_tx(mp_chain as uintptr_t);
+    }
+    let chain = unsafe { MsgBlkChain::new(mp_chain) };
+    let Ok(mut chain) = chain else {
         bad_packet_probe(
             Some(src_dev.port.name_cstr()),
             Direction::Out,
@@ -1530,7 +1582,9 @@ unsafe extern "C" fn xde_mc_tx(
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        xde_mc_tx_one(src_dev, pkt);
+        unsafe {
+            xde_mc_tx_one(src_dev, pkt);
+        }
     }
 
     ptr::null_mut()
@@ -1637,13 +1691,15 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // Get a pointer to the beginning of the outer frame and
             // fill in the dst/src addresses before sending out the
             // device.
-            let mblk = out_pkt.unwrap_mblk().as_ptr();
-            let rptr = (*mblk).b_rptr;
-            ptr::copy(dst.as_ptr(), rptr, 6);
-            ptr::copy(src.as_ptr(), rptr.add(6), 6);
-            // Unwrap: We know the packet is good because we just
-            // unwrapped it above.
-            let new_pkt = MsgBlk::wrap_mblk(mblk).unwrap();
+            let new_pkt = unsafe {
+                let mblk = out_pkt.unwrap_mblk().as_ptr();
+                let rptr = (*mblk).b_rptr;
+                ptr::copy(dst.as_ptr(), rptr, 6);
+                ptr::copy(src.as_ptr(), rptr.add(6), 6);
+                // Unwrap: We know the packet is good because we just
+                // unwrapped it above.
+                MsgBlk::wrap_mblk(mblk).unwrap()
+            };
 
             underlay_dev.stream.tx_drop_on_no_desc(
                 new_pkt,
@@ -1656,13 +1712,13 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             return ptr::null_mut();
         }
 
-        Ok(ProcessResult::Hairpin(hpkt)) => {
+        Ok(ProcessResult::Hairpin(hpkt)) => unsafe {
             mac::mac_rx(
                 src_dev.mh,
                 ptr::null_mut(),
                 hpkt.unwrap_mblk().as_ptr(),
             );
-        }
+        },
 
         Ok(ProcessResult::Bypass) => {
             stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
@@ -1806,17 +1862,22 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
-    __dtrace_probe_rx(mp_chain as uintptr_t);
+    unsafe {
+        __dtrace_probe_rx(mp_chain as uintptr_t);
+    }
 
     // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on. Being
     // here in the callback means the `MacPromiscHandle` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
-    let mch_ptr = arg as *const DlsStream;
-    Arc::increment_strong_count(mch_ptr);
-    let stream: Arc<DlsStream> = Arc::from_raw(mch_ptr);
+    let stream: Arc<DlsStream> = unsafe {
+        let mch_ptr = arg as *const DlsStream;
+        Arc::increment_strong_count(mch_ptr);
+        Arc::from_raw(mch_ptr)
+    };
 
-    let Ok(mut chain) = MsgBlkChain::new(mp_chain) else {
+    let chain = unsafe { MsgBlkChain::new(mp_chain) };
+    let Ok(mut chain) = chain else {
         bad_packet_probe(
             None,
             Direction::Out,
@@ -1831,7 +1892,9 @@ unsafe extern "C" fn xde_rx(
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        xde_rx_one(&stream, mrh, pkt);
+        unsafe {
+            xde_rx_one(&stream, mrh, pkt);
+        }
     }
 }
 
@@ -1886,7 +1949,9 @@ unsafe fn xde_rx_one(
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+        unsafe {
+            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+        }
         return;
     }
 
@@ -1895,14 +1960,14 @@ unsafe fn xde_rx_one(
     let res = port.process(Direction::In, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Bypass) => {
+        Ok(ProcessResult::Bypass) => unsafe {
             mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
-        }
-        Ok(ProcessResult::Modified(emit_spec)) => {
+        },
+        Ok(ProcessResult::Modified(emit_spec)) => unsafe {
             let npkt = emit_spec.apply(pkt);
 
             mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
-        }
+        },
         Ok(ProcessResult::Hairpin(hppkt)) => {
             stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }

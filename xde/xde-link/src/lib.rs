@@ -56,8 +56,10 @@ unsafe extern "C" fn create_xde_link(
     unsafe extern "C" {
         fn strcmp(s1: *const c_char, s2: *const c_char) -> c_int;
     }
-    if strcmp(di_minor_name(minor), c"ctl".as_ptr()) == 0 {
-        devfsadm_mklink(c"xde".as_ptr(), node, minor, 0);
+    unsafe {
+        if strcmp(di_minor_name(minor), c"ctl".as_ptr()) == 0 {
+            devfsadm_mklink(c"xde".as_ptr(), node, minor, 0);
+        }
     }
     0
 }

@@ -74,11 +74,11 @@ unsafe impl GlobalAlloc for KmemAlloc {
         if layout.align() > 8 {
             panic!("kernel alloc greater than 8-byte alignment");
         }
-        kmem_alloc(layout.size(), KM_SLEEP) as *mut u8
+        unsafe { kmem_alloc(layout.size(), KM_SLEEP) as *mut u8 }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        kmem_free(ptr as *mut c_void, layout.size() as size_t)
+        unsafe { kmem_free(ptr as *mut c_void, layout.size() as size_t) }
     }
 }
 

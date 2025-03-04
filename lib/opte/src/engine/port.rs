@@ -2890,11 +2890,11 @@ impl TcpFlowEntryState {
     ) -> result::Result<TcpState, TcpFlowStateError> {
         let mut tfes = self.inner.lock();
         match dir {
-            Direction::In { .. } => {
+            Direction::In => {
                 tfes.segs_in += 1;
                 tfes.bytes_in += pkt_len;
             }
-            Direction::Out { .. } => {
+            Direction::Out => {
                 tfes.segs_out += 1;
                 tfes.bytes_out += pkt_len;
             }
