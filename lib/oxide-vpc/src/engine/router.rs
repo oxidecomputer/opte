@@ -8,8 +8,8 @@
 //!
 //! This implements both the Oxide Network VPC "System Router" and
 //! "Custom Router" abstractions, as described in RFD 21 §2.3.
-use super::firewall as fw;
 use super::VpcNetwork;
+use super::firewall as fw;
 use crate::api::DelRouterEntryResp;
 use crate::api::RouterClass;
 use crate::api::RouterTarget;
@@ -32,11 +32,11 @@ use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::port::meta::ActionMeta;
+use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::predicate::DataPredicate;
 use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::Ipv6AddrMatch;

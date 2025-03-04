@@ -9,9 +9,9 @@
 //! integration.
 
 use super::MeasurementInfo;
+use criterion::Criterion;
 use criterion::measurement::Measurement;
 use criterion::measurement::ValueFormatter;
-use criterion::Criterion;
 use std::alloc::GlobalAlloc;
 use std::alloc::Layout;
 use std::alloc::System;

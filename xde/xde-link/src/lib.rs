@@ -4,7 +4,7 @@
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     #[link(name = "c")]
-    extern "C" {
+    unsafe extern "C" {
         fn abort() -> !;
     }
     unsafe { abort() }
@@ -16,7 +16,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 /// devfsadm plugin link creation registration
 /// Exported plugin entry point for
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static _devfsadm_create_reg: _devfsadm_create_reg_t =
     _devfsadm_create_reg_t {
         version: DEVFSADM_V0,
@@ -32,7 +32,7 @@ pub static _devfsadm_create_reg: _devfsadm_create_reg_t =
     };
 
 /// devfsadm plugin link removal registration
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub static _devfsadm_remove_reg: _devfsadm_remove_reg_t =
     _devfsadm_remove_reg_t {
         version: DEVFSADM_V0,
@@ -53,7 +53,7 @@ unsafe extern "C" fn create_xde_link(
     node: *const di_node,
 ) -> c_int {
     #[link(name = "c")]
-    extern "C" {
+    unsafe extern "C" {
         fn strcmp(s1: *const c_char, s2: *const c_char) -> c_int;
     }
     if strcmp(di_minor_name(minor), c"ctl".as_ptr()) == 0 {
@@ -98,14 +98,14 @@ type di_node = core::ffi::c_void;
 
 // See lib/libdevinfo/libdevinfo.h
 #[link(name = "devinfo")]
-extern "C" {
+unsafe extern "C" {
     /// Returns name for give minor node
     fn di_minor_name(minor: *const di_minor) -> *const c_char;
 }
 
 // These symbols exist in the `devfsadm` binary itself which is the one
 // that will be `dlopen()`'ing the plugin.
-extern "C" {
+unsafe extern "C" {
     fn devfsadm_mklink(
         link: *const c_char,
         node: *const di_node,

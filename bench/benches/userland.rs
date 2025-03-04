@@ -6,11 +6,12 @@
 
 //! Userland packet parsing and processing microbenchmarks.
 
-use criterion::criterion_group;
-use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use criterion::criterion_group;
+use criterion::criterion_main;
 use opte::engine::packet::Packet;
+use opte_bench::MeasurementInfo;
 use opte_bench::alloc::*;
 use opte_bench::packet::BenchPacket;
 use opte_bench::packet::BenchPacketInstance;
@@ -22,7 +23,6 @@ use opte_bench::packet::ParserKind;
 use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
 use opte_bench::packet::ULP_SLOW_PATH;
-use opte_bench::MeasurementInfo;
 use opte_test_utils::*;
 use std::hint::black_box;
 

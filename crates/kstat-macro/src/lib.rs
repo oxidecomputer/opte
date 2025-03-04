@@ -7,12 +7,12 @@
 use proc_macro::TokenStream;
 use quote::format_ident;
 use quote::quote;
-use syn::parse_macro_input;
 use syn::DeriveInput;
 use syn::Field;
 use syn::FieldsNamed;
 use syn::FieldsUnnamed;
 use syn::Ident;
+use syn::parse_macro_input;
 
 /// Generate a `KStatProvider` implementation given a struct of named
 /// fields of type `KStatU64`.
