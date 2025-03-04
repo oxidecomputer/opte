@@ -3,7 +3,7 @@
 #: name = "opte-api"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2025-02-20"
+#: rust_toolchain = true
 #: output_rules = []
 #:
 
@@ -11,9 +11,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
-function header {
-	echo "# ==== $* ==== #"
-}
+source .github/buildomat/common.sh
 
 cargo --version
 rustc --version
@@ -24,7 +22,7 @@ header "check API_VERSION"
 ./check-api-version.sh
 
 header "check style"
-ptime -m cargo +nightly-2025-02-20 fmt -- --check
+ptime -m cargo +$NIGHTLY fmt -- --check
 
 header "analyze std"
 ptime -m cargo clippy --all-targets

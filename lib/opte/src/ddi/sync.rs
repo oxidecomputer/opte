@@ -109,7 +109,7 @@ impl<T> KMutex<T> {
     /// `KMutex` is the new owner of `val`. All access from here on out
     /// must be done by acquiring a `KMutexGuard` via the `lock()`
     /// method.
-    pub fn new(val: T, mtype: KMutexType) -> Self {
+    pub fn new(val: T) -> Self {
         let mut kmutex = kmutex_t { _opaque: 0 };
         // TODO This assumes the mutex is never used in interrupt
         // context. Need to pass 4th arg to set priority.
@@ -118,7 +118,15 @@ impl<T> KMutex<T> {
         //
         // Safety: ???.
         unsafe {
-            mutex_init(&mut kmutex, ptr::null(), mtype.into(), ptr::null());
+            // MUTEX_DRIVER is the only type currently sanctioned by the DDI
+            // for use here. The priority argument, when we provide it, will
+            // control whether we get adaptive/spin behaviour.
+            mutex_init(
+                &mut kmutex,
+                ptr::null(),
+                KMutexType::Driver.into(),
+                ptr::null(),
+            );
         }
 
         KMutex {
@@ -205,7 +213,7 @@ impl<T> KMutex<T> {
         self.inner.into_inner().unwrap()
     }
 
-    pub fn new(val: T, _mtype: KMutexType) -> Self {
+    pub fn new(val: T) -> Self {
         KMutex { inner: Mutex::new(val) }
     }
 

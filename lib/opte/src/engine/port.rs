@@ -65,7 +65,6 @@ use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
-use crate::ddi::sync::KMutexType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
@@ -347,7 +346,7 @@ impl PortBuilder {
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
             net,
-            data: KMutex::new(data, KMutexType::Driver),
+            data: KMutex::new(data),
         })
     }
 
@@ -399,7 +398,7 @@ impl PortBuilder {
             name_cstr,
             mac,
             ectx,
-            layers: KMutex::new(Vec::new(), KMutexType::Driver),
+            layers: KMutex::new(Vec::new()),
         }
     }
 
@@ -2322,7 +2321,7 @@ impl<N: NetworkImpl> Port<N> {
 
         let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
-            pair: KMutex::new(Some(ufid_out), KMutexType::Spin),
+            pair: KMutex::new(Some(ufid_out)),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: ufid_in.crc32(),
@@ -2547,7 +2546,7 @@ impl<N: NetworkImpl> Port<N> {
         let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
 
         let hte = UftEntry {
-            pair: KMutex::new(None, KMutexType::Spin),
+            pair: KMutex::new(None),
             xforms: xforms.compile(pkt.checksums_dirty()),
             epoch,
             l4_hash: flow_before.crc32(),
@@ -2845,18 +2844,15 @@ impl TcpFlowEntryState {
         bytes_in: u64,
     ) -> Self {
         Self {
-            inner: KMutex::new(
-                TcpFlowEntryStateInner {
-                    outbound_ufid,
-                    inbound_ufid: Some(inbound_ufid),
-                    tcp_state,
-                    segs_in: 1,
-                    segs_out: 0,
-                    bytes_in,
-                    bytes_out: 0,
-                },
-                KMutexType::Spin,
-            ),
+            inner: KMutex::new(TcpFlowEntryStateInner {
+                outbound_ufid,
+                inbound_ufid: Some(inbound_ufid),
+                tcp_state,
+                segs_in: 1,
+                segs_out: 0,
+                bytes_in,
+                bytes_out: 0,
+            }),
         }
     }
 
@@ -2866,18 +2862,15 @@ impl TcpFlowEntryState {
         bytes_out: u64,
     ) -> Self {
         Self {
-            inner: KMutex::new(
-                TcpFlowEntryStateInner {
-                    outbound_ufid,
-                    inbound_ufid: None,
-                    tcp_state,
-                    segs_in: 0,
-                    segs_out: 1,
-                    bytes_in: 0,
-                    bytes_out,
-                },
-                KMutexType::Spin,
-            ),
+            inner: KMutex::new(TcpFlowEntryStateInner {
+                outbound_ufid,
+                inbound_ufid: None,
+                tcp_state,
+                segs_in: 0,
+                segs_out: 1,
+                bytes_in: 0,
+                bytes_out,
+            }),
         }
     }
 
