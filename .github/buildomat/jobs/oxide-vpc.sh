@@ -3,7 +3,7 @@
 #: name = "oxide-vpc"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-11-18"
+#: rust_toolchain = true
 #: output_rules = []
 #:
 
@@ -11,9 +11,7 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
-function header {
-	echo "# ==== $* ==== #"
-}
+source .github/buildomat/common.sh
 
 cargo --version
 rustc --version
@@ -21,7 +19,7 @@ rustc --version
 cd lib/oxide-vpc
 
 header "check style"
-ptime -m cargo +nightly-2024-11-18 fmt -- --check
+ptime -m cargo +$NIGHTLY fmt -- --check
 
 header "check docs"
 #
@@ -30,13 +28,13 @@ header "check docs"
 #
 # Use nightly which is needed for the `kernel` feature.
 RUSTDOCFLAGS="-D warnings" ptime -m \
-	    cargo +nightly-2024-11-18 doc --no-default-features --features=api,std,engine,kernel
+	    cargo +$NIGHTLY doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api + usdt"
 ptime -m cargo clippy --features usdt --all-targets
 
 header "analyze no_std + engine + kernel"
-ptime -m cargo +nightly-2024-11-18 clippy --no-default-features --features engine,kernel
+ptime -m cargo +$NIGHTLY clippy --no-default-features --features engine,kernel
 
 header "test"
 ptime -m cargo test
