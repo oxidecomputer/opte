@@ -110,9 +110,6 @@ use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
 
 // Entry limits for the various flow tables.
-//
-// Safety: Despite the name of `new_unchecked`, there actually is a compile-time
-// check that these values are non-zero.
 const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
 const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
@@ -142,22 +139,22 @@ static mut xde_dip: *mut dev_info = ptr::null_mut();
 
 // This block is purely for SDT probes.
 unsafe extern "C" {
-    pub fn __dtrace_probe_bad__packet(
+    pub safe fn __dtrace_probe_bad__packet(
         port: uintptr_t,
         dir: uintptr_t,
         mp: uintptr_t,
         err_b: *const LabelBlock<8>,
         data_len: uintptr_t,
     );
-    pub fn __dtrace_probe_guest__loopback(
+    pub safe fn __dtrace_probe_guest__loopback(
         mp: uintptr_t,
         flow: *const InnerFlowId,
         src_port: uintptr_t,
         dst_port: uintptr_t,
     );
-    pub fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
-    pub fn __dtrace_probe_rx(mp: uintptr_t);
-    pub fn __dtrace_probe_tx(mp: uintptr_t);
+    pub safe fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
+    pub safe fn __dtrace_probe_rx(mp: uintptr_t);
+    pub safe fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
 fn bad_packet_parse_probe(
@@ -177,15 +174,13 @@ fn bad_packet_parse_probe(
         Err(block) => block,
     };
 
-    unsafe {
-        __dtrace_probe_bad__packet(
-            port_str.as_ptr() as uintptr_t,
-            dir as uintptr_t,
-            mp,
-            block.as_ptr(),
-            4,
-        )
-    };
+    __dtrace_probe_bad__packet(
+        port_str.as_ptr() as uintptr_t,
+        dir as uintptr_t,
+        mp,
+        block.as_ptr(),
+        4,
+    );
 }
 
 fn bad_packet_probe(
@@ -202,14 +197,14 @@ fn bad_packet_probe(
 
     unsafe {
         let _ = eb.append_name_raw(msg);
-        __dtrace_probe_bad__packet(
-            port_str.as_ptr() as uintptr_t,
-            dir as uintptr_t,
-            mp,
-            eb.as_ptr(),
-            8,
-        )
-    };
+    }
+    __dtrace_probe_bad__packet(
+        port_str.as_ptr() as uintptr_t,
+        dir as uintptr_t,
+        mp,
+        eb.as_ptr(),
+        8,
+    );
 }
 
 /// Underlay port state.
@@ -479,9 +474,7 @@ where
     T: CmdOk,
 {
     let resp_arg = CString::new(format!("{:?}", resp)).unwrap();
-    unsafe {
-        __dtrace_probe_hdlr__resp(resp_arg.as_ptr() as uintptr_t);
-    }
+    __dtrace_probe_hdlr__resp(resp_arg.as_ptr() as uintptr_t);
 }
 
 // Convert the handler's response to the appropriate ioctl(2) return
@@ -1435,14 +1428,12 @@ fn guest_loopback_probe(
     src: &XdeDev,
     dst: &XdeDev,
 ) {
-    unsafe {
-        __dtrace_probe_guest__loopback(
-            mblk_addr,
-            flow,
-            src.port.name_cstr().as_ptr() as uintptr_t,
-            dst.port.name_cstr().as_ptr() as uintptr_t,
-        )
-    };
+    __dtrace_probe_guest__loopback(
+        mblk_addr,
+        flow,
+        src.port.name_cstr().as_ptr() as uintptr_t,
+        dst.port.name_cstr().as_ptr() as uintptr_t,
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -1563,9 +1554,7 @@ unsafe extern "C" fn xde_mc_tx(
     //     We *will* still need to remain careful here and `xde_rx` as
     //     pointers are `Copy`.
     // ================================================================
-    unsafe {
-        __dtrace_probe_tx(mp_chain as uintptr_t);
-    }
+    __dtrace_probe_tx(mp_chain as uintptr_t);
     let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
             Some(src_dev.port.name_cstr()),
@@ -1861,9 +1850,7 @@ unsafe extern "C" fn xde_rx(
     mp_chain: *mut mblk_t,
     _is_loopback: boolean_t,
 ) {
-    unsafe {
-        __dtrace_probe_rx(mp_chain as uintptr_t);
-    }
+    __dtrace_probe_rx(mp_chain as uintptr_t);
 
     // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on. Being

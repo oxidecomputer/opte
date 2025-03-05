@@ -244,15 +244,13 @@ fn flow_expired_probe(
 ) {
     cfg_if! {
         if #[cfg(all(not(feature = "std"), not(test)))] {
-            unsafe {
-                __dtrace_probe_flow__expired(
-                    port.as_ptr() as uintptr_t,
-                    name.as_ptr() as uintptr_t,
-                    flowid,
-                    last_hit.unwrap_or_default() as usize,
-                    now.unwrap_or_default() as usize,
-                );
-            }
+            __dtrace_probe_flow__expired(
+                port.as_ptr() as uintptr_t,
+                name.as_ptr() as uintptr_t,
+                flowid,
+                last_hit.unwrap_or_default() as usize,
+                now.unwrap_or_default() as usize,
+            );
         } else if #[cfg(feature = "usdt")] {
             use std::string::ToString;
             let port_s = port.to_str().unwrap();
@@ -366,7 +364,7 @@ pub trait StateSummary {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 unsafe extern "C" {
-    pub fn __dtrace_probe_flow__expired(
+    pub safe fn __dtrace_probe_flow__expired(
         port: uintptr_t,
         layer: uintptr_t,
         flowid: *const InnerFlowId,
@@ -374,7 +372,7 @@ unsafe extern "C" {
         now: uintptr_t,
     );
 
-    pub fn __dtrace_probe_ft__entry__invalidated(
+    pub safe fn __dtrace_probe_ft__entry__invalidated(
         dir: uintptr_t,
         port: uintptr_t,
         layer: uintptr_t,
