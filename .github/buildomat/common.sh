@@ -7,7 +7,7 @@ rustup show active-toolchain || rustup toolchain install
 
 pushd xde
 rustup show active-toolchain || rustup toolchain install
-export NIGHTLY=`rustup show active-toolchain | head -n 1`
+export NIGHTLY=`rustup show active-toolchain -v | head -n 1 | cut -d' ' -f1`
 popd
 
 function header {
