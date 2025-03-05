@@ -3,7 +3,7 @@
 #: name = "opte-p5p"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-11-18"
+#: rust_toolchain = true
 #: output_rules = [
 #:   "=/out/opte.p5p",
 #:   "=/out/opte.p5p.sha256",
@@ -24,6 +24,8 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+source .github/buildomat/common.sh
+
 #
 # TGT_BASE allows one to run this more easily in their local
 # environment:
@@ -36,10 +38,6 @@ REL_SRC=target/x86_64-unknown-unknown/release
 REL_TGT=$TGT_BASE/release
 
 mkdir -p $REL_TGT
-
-function header {
-	echo "# ==== $* ==== #"
-}
 
 cargo --version
 rustc --version

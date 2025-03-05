@@ -3,7 +3,7 @@
 #: name = "bench"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "stable"
+#: rust_toolchain = true
 #: output_rules = [
 #:   "=/work/bench-results.tgz",
 #: ]
@@ -25,6 +25,8 @@
 #### <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 set -o xtrace
+
+source .github/buildomat/common.sh
 
 pfexec pkg install brand/sparse opte iperf demangle flamegraph
 
