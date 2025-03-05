@@ -11,18 +11,23 @@
 //! * Add hardware offload information to [`Packet`].
 //!
 
+use super::Direction;
+use super::LightweightMeta;
+use super::NetworkParser;
 use super::checksum::Checksum;
 use super::ether::Ethernet;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
+use super::headers::AF_INET;
+use super::headers::AF_INET6;
 use super::headers::EncapMeta;
 use super::headers::EncapPush;
 use super::headers::IpAddr;
 use super::headers::IpPush;
 use super::headers::SizeHoldingEncap;
 use super::headers::ValidEncapMeta;
-use super::headers::AF_INET;
-use super::headers::AF_INET6;
+use super::ip::L3;
+use super::ip::L3Repr;
 use super::ip::v4::Ipv4Addr;
 use super::ip::v4::Ipv4Packet;
 use super::ip::v4::Ipv4Ref;
@@ -30,8 +35,6 @@ use super::ip::v4::Protocol;
 use super::ip::v6::Ipv6Addr;
 use super::ip::v6::Ipv6Packet;
 use super::ip::v6::Ipv6Ref;
-use super::ip::L3Repr;
-use super::ip::L3;
 use super::parse::NoEncap;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
@@ -40,15 +43,12 @@ use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
-use super::Direction;
-use super::LightweightMeta;
-use super::NetworkParser;
 use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
-use crate::engine::geneve::valid_geneve_has_oxide_external;
 use crate::engine::geneve::GeneveMeta;
+use crate::engine::geneve::valid_geneve_has_oxide_external;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -1243,11 +1243,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T: Pullup,
     {
         let out = self.state.meta.body();
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     #[inline]
@@ -1257,11 +1253,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T: Pullup,
     {
         let out = self.state.meta.body_mut();
-        if out.is_empty() {
-            None
-        } else {
-            Some(out)
-        }
+        if out.is_empty() { None } else { Some(out) }
     }
 
     #[inline]
@@ -1860,6 +1852,7 @@ impl<T> Memoised<T> {
 mod test {
     use super::*;
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::GenericUlp;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
@@ -1867,7 +1860,6 @@ mod test {
     use crate::engine::ip::v6::Ipv6;
     use crate::engine::ip::v6::Ipv6Ref;
     use crate::engine::packet::Packet;
-    use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;
@@ -2019,8 +2011,8 @@ mod test {
     // Verify that we correctly parse an IPv6 packet with extension headers
     #[test]
     fn parse_ipv6_extension_headers_ok() {
-        use crate::engine::ip::v6::test::generate_test_packet;
         use crate::engine::ip::v6::test::SUPPORTED_EXTENSIONS;
+        use crate::engine::ip::v6::test::generate_test_packet;
         use itertools::Itertools;
         use smoltcp::wire::IpProtocol;
         for n_extensions in 0..SUPPORTED_EXTENSIONS.len() {

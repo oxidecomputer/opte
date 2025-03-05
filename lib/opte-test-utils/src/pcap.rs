@@ -7,11 +7,11 @@
 //! Routines for building packet capture files.
 
 use opte::ddi::mblk::MsgBlk;
+use pcap_parser::Linktype;
+use pcap_parser::ToVec;
 use pcap_parser::pcap;
 use pcap_parser::pcap::LegacyPcapBlock;
 use pcap_parser::pcap::PcapHeader;
-use pcap_parser::Linktype;
-use pcap_parser::ToVec;
 use std::fs::File;
 use std::io::Write;
 

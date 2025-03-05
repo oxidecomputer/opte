@@ -2,15 +2,15 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use crate::ip;
 use crate::sys;
-use crate::xde::xde_underlay_port;
 use crate::xde::DropRef;
 use crate::xde::XdeDev;
-use alloc::collections::btree_map::Entry;
+use crate::xde::xde_underlay_port;
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::sync::Arc;
 use core::ffi::CStr;
 use core::ptr;
@@ -37,7 +37,7 @@ const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 /// Maximum cache size, set to prevent excessive map modification latency.
 const MAX_CACHE_ENTRIES: usize = 512;
 
-extern "C" {
+unsafe extern "C" {
     pub fn __dtrace_probe_next__hop(
         dst: uintptr_t,
         gw: uintptr_t,
@@ -281,7 +281,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // the flow of the network based on precise latency measurements and
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn next_hop<'a>(
     key: &RouteKey,
     ustate: &'a XdeDev,

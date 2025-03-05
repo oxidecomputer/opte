@@ -3,7 +3,7 @@
 #: name = "opte-xde"
 #: variety = "basic"
 #: target = "helios-2.0"
-#: rust_toolchain = "nightly-2024-11-18"
+#: rust_toolchain = true
 #: output_rules = [
 #:   "=/work/debug/xde.dbg",
 #:   "=/work/debug/xde.dbg.sha256",
@@ -31,6 +31,8 @@ set -o errexit
 set -o pipefail
 set -o xtrace
 
+source .github/buildomat/common.sh
+
 #
 # TGT_BASE allows one to run this more easily in their local
 # environment:
@@ -49,22 +51,6 @@ REL_TGT=$TGT_BASE/release
 
 mkdir -p $DBG_TGT $REL_TGT
 
-function header {
-	echo "# ==== $* ==== #"
-}
-
-function install_pkg {
-    set +o errexit
-    pfexec pkg install $1
-    exit_code=$?
-    # 4 is the exit code returned from pkg when the package is already installed
-    if [[ $exit_code -ne 0 ]] && [[ $exit_code -ne 4 ]]; then
-        echo "package install failed for $1"
-        exit 1
-    fi
-    set -o errexit
-}
-
 cargo --version
 rustc --version
 
@@ -75,7 +61,7 @@ pushd xde
 cp xde.conf /work/xde.conf
 
 header "check style"
-ptime -m cargo +nightly-2024-11-18 fmt -p xde -p xde-link -- --check
+ptime -m cargo +$NIGHTLY fmt -p xde -p xde-link -- --check
 
 header "analyze"
 ptime -m cargo clippy -- \
@@ -123,7 +109,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 
 header "build xde integration tests"
 pushd xde-tests
-cargo +nightly-2024-11-18 fmt -- --check
+cargo +$NIGHTLY fmt -- --check
 cargo clippy --all-targets
 cargo build --test loopback
 loopback_test=$(

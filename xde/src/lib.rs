@@ -31,14 +31,14 @@ use alloc::ffi::CString;
 use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
 use core::panic::PanicInfo;
+use illumos_sys_hdrs::CE_WARN;
+use illumos_sys_hdrs::KM_SLEEP;
 use illumos_sys_hdrs::c_void;
 use illumos_sys_hdrs::cmn_err;
 use illumos_sys_hdrs::kmem_alloc;
 use illumos_sys_hdrs::kmem_free;
 use illumos_sys_hdrs::panic;
 use illumos_sys_hdrs::size_t;
-use illumos_sys_hdrs::CE_WARN;
-use illumos_sys_hdrs::KM_SLEEP;
 
 pub mod dev_map;
 pub mod dls;
@@ -74,11 +74,11 @@ unsafe impl GlobalAlloc for KmemAlloc {
         if layout.align() > 8 {
             panic!("kernel alloc greater than 8-byte alignment");
         }
-        kmem_alloc(layout.size(), KM_SLEEP) as *mut u8
+        unsafe { kmem_alloc(layout.size(), KM_SLEEP) as *mut u8 }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        kmem_free(ptr as *mut c_void, layout.size() as size_t)
+        unsafe { kmem_free(ptr as *mut c_void, layout.size() as size_t) }
     }
 }
 
@@ -108,7 +108,7 @@ static A: KmemAlloc = KmemAlloc;
 //
 // https://github.com/rust-lang/rust/issues/47493
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn _Unwind_Resume() -> ! {
     panic!("_Unwind_Resume called");
 }

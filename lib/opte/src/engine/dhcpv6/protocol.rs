@@ -9,6 +9,12 @@
 use super::Dhcpv6Action;
 use super::TransactionId;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
+use crate::engine::dhcpv6::ALL_SERVERS;
+use crate::engine::dhcpv6::CLIENT_PORT;
+use crate::engine::dhcpv6::Duid;
+use crate::engine::dhcpv6::Lifetime;
+use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::dhcpv6::options::Code as OptionCode;
 use crate::engine::dhcpv6::options::IaAddr;
 use crate::engine::dhcpv6::options::IaNa;
@@ -16,12 +22,6 @@ use crate::engine::dhcpv6::options::IpList;
 use crate::engine::dhcpv6::options::Option as Dhcpv6Option;
 use crate::engine::dhcpv6::options::Status;
 use crate::engine::dhcpv6::options::StatusCode;
-use crate::engine::dhcpv6::Duid;
-use crate::engine::dhcpv6::Lifetime;
-use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
-use crate::engine::dhcpv6::ALL_SERVERS;
-use crate::engine::dhcpv6::CLIENT_PORT;
-use crate::engine::dhcpv6::SERVER_PORT;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
@@ -684,17 +684,17 @@ impl HairpinAction for Dhcpv6Action {
 
 #[cfg(test)]
 mod test {
-    use super::dhcpv6_server_predicates;
     use super::Dhcpv6Option;
     use super::MacAddr;
     use super::Message;
     use super::MessageType;
     use super::OptionCode;
+    use super::dhcpv6_server_predicates;
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::GenericUlp;
     use crate::engine::dhcpv6::test_data;
     use crate::engine::packet::Packet;
     use crate::engine::port::meta::ActionMeta;
-    use crate::engine::GenericUlp;
 
     // Test that we correctly parse out the entire Solicit message from a
     // snooped packet.

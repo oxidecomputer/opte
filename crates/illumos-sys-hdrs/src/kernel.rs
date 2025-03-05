@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -80,7 +80,7 @@ impl krw_t {
     pub const RW_READER_STARVEWRITER: Self = Self(2);
 }
 
-extern "C" {
+unsafe extern "C" {
     type module_info;
     type module_stat;
     type struiod_t;
@@ -241,63 +241,63 @@ unsafe impl Sync for dev_ops {}
 // just assign generic callbacks like `nulldev()` to these structure
 // members once we are in Rust. We define wrapper functions with the
 // correct function signatures in order to bridge the gap.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_identify(_dip: *mut dev_info) -> c_int {
-    nulldev()
+    unsafe { nulldev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_probe(_dip: *mut dev_info) -> c_int {
-    nulldev()
+    unsafe { nulldev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_open(
     _devp: *mut dev_t,
     _flags: c_int,
     _otype: c_int,
     _credp: *mut cred_t,
 ) -> c_int {
-    nulldev()
+    unsafe { nulldev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nulldev_close(
     _dev: dev_t,
     _flags: c_int,
     _otype: c_int,
     _credp: *mut cred_t,
 ) -> c_int {
-    nulldev()
+    unsafe { nulldev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nodev_reset(
     _dip: *mut dev_info,
     _cmd: ddi_reset_cmd_t,
 ) -> c_int {
-    nodev()
+    unsafe { nodev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nodev_power(
     _dip: *mut dev_info,
     _component: c_int,
     _level: c_int,
 ) -> c_int {
-    nodev()
+    unsafe { nodev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nodev_read(
     _dev: dev_t,
     _uiop: *mut uio,
     _credp: *mut cred_t,
 ) -> c_int {
-    nodev()
+    unsafe { nodev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nodev_ioctl(
     _dev: dev_t,
     _cmd: c_int,
@@ -306,16 +306,16 @@ pub unsafe extern "C" fn nodev_ioctl(
     _credp: *mut cred_t,
     _rvalp: *mut c_int,
 ) -> c_int {
-    nodev()
+    unsafe { nodev() }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nodev_write(
     _dev: dev_t,
     _uiop: *mut uio,
     _credp: *mut cred_t,
 ) -> c_int {
-    nodev()
+    unsafe { nodev() }
 }
 
 #[repr(C)]
@@ -401,7 +401,7 @@ pub struct mod_ops {
     modm_info: unsafe extern "C" fn() -> c_int,
 }
 
-extern "C" {
+unsafe extern "C" {
     // DDI/DKI types
     pub type bus_ops;
 

@@ -2,27 +2,27 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use anyhow::Context;
 use clap::Args;
 use clap::Parser;
+use opte::api::API_VERSION;
 use opte::api::Direction;
 use opte::api::DomainName;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
+use opte::api::MAJOR_VERSION;
 use opte::api::MacAddr;
 use opte::api::Vni;
-use opte::api::API_VERSION;
-use opte::api::MAJOR_VERSION;
 use opte::engine::print::print_layer;
 use opte::engine::print::print_list_layers;
 use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
-use opteadm::OpteAdm;
 use opteadm::COMMIT_COUNT;
+use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -852,8 +852,13 @@ fn main() -> anyhow::Result<()> {
                 remove_cidr(Direction::In)
                     .context("failed to deny on inbound direction")?;
                 remove_cidr(Direction::Out).inspect_err(|e| {
-                    hdl.allow_cidr(&port, prefix, Direction::In).unwrap_or_else(|_| panic!("FATAL: failed to rollback in-direction remove \
-                                of {prefix} after {e}"));
+                    hdl.allow_cidr(&port, prefix, Direction::In)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "FATAL: failed to rollback in-direction remove \
+                                of {prefix} after {e}"
+                            )
+                        });
                 })?;
             }
         }
