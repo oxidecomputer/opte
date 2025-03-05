@@ -2,11 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! A virtual switch port.
 
 use self::meta::ActionMeta;
+use super::HdlPktAction;
+use super::LightweightMeta;
+use super::NetworkImpl;
 use super::ether::Ethernet;
 use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
@@ -21,9 +24,9 @@ use super::ioctl;
 use super::ioctl::TcpFlowEntryDump;
 use super::ioctl::TcpFlowStateDump;
 use super::ioctl::UftEntryDump;
+use super::ip::L3Repr;
 use super::ip::v4::Ipv4;
 use super::ip::v6::Ipv6;
-use super::ip::L3Repr;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
@@ -32,6 +35,7 @@ use super::layer::LayerStatsSnap;
 use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
+use super::packet::FLOW_ID_DEFAULT;
 use super::packet::FullParsed;
 use super::packet::InnerFlowId;
 use super::packet::LiteParsed;
@@ -39,21 +43,18 @@ use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
 use super::packet::Pullup;
-use super::packet::FLOW_ID_DEFAULT;
 use super::rule::Action;
 use super::rule::CompiledTransform;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
-use super::tcp::TcpState;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
+use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
-use super::HdlPktAction;
-use super::LightweightMeta;
-use super::NetworkImpl;
+use crate::ExecCtx;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -69,7 +70,6 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
-use crate::ExecCtx;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -930,15 +930,13 @@ impl<N: NetworkImpl> Port<N> {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let msg_arg = CString::new(msg).unwrap();
 
-                unsafe {
-                    __dtrace_probe_tcp__err(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        flow,
-                        mblk_addr,
-                        msg_arg.as_ptr() as uintptr_t,
-                    );
-                }
+                __dtrace_probe_tcp__err(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    flow,
+                    mblk_addr,
+                    msg_arg.as_ptr() as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let flow_s = flow.to_string();
                 crate::opte_provider::tcp__err!(
@@ -1982,15 +1980,13 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_port__process__entry(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        flow,
-                        epoch as uintptr_t,
-                        mblk_addr,
-                    );
-                }
+                __dtrace_probe_port__process__entry(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    flow,
+                    epoch as uintptr_t,
+                    mblk_addr,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let flow_s = flow.to_string();
                 crate::opte_provider::port__process__entry!(
@@ -2052,18 +2048,18 @@ impl<N: NetworkImpl> Port<N> {
                     if let Some(extra_cstr) = extra_cstr {
                         let _ = eb.append_name_raw(extra_cstr);
                     }
-                    __dtrace_probe_port__process__return(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        flow_before,
-                        flow_after,
-                        epoch as uintptr_t,
-                        mblk_addr,
-                        hp_pkt_ptr,
-                        eb.as_ptr(),
-                        path as uintptr_t,
-                    );
                 }
+                __dtrace_probe_port__process__return(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    flow_before,
+                    flow_after,
+                    epoch as uintptr_t,
+                    mblk_addr,
+                    hp_pkt_ptr,
+                    eb.as_ptr(),
+                    path as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
@@ -2300,11 +2296,11 @@ impl<N: NetworkImpl> Port<N> {
             Ok(LayerResult::Deny { name, reason }) => {
                 return Ok(InternalProcessResult::Drop {
                     reason: DropReason::Layer { name, reason },
-                })
+                });
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                return Ok(InternalProcessResult::Hairpin(hppkt))
+                return Ok(InternalProcessResult::Hairpin(hppkt));
             }
 
             Ok(LayerResult::HandlePkt) => {
@@ -2428,15 +2424,13 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_uft__hit(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        ufid,
-                        epoch as uintptr_t,
-                        last_hit.raw_millis() as usize
-                    );
-                }
+                __dtrace_probe_uft__hit(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    ufid,
+                    epoch as uintptr_t,
+                    last_hit.raw_millis() as usize
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.name_cstr.to_str().unwrap();
                 let ufid_s = ufid.to_string();
@@ -2507,7 +2501,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
 
                 // Continue with processing.
-                Ok(TcpMaybeClosed::NewState (_, flow)) => Some(flow),
+                Ok(TcpMaybeClosed::NewState(_, flow)) => Some(flow),
 
                 // Unlike for existing flows, we don't allow through
                 // unexpected packets here for now -- the `TcpState` FSM
@@ -2614,14 +2608,12 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_uft__invalidate(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        ufid,
-                        epoch as uintptr_t,
-                    );
-                }
+                __dtrace_probe_uft__invalidate(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    ufid,
+                    epoch as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.name_cstr.to_str().unwrap();
                 let ufid_s = ufid.to_string();
@@ -2651,13 +2643,11 @@ impl<N: NetworkImpl> Port<N> {
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_uft__tcp__closed(
-                        dir as uintptr_t,
-                        self.name_cstr.as_ptr() as uintptr_t,
-                        ufid,
-                    );
-                }
+                __dtrace_probe_uft__tcp__closed(
+                    dir as uintptr_t,
+                    self.name_cstr.as_ptr() as uintptr_t,
+                    ufid,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.name_cstr.to_str().unwrap();
                 let ufid_s = ufid.to_string();
@@ -2890,11 +2880,11 @@ impl TcpFlowEntryState {
     ) -> result::Result<TcpState, TcpFlowStateError> {
         let mut tfes = self.inner.lock();
         match dir {
-            Direction::In { .. } => {
+            Direction::In => {
                 tfes.segs_in += 1;
                 tfes.bytes_in += pkt_len;
             }
-            Direction::Out { .. } => {
+            Direction::Out => {
                 tfes.segs_out += 1;
                 tfes.bytes_out += pkt_len;
             }
@@ -2993,15 +2983,15 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_port__process__entry(
+unsafe extern "C" {
+    pub safe fn __dtrace_probe_port__process__entry(
         dir: uintptr_t,
         port: uintptr_t,
         ifid: *const InnerFlowId,
         epoch: uintptr_t,
         pkt: uintptr_t,
     );
-    pub fn __dtrace_probe_port__process__return(
+    pub safe fn __dtrace_probe_port__process__return(
         dir: uintptr_t,
         port: uintptr_t,
         flow_before: *const InnerFlowId,
@@ -3012,27 +3002,27 @@ extern "C" {
         err_b: *const LabelBlock<2>,
         path: uintptr_t,
     );
-    pub fn __dtrace_probe_tcp__err(
+    pub safe fn __dtrace_probe_tcp__err(
         dir: uintptr_t,
         port: uintptr_t,
         ifid: *const InnerFlowId,
         pkt: uintptr_t,
         msg: uintptr_t,
     );
-    pub fn __dtrace_probe_uft__hit(
+    pub safe fn __dtrace_probe_uft__hit(
         dir: uintptr_t,
         port: uintptr_t,
         ifid: *const InnerFlowId,
         epoch: uintptr_t,
         last_hit: uintptr_t,
     );
-    pub fn __dtrace_probe_uft__invalidate(
+    pub safe fn __dtrace_probe_uft__invalidate(
         dir: uintptr_t,
         port: uintptr_t,
         ifid: *const InnerFlowId,
         epoch: uintptr_t,
     );
-    pub fn __dtrace_probe_uft__tcp__closed(
+    pub safe fn __dtrace_probe_uft__tcp__closed(
         dir: uintptr_t,
         port: uintptr_t,
         ifid: *const InnerFlowId,

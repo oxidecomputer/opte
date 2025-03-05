@@ -1093,7 +1093,7 @@ impl FromStr for Ipv6Cidr {
         let ip = match ip_s.parse::<smoltcp::wire::Ipv6Address>() {
             Ok(v) => v.into(),
             Err(_) => {
-                return Err(format!("Bad IP address component: '{}'", ip_s))
+                return Err(format!("Bad IP address component: '{}'", ip_s));
             }
         };
 

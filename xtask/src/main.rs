@@ -187,7 +187,9 @@ fn elevate(operation: &str, extra_args: &[&str]) -> Result<bool> {
     match std::str::from_utf8(&curr_user_run.stdout) {
         Ok("root\n") => Ok(true),
         Ok(_) => {
-            print!("Command requires admin privileges to {operation}. Continue? [yY] ");
+            print!(
+                "Command requires admin privileges to {operation}. Continue? [yY] "
+            );
             std::io::stdout().flush()?;
 
             let mut resp = String::new();

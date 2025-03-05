@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -22,11 +22,11 @@ use super::headers::IpPush;
 use super::headers::Transform;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
-use super::ip::v4::Ipv4Mut;
-use super::ip::v6::v6_set_next_header;
-use super::ip::v6::Ipv6Mut;
-use super::ip::ValidL3;
 use super::ip::L3;
+use super::ip::ValidL3;
+use super::ip::v4::Ipv4Mut;
+use super::ip::v6::Ipv6Mut;
+use super::ip::v6::v6_set_next_header;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
@@ -113,7 +113,7 @@ pub trait FiniteResource: Resource {
     /// Return an error if no entry can be mapped to this key or if
     /// the resource is exhausted.
     fn obtain_raw(&self, key: &Self::Key)
-        -> Result<Self::Entry, ResourceError>;
+    -> Result<Self::Entry, ResourceError>;
 
     /// Obtain a smart handle to an entry given the key.
     ///
@@ -452,7 +452,7 @@ impl CompiledEncap {
     #[inline]
     pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> MsgBlk {
         let Self::Push {
-            ref bytes,
+            bytes,
             l3_len_offset,
             l3_extra_bytes,
             l4_len_offset,
@@ -507,8 +507,8 @@ impl CompiledEncap {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_ht__run(arg: uintptr_t);
+unsafe extern "C" {
+    pub safe fn __dtrace_probe_ht__run(arg: uintptr_t);
 }
 
 #[repr(C)]
@@ -537,11 +537,9 @@ pub fn ht_probe(
                 flow_id_after,
             };
 
-            unsafe {
-                __dtrace_probe_ht__run(
-                    &arg as *const ht_run_sdt_arg as uintptr_t
-                );
-            }
+            __dtrace_probe_ht__run(
+                &arg as *const ht_run_sdt_arg as uintptr_t
+            );
         } else if #[cfg(feature = "usdt")] {
             let port_s = port.to_str().unwrap();
             let loc_c = loc.to_str().unwrap();
@@ -1112,11 +1110,11 @@ impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
 
 #[test]
 fn rule_matching() {
+    use crate::engine::GenericUlp;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Mut;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
-    use crate::engine::GenericUlp;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;

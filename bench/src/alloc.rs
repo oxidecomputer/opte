@@ -2,16 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Counting allocator used to track bytes allocated and the discrete
 //! number of allocations made during benchmark cases, with `criterion`
 //! integration.
 
 use super::MeasurementInfo;
+use criterion::Criterion;
 use criterion::measurement::Measurement;
 use criterion::measurement::ValueFormatter;
-use criterion::Criterion;
 use std::alloc::GlobalAlloc;
 use std::alloc::Layout;
 use std::alloc::System;
@@ -50,7 +50,7 @@ unsafe impl GlobalAlloc for TrackedAlloc {
         self.alloc_byte_count
             .fetch_add(layout.size() as u64, Ordering::Relaxed);
 
-        self.inner.alloc(layout)
+        unsafe { self.inner.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -58,7 +58,9 @@ unsafe impl GlobalAlloc for TrackedAlloc {
         self.dealloc_byte_count
             .fetch_add(layout.size() as u64, Ordering::Relaxed);
 
-        self.inner.dealloc(ptr, layout);
+        unsafe {
+            self.inner.dealloc(ptr, layout);
+        }
     }
 }
 

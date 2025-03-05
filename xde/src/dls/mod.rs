@@ -8,19 +8,19 @@
 
 pub mod sys;
 
-use crate::mac::mac_client_handle;
+use crate::mac::MAC_DROP_ON_NO_DESC;
 use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
-use crate::mac::MAC_DROP_ON_NO_DESC;
+use crate::mac::mac_client_handle;
 use core::ffi::CStr;
 use core::fmt::Display;
 use core::ptr;
 use core::ptr::NonNull;
+use illumos_sys_hdrs::ENOENT;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
 use illumos_sys_hdrs::uintptr_t;
-use illumos_sys_hdrs::ENOENT;
 use opte::ddi::mblk::MsgBlk;
 pub use sys::*;
 
@@ -105,8 +105,11 @@ impl DlsLink {
     fn release(mut self, mph: &MacPerimeterHandle) {
         if let Some(inner) = self.inner.take() {
             if mph.link_id() != self.link {
-                panic!("Tried to free link hold with the wrong MAC perimeter: saw {:?}, wanted {:?}",
-                    mph.link_id(), self.link);
+                panic!(
+                    "Tried to free link hold with the wrong MAC perimeter: saw {:?}, wanted {:?}",
+                    mph.link_id(),
+                    self.link
+                );
             }
             unsafe {
                 dls_link_rele(inner.dlp);
@@ -125,8 +128,11 @@ impl DlsLink {
         };
 
         if mph.link_id() != self.link {
-            panic!("Tried to open stream with the wrong MAC perimeter: saw {:?}, wanted {:?}",
-                mph.link_id(), self.link);
+            panic!(
+                "Tried to open stream with the wrong MAC perimeter: saw {:?}, wanted {:?}",
+                mph.link_id(),
+                self.link
+            );
         }
 
         // NOTE: this is a stlouis-only way to create a dld_str_t. It

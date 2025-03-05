@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Moments, periodics, etc.
 use core::ops::Add;
@@ -191,7 +191,7 @@ impl<T: 'static> PeriodicCtx<T> {
 #[cfg(all(not(feature = "std"), not(test)))]
 pub unsafe extern "C" fn _periodic_cb<T: 'static>(arg: *mut ddi::c_void) {
     assert!(!arg.is_null());
-    let ctx = &mut *(arg as *mut PeriodicCtx<T>);
+    let ctx = unsafe { &mut *(arg as *mut PeriodicCtx<T>) };
     ctx.call();
 }
 
