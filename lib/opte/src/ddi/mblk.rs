@@ -27,9 +27,6 @@ use illumos_sys_hdrs as ddi;
 use illumos_sys_hdrs::c_uchar;
 #[cfg(any(feature = "std", test))]
 use illumos_sys_hdrs::dblk_t;
-#[cfg(all(not(feature = "std"), not(test)))]
-use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
-use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;

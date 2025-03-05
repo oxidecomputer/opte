@@ -2,13 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
-
-use core::ffi::c_int;
+// Copyright 2025 Oxide Computer Company
 
 #[cfg(feature = "kernel")]
 use crate::mblk_t;
 use bitflags::bitflags;
+#[cfg(feature = "kernel")]
+use core::ffi::c_int;
 
 // ======================================================================
 // uts/common/sys/mac_provider.h
@@ -60,7 +60,7 @@ pub struct mac_ether_offload_info_t {
 }
 
 #[cfg(feature = "kernel")]
-extern "C" {
+unsafe extern "C" {
     pub fn lso_info_set(mp: *mut mblk_t, mss: u32, flags: u32);
     pub fn lso_info_cleanup(mp: *mut mblk_t);
     pub fn mac_hcksum_set(

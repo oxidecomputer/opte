@@ -6,7 +6,6 @@
 
 //! A virtual switch port.
 
-use self::meta::ActionMeta;
 use super::HdlPktAction;
 use super::LightweightMeta;
 use super::NetworkImpl;

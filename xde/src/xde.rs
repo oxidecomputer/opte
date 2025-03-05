@@ -25,7 +25,6 @@ use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
 use crate::mac::TcpLsoFlags;
 use crate::mac::TunnelCsoFlags;
-use crate::mac::TunnelTcpLsoFlags;
 use crate::mac::TunnelType;
 use crate::mac::cso_tunnel_t;
 use crate::mac::lso_basic_tcp_ipv4_t;
@@ -319,20 +318,6 @@ impl OffloadInfo {
         }
 
         out
-    }
-
-    fn should_request_lso(&self) -> bool {
-        self.lso_state.lso_flags.contains(TcpLsoFlags::TUNNEL_TCP)
-            && self
-                .lso_state
-                .lso_tunnel_tcp
-                .tun_types
-                .contains(TunnelType::GENEVE)
-    }
-
-    fn should_request_cso(&self) -> bool {
-        self.cso_state.cso_flags.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
-            && self.cso_state.cso_tunnel.ct_types.contains(TunnelType::GENEVE)
     }
 }
 
@@ -1663,7 +1648,7 @@ fn guest_loopback(
             // destination Port.
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
-                    let mut pkt = emit_spec.apply(pkt);
+                    let pkt = emit_spec.apply(pkt);
 
                     // Having advertised offloads to our guest, looped back
                     // packets are liable to have zero-checksums. Fill these
@@ -2050,16 +2035,12 @@ unsafe extern "C" fn xde_mc_getcapab(
             // capab data is a *mut u32 (enum).
             let capab = capb_data as *mut mac_capab_cso_t;
 
-            opte::engine::err!("I see base as {:?}", &shared_underlay_caps);
-
             let desired_capabs = shared_underlay_caps.upstream_csum();
             unsafe {
                 // Don't write the newer capabs -- don't want to corrupt
                 // memory on older illumos and/or CI.
                 (*capab).cso_flags = desired_capabs.cso_flags;
             }
-
-            opte::engine::err!("Adverising CSO {:?}", &desired_capabs);
 
             // FORCE
             unsafe {
@@ -2078,9 +2059,6 @@ unsafe extern "C" fn xde_mc_getcapab(
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
             let desired_lso = shared_underlay_caps.upstream_lso();
-
-            opte::engine::err!("I see base as {:?}", &shared_underlay_caps);
-            opte::engine::err!("Adverising LSO {:?}", &desired_lso);
 
             // FORCE
             let desired_lso = mac_capab_lso_t {
