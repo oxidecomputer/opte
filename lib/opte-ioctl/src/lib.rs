@@ -378,12 +378,10 @@ unsafe fn ioctl<T>(
     req: libc::c_int,
     arg: *mut T,
 ) -> libc::c_int {
-    unsafe {
-        // Most other OSes define the request argument to be ulong_t rather than int
-        // Cast that away here so that it compiles in both places
-        #[cfg(not(target_os = "illumos"))]
-        let req = req as libc::c_ulong;
+    // Most other OSes define the request argument to be ulong_t rather than int
+    // Cast that away here so that it compiles in both places
+    #[cfg(not(target_os = "illumos"))]
+    let req = req as libc::c_ulong;
 
-        libc::ioctl(fd, req, arg)
-    }
+    unsafe { libc::ioctl(fd, req, arg) }
 }

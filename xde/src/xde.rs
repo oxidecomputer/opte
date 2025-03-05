@@ -1566,8 +1566,7 @@ unsafe extern "C" fn xde_mc_tx(
     unsafe {
         __dtrace_probe_tx(mp_chain as uintptr_t);
     }
-    let chain = unsafe { MsgBlkChain::new(mp_chain) };
-    let Ok(mut chain) = chain else {
+    let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
             Some(src_dev.port.name_cstr()),
             Direction::Out,
@@ -1876,8 +1875,7 @@ unsafe extern "C" fn xde_rx(
         Arc::from_raw(mch_ptr)
     };
 
-    let chain = unsafe { MsgBlkChain::new(mp_chain) };
-    let Ok(mut chain) = chain else {
+    let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
             None,
             Direction::Out,

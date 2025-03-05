@@ -1050,7 +1050,7 @@ fn _encap(
 /// the port state is printed on failure.
 #[macro_export]
 macro_rules! chk {
-    ($pav:expr_2021, $check:expr_2021) => {
+    ($pav:expr, $check:expr) => {
         if !$check {
             print_port(&$pav.port, &$pav.vpc_map).unwrap();
             panic!("assertion failed: {}", stringify!($check));
@@ -1060,7 +1060,7 @@ macro_rules! chk {
 
 #[macro_export]
 macro_rules! assert_drop {
-    ($res:expr_2021, $expected:expr_2021) => {
+    ($res:expr, $expected:expr) => {
         match &$res {
             Ok(ProcessResult::Drop { reason }) => match (reason, &$expected) {
                 (

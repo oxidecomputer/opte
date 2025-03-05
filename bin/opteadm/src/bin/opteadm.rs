@@ -788,37 +788,33 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::SetExternalIps { port, external_net } => {
-            match ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone()) {
-                Ok(cfg) => {
-                    let req = SetExternalIpsReq {
-                        port_name: port,
-                        external_ips_v4: Some(cfg),
-                        external_ips_v6: None,
-                        // TODO: It'd be nice to have this user-specifiable via
-                        //       opteadm, but for now it's a purely control-plane
-                        //       concept.
-                        inet_gw_map: None,
-                    };
-                    hdl.set_external_ips(&req)?;
-                }
-                _ => {
-                    match ExternalIpCfg::<Ipv6Addr>::try_from(external_net) {
-                        Ok(cfg) => {
-                            let req = SetExternalIpsReq {
-                                port_name: port,
-                                external_ips_v6: Some(cfg),
-                                external_ips_v4: None,
-                                // TODO: As above.
-                                inet_gw_map: None,
-                            };
-                            hdl.set_external_ips(&req)?;
-                        }
-                        _ => {
-                            // TODO: show *actual* parse failure.
-                            anyhow::bail!("expected IPv4 *or* IPv6 config.");
-                        }
-                    }
-                }
+            if let Ok(cfg) =
+                ExternalIpCfg::<Ipv4Addr>::try_from(external_net.clone())
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v4: Some(cfg),
+                    external_ips_v6: None,
+                    // TODO: It'd be nice to have this user-specifiable via
+                    //       opteadm, but for now it's a purely control-plane
+                    //       concept.
+                    inet_gw_map: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else if let Ok(cfg) =
+                ExternalIpCfg::<Ipv6Addr>::try_from(external_net)
+            {
+                let req = SetExternalIpsReq {
+                    port_name: port,
+                    external_ips_v6: Some(cfg),
+                    external_ips_v4: None,
+                    // TODO: As above.
+                    inet_gw_map: None,
+                };
+                hdl.set_external_ips(&req)?;
+            } else {
+                // TODO: show *actual* parse failure.
+                anyhow::bail!("expected IPv4 *or* IPv6 config.");
             }
         }
 

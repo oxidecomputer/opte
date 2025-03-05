@@ -130,17 +130,14 @@ pub fn derive_derror(
         child_arms.push(child_block);
     }
 
-    let leaf_data_impl = match parsed_args.leaf_data {
-        Some(data_fn) => {
-            quote! {
-                fn leaf_data(&self, data: &mut [u64]) {
-                    #data_fn(self, data);
-                }
+    let leaf_data_impl = if let Some(data_fn) = parsed_args.leaf_data {
+        quote! {
+            fn leaf_data(&self, data: &mut [u64]) {
+                #data_fn(self, data);
             }
         }
-        _ => {
-            quote! {}
-        }
+    } else {
+        quote! {}
     };
 
     quote! {
