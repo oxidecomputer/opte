@@ -576,15 +576,13 @@ impl Layer {
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-                unsafe {
-                    __dtrace_probe_gen__desc__fail(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir_c.as_ptr() as uintptr_t,
-                        flow,
-                        msg_c.as_ptr() as uintptr_t,
-                    );
-                }
+                __dtrace_probe_gen__desc__fail(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir_c.as_ptr() as uintptr_t,
+                    flow,
+                    msg_c.as_ptr() as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let name_s = self.name_c.to_str().unwrap();
@@ -611,15 +609,13 @@ impl Layer {
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-                unsafe {
-                    __dtrace_probe_gen__ht__fail(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir_c.as_ptr() as uintptr_t,
-                        flow,
-                        msg_c.as_ptr() as uintptr_t,
-                    );
-                }
+                __dtrace_probe_gen__ht__fail(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir_c.as_ptr() as uintptr_t,
+                    flow,
+                    msg_c.as_ptr() as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow.to_string();
@@ -648,14 +644,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_layer__process__entry(
-                        dir as uintptr_t,
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        ifid,
-                    );
-                }
+                __dtrace_probe_layer__process__entry(
+                    dir as uintptr_t,
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    ifid,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let ifid_s = ifid.to_string();
@@ -706,15 +700,15 @@ impl Layer {
                     if let Some(extra_cstr) = extra_cstr {
                         let _ = eb.append_name_raw(extra_cstr);
                     }
-                    __dtrace_probe_layer__process__return(
-                        dir as uintptr_t,
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        flow_before,
-                        flow_after,
-                        eb.as_ptr(),
-                    );
                 }
+                __dtrace_probe_layer__process__return(
+                    dir as uintptr_t,
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    flow_before,
+                    flow_after,
+                    eb.as_ptr(),
+                );
                 drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
@@ -1454,14 +1448,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_rule__deny(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir as uintptr_t,
-                        flow_id,
-                    );
-                }
+                __dtrace_probe_rule__deny(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir as uintptr_t,
+                    flow_id,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow_id.to_string();
@@ -1696,11 +1688,9 @@ impl RuleTable {
                     flow_id,
                 };
 
-                unsafe {
-                    __dtrace_probe_rule__no__match(
-                        &arg as *const rule_no_match_sdt_arg as uintptr_t,
-                    );
-                }
+                __dtrace_probe_rule__no__match(
+                    &arg as *const rule_no_match_sdt_arg as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = port.to_str().unwrap();
                 let layer_s = layer.to_str().unwrap();
@@ -1733,11 +1723,9 @@ impl RuleTable {
                     rule_type: action_str_c.as_ptr(),
                 };
 
-                unsafe {
-                    __dtrace_probe_rule__match(
-                        &arg as *const rule_match_sdt_arg as uintptr_t,
-                    );
-                }
+                __dtrace_probe_rule__match(
+                    &arg as *const rule_match_sdt_arg as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = port.to_str().unwrap();
                 let layer_s = layer.to_str().unwrap();
@@ -1763,7 +1751,7 @@ impl RuleTable {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 unsafe extern "C" {
-    pub fn __dtrace_probe_gen__desc__fail(
+    pub safe fn __dtrace_probe_gen__desc__fail(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
@@ -1771,7 +1759,7 @@ unsafe extern "C" {
         msg: uintptr_t,
     );
 
-    pub fn __dtrace_probe_gen__ht__fail(
+    pub safe fn __dtrace_probe_gen__ht__fail(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
@@ -1779,13 +1767,13 @@ unsafe extern "C" {
         msg: uintptr_t,
     );
 
-    pub fn __dtrace_probe_layer__process__entry(
+    pub safe fn __dtrace_probe_layer__process__entry(
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
         ifid: *const InnerFlowId,
     );
-    pub fn __dtrace_probe_layer__process__return(
+    pub safe fn __dtrace_probe_layer__process__return(
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
@@ -1794,10 +1782,10 @@ unsafe extern "C" {
         res: *const LabelBlock<2>,
     );
 
-    pub fn __dtrace_probe_rule__match(arg: uintptr_t);
-    pub fn __dtrace_probe_rule__no__match(arg: uintptr_t);
+    pub safe fn __dtrace_probe_rule__match(arg: uintptr_t);
+    pub safe fn __dtrace_probe_rule__no__match(arg: uintptr_t);
 
-    pub fn __dtrace_probe_rule__deny(
+    pub safe fn __dtrace_probe_rule__deny(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,

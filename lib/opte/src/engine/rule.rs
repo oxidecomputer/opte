@@ -529,7 +529,7 @@ impl CompiledEncap {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 unsafe extern "C" {
-    pub fn __dtrace_probe_ht__run(arg: uintptr_t);
+    pub safe fn __dtrace_probe_ht__run(arg: uintptr_t);
 }
 
 #[repr(C)]
@@ -558,11 +558,9 @@ pub fn ht_probe(
                 flow_id_after,
             };
 
-            unsafe {
-                __dtrace_probe_ht__run(
-                    &arg as *const ht_run_sdt_arg as uintptr_t
-                );
-            }
+            __dtrace_probe_ht__run(
+                &arg as *const ht_run_sdt_arg as uintptr_t
+            );
         } else if #[cfg(feature = "usdt")] {
             let port_s = port.to_str().unwrap();
             let loc_c = loc.to_str().unwrap();

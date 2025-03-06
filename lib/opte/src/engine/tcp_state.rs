@@ -591,15 +591,13 @@ impl TcpFlowState {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 let state = tcp_flow_state_sdt_arg::from(self);
 
-                unsafe {
-                    __dtrace_probe_tcp__flow__drop(
-                        port.as_ptr() as uintptr_t,
-                        flow_id,
-                        &state as *const tcp_flow_state_sdt_arg as uintptr_t,
-                        dir as uintptr_t,
-                        flags as uintptr_t,
-                    );
-                }
+                __dtrace_probe_tcp__flow__drop(
+                    port.as_ptr() as uintptr_t,
+                    flow_id,
+                    &state as *const tcp_flow_state_sdt_arg as uintptr_t,
+                    dir as uintptr_t,
+                    flags as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
@@ -627,14 +625,12 @@ impl TcpFlowState {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_tcp__flow__state(
-                        port.as_ptr() as uintptr_t,
-                        flow_id,
-                        self.tcp_state as uintptr_t,
-                        new_state as uintptr_t,
-                    );
-                }
+                __dtrace_probe_tcp__flow__state(
+                    port.as_ptr() as uintptr_t,
+                    flow_id,
+                    self.tcp_state as uintptr_t,
+                    new_state as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 use std::string::ToString;
 
@@ -679,14 +675,14 @@ impl From<&TcpFlowState> for tcp_flow_state_sdt_arg {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 unsafe extern "C" {
-    pub fn __dtrace_probe_tcp__flow__state(
+    pub safe fn __dtrace_probe_tcp__flow__state(
         port: uintptr_t,
         flow_id: *const InnerFlowId,
         prev_state: uintptr_t,
         curr_state: uintptr_t,
     );
 
-    pub fn __dtrace_probe_tcp__flow__drop(
+    pub safe fn __dtrace_probe_tcp__flow__drop(
         port: uintptr_t,
         flow_id: *const InnerFlowId,
         flow_state: uintptr_t,

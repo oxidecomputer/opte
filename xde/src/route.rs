@@ -38,7 +38,7 @@ const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 const MAX_CACHE_ENTRIES: usize = 512;
 
 unsafe extern "C" {
-    pub fn __dtrace_probe_next__hop(
+    pub safe fn __dtrace_probe_next__hop(
         dst: uintptr_t,
         gw: uintptr_t,
         gw_ether_src: uintptr_t,
@@ -46,31 +46,31 @@ unsafe extern "C" {
         msg: *const c_char,
     );
 
-    pub fn __dtrace_probe_routecache__full(
+    pub safe fn __dtrace_probe_routecache__full(
         cache: uintptr_t,
         dst: uintptr_t,
         entropy: uintptr_t,
     );
 
-    pub fn __dtrace_probe_routecache__hit(
+    pub safe fn __dtrace_probe_routecache__hit(
         cache: uintptr_t,
         dst: uintptr_t,
         entropy: uintptr_t,
     );
 
-    pub fn __dtrace_probe_routecache__insert(
+    pub safe fn __dtrace_probe_routecache__insert(
         cache: uintptr_t,
         dst: uintptr_t,
         entropy: uintptr_t,
     );
 
-    pub fn __dtrace_probe_routecache__refresh(
+    pub safe fn __dtrace_probe_routecache__refresh(
         cache: uintptr_t,
         dst: uintptr_t,
         entropy: uintptr_t,
     );
 
-    pub fn __dtrace_probe_routecache__delete(
+    pub safe fn __dtrace_probe_routecache__delete(
         cache: uintptr_t,
         dst: uintptr_t,
         entropy: uintptr_t,
@@ -86,65 +86,53 @@ fn next_hop_probe(
 ) {
     let gw_bytes = gw.unwrap_or(&Ipv6Addr::from([0u8; 16])).bytes();
 
-    unsafe {
-        __dtrace_probe_next__hop(
-            dst.bytes().as_ptr() as uintptr_t,
-            gw_bytes.as_ptr() as uintptr_t,
-            gw_eth_src.to_bytes().as_ptr() as uintptr_t,
-            gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
-            msg.as_ptr(),
-        );
-    }
+    __dtrace_probe_next__hop(
+        dst.bytes().as_ptr() as uintptr_t,
+        gw_bytes.as_ptr() as uintptr_t,
+        gw_eth_src.to_bytes().as_ptr() as uintptr_t,
+        gw_eth_dst.to_bytes().as_ptr() as uintptr_t,
+        msg.as_ptr(),
+    );
 }
 
 fn route_full_probe(map: uintptr_t, key: &RouteKey) {
-    unsafe {
-        __dtrace_probe_routecache__full(
-            map,
-            key.dst.as_ptr() as uintptr_t,
-            key.l4_hash.unwrap_or_default() as uintptr_t,
-        );
-    }
+    __dtrace_probe_routecache__full(
+        map,
+        key.dst.as_ptr() as uintptr_t,
+        key.l4_hash.unwrap_or_default() as uintptr_t,
+    );
 }
 
 fn route_hit_probe(map: uintptr_t, key: &RouteKey) {
-    unsafe {
-        __dtrace_probe_routecache__hit(
-            map,
-            key.dst.as_ptr() as uintptr_t,
-            key.l4_hash.unwrap_or_default() as uintptr_t,
-        );
-    }
+    __dtrace_probe_routecache__hit(
+        map,
+        key.dst.as_ptr() as uintptr_t,
+        key.l4_hash.unwrap_or_default() as uintptr_t,
+    );
 }
 
 fn route_insert_probe(map: uintptr_t, key: &RouteKey) {
-    unsafe {
-        __dtrace_probe_routecache__insert(
-            map,
-            key.dst.as_ptr() as uintptr_t,
-            key.l4_hash.unwrap_or_default() as uintptr_t,
-        );
-    }
+    __dtrace_probe_routecache__insert(
+        map,
+        key.dst.as_ptr() as uintptr_t,
+        key.l4_hash.unwrap_or_default() as uintptr_t,
+    );
 }
 
 fn route_refresh_probe(map: uintptr_t, key: &RouteKey) {
-    unsafe {
-        __dtrace_probe_routecache__refresh(
-            map,
-            key.dst.as_ptr() as uintptr_t,
-            key.l4_hash.unwrap_or_default() as uintptr_t,
-        );
-    }
+    __dtrace_probe_routecache__refresh(
+        map,
+        key.dst.as_ptr() as uintptr_t,
+        key.l4_hash.unwrap_or_default() as uintptr_t,
+    );
 }
 
 fn route_delete_probe(map: uintptr_t, key: &RouteKey) {
-    unsafe {
-        __dtrace_probe_routecache__delete(
-            map,
-            key.dst.as_ptr() as uintptr_t,
-            key.l4_hash.unwrap_or_default() as uintptr_t,
-        );
-    }
+    __dtrace_probe_routecache__delete(
+        map,
+        key.dst.as_ptr() as uintptr_t,
+        key.l4_hash.unwrap_or_default() as uintptr_t,
+    );
 }
 
 // The following are wrappers for reference drop functions used in XDE.
