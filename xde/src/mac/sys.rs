@@ -193,13 +193,16 @@ unsafe extern "C" {
         mac_emul: u32,
     );
 
-    // VERY private to MAC.
     pub fn mac_capab_get(
         mh: *mut mac_handle,
         capab: mac_capab_t,
         data: *mut c_void,
     ) -> boolean_t;
 }
+
+// ======================================================================
+// uts/common/sys/mac_provider.h
+// ======================================================================
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -247,42 +250,16 @@ pub struct mac_capab_lso_t {
     pub lso_tunnel_tcp: lso_tunnel_tcp_t,
 }
 
-// Currently supported flags for LSO.
-pub const LSO_TX_BASIC_TCP_IPV4: u32 = 0x01;
-pub const LSO_TX_BASIC_TCP_IPV6: u32 = 0x02;
-pub const LSO_TX_TUNNEL_TCP: u32 = 0x04;
-
-// Currently supported tunnel flags for tunnelled LSO offload.
-pub const LSO_TX_TUNNEL_OUTER_CSUM: u32 = 0x01;
-
-// CSO flags (dlpi.h)
-pub const HCKSUM_ENABLE: u32 = 0x01;
-pub const HCKSUM_INET_PARTIAL: u32 = 0x02;
-pub const HCKSUM_INET_FULL_V4: u32 = 0x04;
-pub const HCKSUM_INET_FULL_V6: u32 = 0x08;
-pub const HCKSUM_IPHDRCKSUM: u32 = 0x10;
-pub const HCKSUM_TUN: u32 = 0x20;
-
-// Tunnelled CSO capabilities (per-tunnel class)
-pub const MAC_CSO_TUN_INNER_IPHDR: u32 = 0x0001;
-pub const MAC_CSO_TUN_INNER_TCP_PARTIAL: u32 = 0x0002;
-pub const MAC_CSO_TUN_INNER_TCP_FULL: u32 = 0x0004;
-pub const MAC_CSO_TUN_INNER_UDP_PARTIAL: u32 = 0x0008;
-pub const MAC_CSO_TUN_INNER_UDP_FULL: u32 = 0x0010;
-pub const MAC_CSO_TUN_OUTER_IPHDR: u32 = 0x0020;
-pub const MAC_CSO_TUN_OUTER_UDP_PARTIAL: u32 = 0x0040;
-pub const MAC_CSO_TUN_OUTER_UDP_FULL: u32 = 0x0080;
-
 bitflags::bitflags! {
 /// Classes of TCP segmentation offload supported by a MAC provider.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TcpLsoFlags: u32 {
     /// The device supports TCP LSO over IPv4.
-    const BASIC_IPV4 = LSO_TX_BASIC_TCP_IPV4;
+    const BASIC_IPV4 = 1 << 0;
     /// The device supports TCP LSO over IPv6.
-    const BASIC_IPV6 = LSO_TX_BASIC_TCP_IPV6;
+    const BASIC_IPV6 = 1 << 1;
     /// The device supports LSO of TCP packets within IP-based tunnels.
-    const TUNNEL_TCP = LSO_TX_TUNNEL_TCP;
+    const TUNNEL_TCP = 1 << 2;
 }
 
 /// Supported LSO use specific to [`TcpLsoFlags::TUNNEL_TCP`].
@@ -290,24 +267,26 @@ pub struct TcpLsoFlags: u32 {
 pub struct TunnelTcpLsoFlags: u32 {
     /// The device can fill the outer L4 (e.g., UDP) checksum
     /// on generated tunnel packets.
-    const FILL_OUTER_CSUM = LSO_TX_TUNNEL_OUTER_CSUM;
+    const FILL_OUTER_CSUM = 1 << 0;
 }
 
 /// Classes of checksum offload suppported by a MAC provider.
+///
+/// Defined in dlpi.h.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChecksumOffloadCapabs: u32 {
-    /// CSO is enabled on the device.
-    const ENABLE = HCKSUM_ENABLE;
+    /// Legacy definition --  CSO is enabled on the device.
+    const ENABLE = 1 << 0;
 
     /// Device can finalize packet checksum when provided with a partial
     /// (pseudoheader) checksum.
-    const INET_PARTIAL = HCKSUM_INET_PARTIAL;
+    const INET_PARTIAL = 1 << 1;
     /// Device can compute full (L3+L4) checksum of TCP/UDP over IPv4.
-    const INET_FULL_V4 = HCKSUM_INET_FULL_V4;
+    const INET_FULL_V4 = 1 << 2;
     /// Device can compute full (L4) checksum of TCP/UDP over IPv6.
-    const INET_FULL_V6 = HCKSUM_INET_FULL_V6;
+    const INET_FULL_V6 = 1 << 3;
     /// Device can compute IPv4 header checksum.
-    const INET_HDRCKSUM = HCKSUM_IPHDRCKSUM;
+    const INET_HDRCKSUM = 1 << 4;
 
     const NON_TUN_CAPABS =
         Self::ENABLE.bits() | Self::INET_PARTIAL.bits() |
@@ -315,7 +294,7 @@ pub struct ChecksumOffloadCapabs: u32 {
         Self::INET_HDRCKSUM.bits();
 
     /// The `cso_tunnel` field has been filled by the driver.
-    const TUNNEL_VALID = HCKSUM_TUN;
+    const TUNNEL_VALID = 1 << 5;
 }
 
 /// Classes of checksum offload suppported for tunnelled packets by a
@@ -323,23 +302,23 @@ pub struct ChecksumOffloadCapabs: u32 {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TunnelCsoFlags: u32 {
     /// The inner IPv4 checksum can be entirely computed in hardware.
-    const INNER_IPHDR = MAC_CSO_TUN_INNER_IPHDR;
+    const INNER_IPHDR = 1 << 0;
     /// The inner TCP checksum must contain the IPv4/v6 pseudoheader.
-    const INNER_TCP_PARTIAL = MAC_CSO_TUN_INNER_TCP_PARTIAL;
+    const INNER_TCP_PARTIAL = 1 << 1;
     /// The inner TCP checksum can be entirely computed in hardware.
-    const INNER_TCP_FULL = MAC_CSO_TUN_INNER_TCP_FULL;
+    const INNER_TCP_FULL = 1 << 2;
     /// The inner UDP checksum must contain the IPv4/v6 pseudoheader.
-    const INNER_UDP_PARTIAL = MAC_CSO_TUN_INNER_UDP_PARTIAL;
+    const INNER_UDP_PARTIAL = 1 << 3;
     /// The inner TCP checksum can be entirely computed in hardware.
-    const INNER_UDP_FULL = MAC_CSO_TUN_INNER_UDP_FULL;
+    const INNER_UDP_FULL = 1 << 4;
     /// The outer IPv4 checksum can be entirely computed in hardware.
-    const OUTER_IPHDR = MAC_CSO_TUN_OUTER_IPHDR;
+    const OUTER_IPHDR = 1 << 5;
     /// When requested, the outer UDP checksum (e.g., in Geneve/VXLAN) must
     /// contain the IPv4/v6 pseudoheader
-    const OUTER_UDP_PARTIAL = MAC_CSO_TUN_OUTER_UDP_PARTIAL;
+    const OUTER_UDP_PARTIAL = 1 << 6;
     /// When requested, the outer UDP checksum (e.g., in Geneve/VXLAN) can be
     /// entirely computed in hardware.
-    const OUTER_UDP_FULL = MAC_CSO_TUN_OUTER_UDP_FULL;
+    const OUTER_UDP_FULL = 1 << 7;
 }
 
 /// Classes of tunnel suppported by a MAC provider.
@@ -634,7 +613,7 @@ pub struct mac_register_t {
 }
 
 // ======================================================================
-// uts/common/sys/mac_client.h
+// uts/common/sys/mac.h
 // ======================================================================
 pub const MAC_HWCKSUM_EMUL: u32 = 1 << 0;
 pub const MAC_IPCKSUM_EMUL: u32 = 1 << 1;

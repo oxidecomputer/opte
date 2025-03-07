@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 #![cfg_attr(feature = "kernel", feature(extern_types))]
 #![allow(non_camel_case_types)]
 #![no_std]

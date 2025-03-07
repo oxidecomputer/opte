@@ -23,13 +23,10 @@ use crate::mac::MacEmul;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::OffloadInfo;
 use crate::mac::TcpLsoFlags;
-use crate::mac::TunnelCsoFlags;
-use crate::mac::TunnelType;
-use crate::mac::cso_tunnel_t;
 use crate::mac::lso_basic_tcp_ipv4_t;
 use crate::mac::lso_basic_tcp_ipv6_t;
-use crate::mac::lso_tunnel_tcp_t;
 use crate::mac::mac_capab_cso_t;
 use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
@@ -249,129 +246,6 @@ pub struct xde_underlay_port {
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
     stream: Arc<DlsStream>,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct OffloadInfo {
-    cso_state: mac_capab_cso_t,
-    lso_state: mac_capab_lso_t,
-    mtu: u32,
-}
-
-impl OffloadInfo {
-    /// Forwards the underlay's tunnel checksum offload capabilities into
-    /// standard capabilities.
-    fn upstream_csum(&self) -> mac_capab_cso_t {
-        let base_capabs = self.cso_state.cso_flags;
-        let mut out = mac_capab_cso_t::default();
-
-        if base_capabs.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
-            && self.cso_state.cso_tunnel.ct_types.contains(TunnelType::GENEVE)
-        {
-            let tsco_flags = self.cso_state.cso_tunnel.ct_flags;
-            if tsco_flags.contains(TunnelCsoFlags::INNER_IPHDR) {
-                out.cso_flags |= ChecksumOffloadCapabs::INET_HDRCKSUM;
-            }
-            if tsco_flags.contains(
-                TunnelCsoFlags::INNER_TCP_PARTIAL
-                    | TunnelCsoFlags::INNER_UDP_PARTIAL,
-            ) {
-                out.cso_flags |= ChecksumOffloadCapabs::INET_PARTIAL;
-            }
-            if tsco_flags.contains(
-                TunnelCsoFlags::INNER_TCP_FULL | TunnelCsoFlags::INNER_UDP_FULL,
-            ) {
-                out.cso_flags |= ChecksumOffloadCapabs::INET_FULL_V4
-                    | ChecksumOffloadCapabs::INET_FULL_V6;
-            }
-        }
-
-        out
-    }
-
-    /// Forwards the underlay's tunnel TCP LSO capabilities into
-    /// standard LSO capabilities.
-    fn upstream_lso(&self) -> mac_capab_lso_t {
-        let mut out = mac_capab_lso_t::default();
-
-        if self.lso_state.lso_flags.contains(TcpLsoFlags::TUNNEL_TCP) {
-            if self
-                .lso_state
-                .lso_tunnel_tcp
-                .tun_types
-                .contains(TunnelType::GENEVE)
-            {
-                out.lso_flags |=
-                    TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6;
-                out.lso_basic_tcp_ipv4 = lso_basic_tcp_ipv4_t {
-                    lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
-                };
-                out.lso_basic_tcp_ipv6 = lso_basic_tcp_ipv6_t {
-                    lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
-                };
-            }
-        }
-
-        out
-    }
-}
-
-impl core::ops::BitAnd for OffloadInfo {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
-        Self {
-            cso_state: mac_capab_cso_t {
-                cso_flags: self.cso_state.cso_flags & rhs.cso_state.cso_flags,
-                cso_tunnel: cso_tunnel_t {
-                    ct_flags: self.cso_state.cso_tunnel.ct_flags
-                        & rhs.cso_state.cso_tunnel.ct_flags,
-                    ct_encap_max: self
-                        .cso_state
-                        .cso_tunnel
-                        .ct_encap_max
-                        .min(rhs.cso_state.cso_tunnel.ct_encap_max),
-                    ct_types: self.cso_state.cso_tunnel.ct_types
-                        & rhs.cso_state.cso_tunnel.ct_types,
-                },
-            },
-            lso_state: mac_capab_lso_t {
-                lso_flags: self.lso_state.lso_flags & rhs.lso_state.lso_flags,
-                lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
-                    lso_max: self
-                        .lso_state
-                        .lso_basic_tcp_ipv4
-                        .lso_max
-                        .min(rhs.lso_state.lso_basic_tcp_ipv4.lso_max),
-                },
-                lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
-                    lso_max: self
-                        .lso_state
-                        .lso_basic_tcp_ipv6
-                        .lso_max
-                        .min(rhs.lso_state.lso_basic_tcp_ipv6.lso_max),
-                },
-                lso_tunnel_tcp: lso_tunnel_tcp_t {
-                    tun_pay_max: self
-                        .lso_state
-                        .lso_tunnel_tcp
-                        .tun_pay_max
-                        .min(rhs.lso_state.lso_tunnel_tcp.tun_pay_max),
-                    tun_encap_max: self
-                        .lso_state
-                        .lso_tunnel_tcp
-                        .tun_encap_max
-                        .min(rhs.lso_state.lso_tunnel_tcp.tun_encap_max),
-                    tun_flags: self.lso_state.lso_tunnel_tcp.tun_flags
-                        & rhs.lso_state.lso_tunnel_tcp.tun_flags,
-                    tun_types: self.lso_state.lso_tunnel_tcp.tun_types
-                        & rhs.lso_state.lso_tunnel_tcp.tun_types,
-                    tun_pad: [0; 2],
-                },
-            },
-            mtu: self.mtu.min(rhs.mtu),
-        }
-    }
 }
 
 struct XdeState {
@@ -1260,7 +1134,7 @@ fn create_underlay_port(
         },
     )?;
 
-    let (.., mtu) = mh.get_min_max_sdu();
+    let mtu = *mh.get_valid_mtus().end();
     let cso_state = mh.get_cso_capabs();
     let lso_state = mh.get_lso_capabs();
 
@@ -1283,7 +1157,6 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
-    opte::engine::err!("I have {:#?} and {:#?}", &i1, &i2);
     Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
 }
 
@@ -1905,8 +1778,9 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 meoi_len: out_pkt.byte_len() as u32,
             };
 
-            if out_pkt.fill_parse_info(&tun_meoi, Some(&ulp_meoi)).is_err() {
-                opte::engine::err!("failed to set offload info?!");
+            if let Err(e) = out_pkt.fill_parse_info(&tun_meoi, Some(&ulp_meoi))
+            {
+                opte::engine::err!("failed to set offload info: {}", e);
             }
 
             // Currently the overlay layer leaves the outer frame
@@ -2018,62 +1892,52 @@ unsafe extern "C" fn xde_mc_getcapab(
 
     let shared_underlay_caps = unsafe { (*dev).underlay_capab };
 
+    // XDE's approach to the capabilities we advertise is to always say
+    // that we support LSO/CSO, using tunnelled LSO/CSO if the underlay
+    // supports it or having MAC emulate offloads when it does not.
+    // We know in actuality what the intersection of our two underlay ports'
+    // capabilities is, which we use to limit the `lso_max` when tunnelled
+    // LSO hardware support over Geneve is present.
     match cap {
         // TODO: work out a safer interface for this.
         mac::mac_capab_t::MAC_CAPAB_HCKSUM => {
-            // capab data is a *mut u32 (enum).
             let capab = capb_data as *mut mac_capab_cso_t;
 
-            let desired_capabs = shared_underlay_caps.upstream_csum();
-            unsafe {
-                // Don't write the newer capabs -- don't want to corrupt
-                // memory on older illumos and/or CI.
-                (*capab).cso_flags = desired_capabs.cso_flags;
-            }
-
-            // FORCE
             unsafe {
                 (*capab).cso_flags = ChecksumOffloadCapabs::NON_TUN_CAPABS
                     .difference(ChecksumOffloadCapabs::INET_PARTIAL);
             }
 
-            // if desired_capabs.cso_flags == 0 {
-            //     boolean_t::B_FALSE
-            // } else {
-            //     boolean_t::B_TRUE
-            // }
-
             boolean_t::B_TRUE
         }
         mac::mac_capab_t::MAC_CAPAB_LSO => {
             let capab = capb_data as *mut mac_capab_lso_t;
-            let desired_lso = shared_underlay_caps.upstream_lso();
+            let upstream_lso = shared_underlay_caps.upstream_lso();
 
-            // FORCE
-            let desired_lso = mac_capab_lso_t {
-                lso_flags: TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6,
-                lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
-                    lso_max: u16::MAX as u32,
-                },
-                lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
-                    lso_max: u16::MAX as u32,
-                },
-                ..Default::default()
+            // Geneve TSO support in the underlay has been converted to basic TSO
+            // in `upstream_lso`, use the values there if possible.
+            let (v4_lso_max, v6_lso_max) = if upstream_lso
+                .lso_flags
+                .contains(TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6)
+            {
+                (
+                    upstream_lso.lso_basic_tcp_ipv4.lso_max,
+                    upstream_lso.lso_basic_tcp_ipv6.lso_max,
+                )
+            } else {
+                (u16::MAX as u32, u16::MAX as u32)
             };
 
             unsafe {
-                // Don't write the newer capabs -- don't want to corrupt
-                // memory on older illumos and/or CI.
-                (*capab).lso_flags = desired_lso.lso_flags;
-                (*capab).lso_basic_tcp_ipv4 = desired_lso.lso_basic_tcp_ipv4;
-                (*capab).lso_basic_tcp_ipv6 = desired_lso.lso_basic_tcp_ipv6;
+                (*capab).lso_flags =
+                    TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6;
+                (*capab).lso_basic_tcp_ipv4 =
+                    lso_basic_tcp_ipv4_t { lso_max: v4_lso_max };
+                (*capab).lso_basic_tcp_ipv6 =
+                    lso_basic_tcp_ipv6_t { lso_max: v6_lso_max };
             }
 
-            if desired_lso.lso_flags.is_empty() {
-                boolean_t::B_FALSE
-            } else {
-                boolean_t::B_TRUE
-            }
+            boolean_t::B_TRUE
         }
         _ => boolean_t::B_FALSE,
     }

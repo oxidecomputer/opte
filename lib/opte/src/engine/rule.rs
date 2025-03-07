@@ -324,7 +324,7 @@ bitflags! {
     #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
     pub struct TransformFlags: u8 {
         const CSUM_DIRTY = 1;
-        const LOCAL_DESTINATION = 1 << 1;
+        const INTERNAL_DESTINATION = 1 << 1;
     }
 }
 
@@ -344,14 +344,18 @@ pub struct CompiledTransform {
 }
 
 impl CompiledTransform {
+    /// Does this transform modify any fields which factor into the
+    /// inner frame's L3/L4 checksums?
     #[inline]
     pub fn checksums_dirty(&self) -> bool {
         self.flags.contains(TransformFlags::CSUM_DIRTY)
     }
 
+    /// Can the remote side of this flow be accessed purely using
+    /// internal/private paths?
     #[inline]
-    pub fn local_destination(&self) -> bool {
-        self.flags.contains(TransformFlags::LOCAL_DESTINATION)
+    pub fn internal_destination(&self) -> bool {
+        self.flags.contains(TransformFlags::INTERNAL_DESTINATION)
     }
 
     #[inline(always)]

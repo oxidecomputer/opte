@@ -730,12 +730,14 @@ impl MsgBlk {
         }
     }
 
-    /// Return the number of active [`MsgBlk`] referents to the underlying data.
+    /// Return the number of active [`MsgBlk`]a referring to the underlying
+    /// data.
     pub fn ref_count(&self) -> usize {
         (unsafe { (*(*self.0.as_ptr()).b_datap).db_ref }) as usize
     }
 
-    #[allow(unused)]
+    /// Sets a packet's offload flags, and sets MSS if `HW_LSO` is enabled.
+    #[cfg_attr(any(feature = "std", test), allow(unused))]
     pub fn request_offload(&mut self, flags: MblkOffloadFlags, mss: u32) {
         let ckflags = flags & MblkOffloadFlags::HCK_FLAGS;
 
@@ -759,20 +761,15 @@ impl MsgBlk {
         }
     }
 
-    #[allow(unused)]
-    pub fn strip_lso(&mut self) {
-        #[cfg(all(not(feature = "std"), not(test)))]
-        unsafe {
-            illumos_sys_hdrs::mac::lso_info_cleanup(self.0.as_ptr());
-        }
-    }
-
-    #[allow(unused)]
+    /// Set parse information attached to a packet to enable tunnel-aware
+    /// offloads, and to help NIC drivers correctly program offloads without
+    /// a reparse.
+    #[cfg_attr(any(feature = "std", test), allow(unused))]
     pub fn fill_parse_info(
         &mut self,
         outer_meoi: &mac_ether_offload_info_t,
         inner_meoi: Option<&mac_ether_offload_info_t>,
-    ) -> Result<(), ()> {
+    ) -> Result<(), PktInfoError> {
         #[cfg(all(not(feature = "std"), not(test)))]
         let res = unsafe {
             illumos_sys_hdrs::mac::mac_ether_set_pktinfo(
@@ -785,10 +782,15 @@ impl MsgBlk {
         #[cfg(any(feature = "std", test))]
         let res = 0;
 
-        if res == 0 { Ok(()) } else { Err(()) }
+        match res {
+            0 => Ok(()),
+            _ if self.ref_count() > 1 => Err(PktInfoError::PacketShared),
+            _ => Err(PktInfoError::IllegalInfo),
+        }
     }
 
-    #[allow(unused)]
+    /// Return the offloads currently requested by a packet.
+    #[cfg_attr(any(feature = "std", test), allow(unused))]
     pub fn offload_flags(&self) -> MblkOffloadFlags {
         let mut cso_out = 0u32;
         let mut lso_out = 0u32;
@@ -956,6 +958,28 @@ impl Pullup for MsgBlkIterMut<'_> {
         }
 
         new_seg
+    }
+}
+
+/// Reasons a [`MsgBlk`] could not have its parse information set.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+pub enum PktInfoError {
+    /// The underlying `dblk_t` is pointed to by more than one [`MsgBlk`].
+    PacketShared,
+    /// illumos has rejected the contents of the [`mac_ether_offload_info_t`]
+    /// as being ill-formed (e.g., no tunnel type when both encap and inner
+    /// info are provided).
+    IllegalInfo,
+}
+
+impl core::error::Error for PktInfoError {}
+
+impl core::fmt::Display for PktInfoError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::PacketShared => "packet has a reference count > 1",
+            Self::IllegalInfo => "outer or inner info is malformed",
+        })
     }
 }
 

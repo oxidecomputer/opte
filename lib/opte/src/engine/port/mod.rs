@@ -1440,7 +1440,7 @@ impl<N: NetworkImpl> Port<N> {
                     _ => 0,
                 };
                 let out = EmitSpec {
-                    mtu_unrestricted: tx.local_destination(),
+                    mtu_unrestricted: tx.internal_destination(),
                     prepend: PushSpec::Fastpath(tx),
                     l4_hash,
                     rewind,
@@ -2325,7 +2325,7 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::CSUM_DIRTY;
         }
         if ameta.is_internal_target() {
-            flags |= TransformFlags::LOCAL_DESTINATION;
+            flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
         let ufid_out = pkt.flow().mirror();
@@ -2557,7 +2557,7 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::CSUM_DIRTY;
         }
         if ameta.is_internal_target() {
-            flags |= TransformFlags::LOCAL_DESTINATION;
+            flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
         let hte = UftEntry {

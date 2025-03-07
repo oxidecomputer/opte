@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -48,15 +48,14 @@ pub trait ActionMetaValue: Sized {
 /// Action metadata is nothing more than a map of string keys
 /// to string values. It is up to the actions to decide what these strings
 /// mean. However, *all keys prefaced with "opte:" are reserved for use by
-/// operations on `ActionMeta`*.
+/// operations on `ActionMeta`*, and map to functionality in OPTE itself
+/// rather than a given dataplane design.
 #[derive(Default)]
 pub struct ActionMeta {
     inner: BTreeMap<String, String>,
 }
 
 impl ActionMeta {
-    const INTERNAL_TARGET: &str = "opte:internal-target";
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -91,17 +90,35 @@ impl ActionMeta {
     /// The dataplane may use this to choose a larger (jumbo-frame) MSS for
     /// TCP segmentation, or rely on other aspects of its internal network.
     pub fn set_internal_target(&mut self, val: bool) {
-        _ = self.insert(
-            Self::INTERNAL_TARGET.into(),
-            if val { "1".into() } else { "0".into() },
-        );
+        _ = self
+            .insert(InternalTarget::KEY.into(), InternalTarget(val).as_meta());
     }
 
     /// Returns whether this packet's destination can be reached using only
     /// internal/private paths.
     pub fn is_internal_target(&self) -> bool {
-        self.get(Self::INTERNAL_TARGET)
-            .and_then(|v| Some(v == "1"))
+        self.get(InternalTarget::KEY)
+            .and_then(|v| InternalTarget::from_meta(v).ok())
             .unwrap_or_default()
+            .0
+    }
+}
+
+#[derive(Copy, Clone, Default)]
+struct InternalTarget(bool);
+
+impl ActionMetaValue for InternalTarget {
+    const KEY: &'static str = "opte:internal-target";
+
+    fn as_meta(&self) -> String {
+        (if self.0 { "1" } else { "0" }).into()
+    }
+
+    fn from_meta(s: &str) -> Result<Self, String> {
+        match s {
+            "1" => Ok(Self(true)),
+            "0" => Ok(Self(false)),
+            s => Err(format!("value `{s}` is illegal for InternalTarget")),
+        }
     }
 }

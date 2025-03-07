@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Safe abstractions for the mac client API.
 //!
@@ -19,6 +19,7 @@ use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
 use core::mem::MaybeUninit;
+use core::ops::RangeInclusive;
 use core::ptr;
 use illumos_sys_hdrs::*;
 use opte::ddi::mblk::AsMblk;
@@ -66,6 +67,7 @@ impl MacHandle {
         Ok(Self(mh))
     }
 
+    /// Get the primary MAC address associated with this device.
     pub fn get_mac_addr(&self) -> [u8; 6] {
         let mut mac = [0u8; 6];
         unsafe {
@@ -74,16 +76,18 @@ impl MacHandle {
         mac
     }
 
-    pub fn get_min_max_sdu(&self) -> (u32, u32) {
+    /// Get the range of valid MTUs supported by this device.
+    pub fn get_valid_mtus(&self) -> RangeInclusive<u32> {
         let (mut min, mut max) = (0, 0);
 
         unsafe {
             mac_sdu_get(self.0, &raw mut min, &raw mut max);
         }
 
-        (min, max)
+        min..=max
     }
 
+    /// Query this device's supported checksum offload capabilities.
     pub fn get_cso_capabs(&self) -> mac_capab_cso_t {
         let mut cso = mac_capab_cso_t::default();
         unsafe {
@@ -96,6 +100,7 @@ impl MacHandle {
         cso
     }
 
+    /// Query this device's supported large send offload capabilities.
     pub fn get_lso_capabs(&self) -> mac_capab_lso_t {
         let mut lso = MaybeUninit::<mac_capab_lso_t>::zeroed();
         unsafe {
@@ -253,9 +258,7 @@ impl MacClientHandle {
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
         let mut ret_mp = ptr::null_mut();
-        let Some(mblk) = pkt.unwrap_mblk() else {
-            return None;
-        };
+        let mblk = pkt.unwrap_mblk()?;
         unsafe {
             mac_tx(self.mch, mblk.as_ptr(), hint, flags.bits(), &mut ret_mp)
         };
@@ -435,6 +438,9 @@ pub struct MacEmul: u32 {
 }
 
 /// Emulates various offloads (checksum, LSO) for packets on loopback paths.
+///
+/// Specific offloads within `flags` must be requested using
+/// [`MsgBlk::request_offload`].
 pub fn mac_hw_emul(msg: impl AsMblk, flags: MacEmul) -> Option<MsgBlkChain> {
     let mut chain = msg.unwrap_mblk()?.as_ptr();
     unsafe {
@@ -447,4 +453,125 @@ pub fn mac_hw_emul(msg: impl AsMblk, flags: MacEmul) -> Option<MsgBlkChain> {
     }
 
     (!chain.is_null()).then(|| unsafe { MsgBlkChain::new(chain).unwrap() })
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct OffloadInfo {
+    pub cso_state: mac_capab_cso_t,
+    pub lso_state: mac_capab_lso_t,
+    pub mtu: u32,
+}
+
+impl OffloadInfo {
+    /// Forwards the underlay's tunnel checksum offload capabilities into
+    /// standard capabilities.
+    pub fn upstream_csum(&self) -> mac_capab_cso_t {
+        let base_capabs = self.cso_state.cso_flags;
+        let mut out = mac_capab_cso_t::default();
+
+        if base_capabs.contains(ChecksumOffloadCapabs::TUNNEL_VALID)
+            && self.cso_state.cso_tunnel.ct_types.contains(TunnelType::GENEVE)
+        {
+            let tsco_flags = self.cso_state.cso_tunnel.ct_flags;
+            if tsco_flags.contains(TunnelCsoFlags::INNER_IPHDR) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_HDRCKSUM;
+            }
+            if tsco_flags.contains(
+                TunnelCsoFlags::INNER_TCP_PARTIAL
+                    | TunnelCsoFlags::INNER_UDP_PARTIAL,
+            ) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_PARTIAL;
+            }
+            if tsco_flags.contains(
+                TunnelCsoFlags::INNER_TCP_FULL | TunnelCsoFlags::INNER_UDP_FULL,
+            ) {
+                out.cso_flags |= ChecksumOffloadCapabs::INET_FULL_V4
+                    | ChecksumOffloadCapabs::INET_FULL_V6;
+            }
+        }
+
+        out
+    }
+
+    /// Forwards the underlay's tunnel TCP LSO capabilities into
+    /// standard LSO capabilities.
+    pub fn upstream_lso(&self) -> mac_capab_lso_t {
+        let mut out = mac_capab_lso_t::default();
+
+        if self.lso_state.lso_flags.contains(TcpLsoFlags::TUNNEL_TCP)
+            && self
+                .lso_state
+                .lso_tunnel_tcp
+                .tun_types
+                .contains(TunnelType::GENEVE)
+        {
+            out.lso_flags |= TcpLsoFlags::BASIC_IPV4 | TcpLsoFlags::BASIC_IPV6;
+            out.lso_basic_tcp_ipv4 = lso_basic_tcp_ipv4_t {
+                lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
+            };
+            out.lso_basic_tcp_ipv6 = lso_basic_tcp_ipv6_t {
+                lso_max: self.lso_state.lso_tunnel_tcp.tun_pay_max,
+            };
+        }
+
+        out
+    }
+}
+
+impl core::ops::BitAnd for OffloadInfo {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self {
+            cso_state: mac_capab_cso_t {
+                cso_flags: self.cso_state.cso_flags & rhs.cso_state.cso_flags,
+                cso_tunnel: cso_tunnel_t {
+                    ct_flags: self.cso_state.cso_tunnel.ct_flags
+                        & rhs.cso_state.cso_tunnel.ct_flags,
+                    ct_encap_max: self
+                        .cso_state
+                        .cso_tunnel
+                        .ct_encap_max
+                        .min(rhs.cso_state.cso_tunnel.ct_encap_max),
+                    ct_types: self.cso_state.cso_tunnel.ct_types
+                        & rhs.cso_state.cso_tunnel.ct_types,
+                },
+            },
+            lso_state: mac_capab_lso_t {
+                lso_flags: self.lso_state.lso_flags & rhs.lso_state.lso_flags,
+                lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
+                    lso_max: self
+                        .lso_state
+                        .lso_basic_tcp_ipv4
+                        .lso_max
+                        .min(rhs.lso_state.lso_basic_tcp_ipv4.lso_max),
+                },
+                lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
+                    lso_max: self
+                        .lso_state
+                        .lso_basic_tcp_ipv6
+                        .lso_max
+                        .min(rhs.lso_state.lso_basic_tcp_ipv6.lso_max),
+                },
+                lso_tunnel_tcp: lso_tunnel_tcp_t {
+                    tun_pay_max: self
+                        .lso_state
+                        .lso_tunnel_tcp
+                        .tun_pay_max
+                        .min(rhs.lso_state.lso_tunnel_tcp.tun_pay_max),
+                    tun_encap_max: self
+                        .lso_state
+                        .lso_tunnel_tcp
+                        .tun_encap_max
+                        .min(rhs.lso_state.lso_tunnel_tcp.tun_encap_max),
+                    tun_flags: self.lso_state.lso_tunnel_tcp.tun_flags
+                        & rhs.lso_state.lso_tunnel_tcp.tun_flags,
+                    tun_types: self.lso_state.lso_tunnel_tcp.tun_types
+                        & rhs.lso_state.lso_tunnel_tcp.tun_types,
+                    tun_pad: [0; 2],
+                },
+            },
+            mtu: self.mtu.min(rhs.mtu),
+        }
+    }
 }
