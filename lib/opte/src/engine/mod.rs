@@ -288,7 +288,9 @@ pub trait LightweightMeta<T: ByteSlice>: Into<OpteMeta<T>> {
     fn encap_len(&self) -> u16;
 
     /// Recalculate checksums within inner headers, derived from a pre-computed `body_csum`.
-    fn update_inner_checksums(&mut self, body_csum: Checksum);
+    ///
+    /// The body checksum may not be present if L4 headers have been offloaded.
+    fn update_inner_checksums(&mut self, body_csum: Option<Checksum>);
 
     /// Provide a view of internal TCP state.
     fn inner_tcp(&self) -> Option<&impl TcpRef<T>>;

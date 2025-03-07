@@ -1424,15 +1424,15 @@ impl<N: NetworkImpl> Port<N> {
 
                 let len = pkt.len();
                 let meta = pkt.meta_mut();
-                let body_csum = if tx.checksums_dirty() {
-                    meta.compute_body_csum()
-                } else {
-                    None
-                };
+                let csum_dirty = tx.checksums_dirty();
+
+                let body_csum =
+                    if csum_dirty { meta.compute_body_csum() } else { None };
                 meta.run_compiled_transform(&tx);
-                if let Some(csum) = body_csum {
-                    meta.update_inner_checksums(csum);
+                if csum_dirty {
+                    meta.update_inner_checksums(body_csum);
                 }
+
                 let encap_len = meta.encap_len();
                 let ulp_len = (len - (encap_len as usize)) as u32;
                 let rewind = match tx.encap {
