@@ -770,6 +770,10 @@ impl MsgBlk {
         outer_meoi: &mac_ether_offload_info_t,
         inner_meoi: Option<&mac_ether_offload_info_t>,
     ) -> Result<(), PktInfoError> {
+        if self.ref_count() > 1 {
+            return Err(PktInfoError::PacketShared);
+        }
+
         #[cfg(all(not(feature = "std"), not(test)))]
         let res = unsafe {
             illumos_sys_hdrs::mac::mac_ether_set_pktinfo(
@@ -782,11 +786,7 @@ impl MsgBlk {
         #[cfg(any(feature = "std", test))]
         let res = 0;
 
-        match res {
-            0 => Ok(()),
-            _ if self.ref_count() > 1 => Err(PktInfoError::PacketShared),
-            _ => Err(PktInfoError::IllegalInfo),
-        }
+        Ok(())
     }
 
     /// Return the offloads currently requested by a packet.
@@ -966,10 +966,6 @@ impl Pullup for MsgBlkIterMut<'_> {
 pub enum PktInfoError {
     /// The underlying `dblk_t` is pointed to by more than one [`MsgBlk`].
     PacketShared,
-    /// illumos has rejected the contents of the [`mac_ether_offload_info_t`]
-    /// as being ill-formed (e.g., no tunnel type when both encap and inner
-    /// info are provided).
-    IllegalInfo,
 }
 
 impl core::error::Error for PktInfoError {}
@@ -978,7 +974,6 @@ impl core::fmt::Display for PktInfoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::PacketShared => "packet has a reference count > 1",
-            Self::IllegalInfo => "outer or inner info is malformed",
         })
     }
 }
