@@ -5,26 +5,26 @@
 // Copyright 2024 Oxide Computer Company
 
 use opte::ddi::mblk::MsgBlk;
+use opte::engine::Direction;
 use opte::engine::dhcpv6::MessageType;
 use opte::engine::ether::Ethernet;
+use opte::engine::ip::L3Repr;
 use opte::engine::ip::v4::Ipv4;
 use opte::engine::ip::v6::Ipv6;
-use opte::engine::ip::L3Repr;
 use opte::engine::parse::UlpRepr;
-use opte::engine::Direction;
 use opte::ingot::tcp::Tcp;
 use opte::ingot::tcp::TcpFlags;
 use opte::ingot::types::HeaderLen;
 use opte::ingot::udp::Udp;
+use opte_test_utils::dhcp::DhcpRepr;
 use opte_test_utils::dhcp::dhcpv6_with_reasonable_defaults;
 use opte_test_utils::dhcp::packet_from_client_dhcpv4_message;
 use opte_test_utils::dhcp::packet_from_client_dhcpv6_message;
-use opte_test_utils::dhcp::DhcpRepr;
+use opte_test_utils::icmp::NdiscRepr;
+use opte_test_utils::icmp::RawHardwareAddress;
 use opte_test_utils::icmp::gen_icmp_echo;
 use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
-use opte_test_utils::icmp::NdiscRepr;
-use opte_test_utils::icmp::RawHardwareAddress;
 use opte_test_utils::overlay::BOUNDARY_SERVICES_VNI;
 use opte_test_utils::*;
 

@@ -2,16 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Routines for verifying various Port state.
 
 use super::*;
 use opte::engine::port::*;
 use opte::engine::print::*;
+use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::overlay::VpcMappings;
 use oxide_vpc::engine::print::*;
-use oxide_vpc::engine::VpcNetwork;
 use std::collections::BTreeMap;
 use std::io::Write;
 
@@ -333,9 +333,7 @@ macro_rules! set_field_na {
                 Some(v) => match val.parse() {
                     Ok(val) => *v = val,
                     Err(_) => {
-                        panic!(
-                            "not a number: field: '{field}' val: '{val}'"
-                        );
+                        panic!("not a number: field: '{field}' val: '{val}'");
                     }
                 },
 

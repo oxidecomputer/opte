@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use alloc::ffi::CString;
 use alloc::vec::Vec;
@@ -11,16 +11,16 @@ use core::result;
 use ddi::c_int;
 use ddi::c_void;
 use illumos_sys_hdrs as ddi;
+use opte::api::API_VERSION;
 use opte::api::CmdOk;
+use opte::api::OPTE_CMD_RESP_COPY_OUT;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
-use opte::api::API_VERSION;
-use opte::api::OPTE_CMD_RESP_COPY_OUT;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-extern "C" {
+unsafe extern "C" {
     fn __dtrace_probe_copy__out__resp(resp_str: ddi::uintptr_t);
 }
 
@@ -167,11 +167,7 @@ impl<'a> IoctlEnvelope<'a> {
             // is a command error, set the errno based on the type of
             // error.
             ioctl.flags |= OPTE_CMD_RESP_COPY_OUT;
-            if let Err(err) = resp {
-                err.to_errno()
-            } else {
-                0
-            }
+            if let Err(err) = resp { err.to_errno() } else { 0 }
         }
     }
 

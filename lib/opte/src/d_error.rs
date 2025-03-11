@@ -80,11 +80,7 @@ impl<const L: usize> LabelBlock<L> {
     ) -> Result<LabelBlock<L>, LabelBlock<L>> {
         let mut out = LabelBlock::new();
 
-        if out.append(val).is_err() {
-            Err(out)
-        } else {
-            Ok(out)
-        }
+        if out.append(val).is_err() { Err(out) } else { Ok(out) }
     }
 
     /// Push all layers (and data) of a nested type into a block.

@@ -113,7 +113,9 @@ impl IperfConfig {
         // XXX: At higher rates -P instead of n x iPerf servers will
         //      bottleneck us. This is fine at ~2Gbps, but will need
         //      rework in future.
-        format!("iperf -c {target_ip} -J -P {n_streams} {proto_segment} {dir_segment}")
+        format!(
+            "iperf -c {target_ip} -J -P {n_streams} {proto_segment} {dir_segment}"
+        )
     }
 
     /// Name of an experiment, used for storing different workloads
