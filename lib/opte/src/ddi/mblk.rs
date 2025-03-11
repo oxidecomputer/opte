@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use crate::engine::packet::BufferState;
 use crate::engine::packet::Pullup;
@@ -77,8 +77,10 @@ impl MsgBlkChain {
 
         // Walk the chain to find the tail, and support faster append.
         let mut tail = head;
-        while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
-            tail = next_ptr;
+        unsafe {
+            while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
+                tail = next_ptr;
+            }
         }
 
         Ok(Self(Some(MsgBlkChainInner { head, tail })))
@@ -87,7 +89,7 @@ impl MsgBlkChain {
     /// Removes the next packet from the top of the chain and returns
     /// it, taking ownership.
     pub fn pop_front(&mut self) -> Option<MsgBlk> {
-        if let Some(ref mut list) = &mut self.0 {
+        if let Some(list) = &mut self.0 {
             unsafe {
                 let curr_b = list.head;
                 let curr = curr_b.as_ptr();
@@ -133,7 +135,7 @@ impl MsgBlkChain {
             assert!((*pkt.as_ptr()).b_next.is_null());
         }
 
-        if let Some(ref mut list) = &mut self.0 {
+        if let Some(list) = &mut self.0 {
             let pkt_p = pkt.as_ptr();
             let tail_p = list.tail.as_ptr();
             unsafe {
@@ -455,7 +457,9 @@ impl MsgBlk {
 
         f(in_slice);
 
-        (*mut_out).b_rptr = new_head;
+        unsafe {
+            (*mut_out).b_rptr = new_head;
+        }
 
         Ok(())
     }
@@ -651,10 +655,12 @@ impl MsgBlk {
         let inner = NonNull::new(ptr).ok_or(WrapError::NullPtr)?;
         let inner_ref = inner.as_ptr();
 
-        if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
-            Ok(Self(inner))
-        } else {
-            Err(WrapError::Chain)
+        unsafe {
+            if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
+                Ok(Self(inner))
+            } else {
+                Err(WrapError::Chain)
+            }
         }
     }
 
@@ -852,7 +858,9 @@ unsafe fn count_mblk_chain(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         count += 1;
-        head = NonNull::new((*valid_head.as_ptr()).b_cont);
+        unsafe {
+            head = NonNull::new((*valid_head.as_ptr()).b_cont);
+        }
     }
     count
 }
@@ -866,9 +874,11 @@ unsafe fn count_mblk_bytes(mut head: Option<NonNull<mblk_t>>) -> usize {
     let mut count = 0;
     while let Some(valid_head) = head {
         let headref = valid_head.as_ptr();
-        count +=
-            (*headref).b_wptr.offset_from((*headref).b_rptr).max(0) as usize;
-        head = NonNull::new((*headref).b_cont);
+        unsafe {
+            count += (*headref).b_wptr.offset_from((*headref).b_rptr).max(0)
+                as usize;
+            head = NonNull::new((*headref).b_cont);
+        }
     }
     count
 }
@@ -1112,9 +1122,9 @@ fn mock_freeb(mp: *mut mblk_t) {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::engine::GenericUlp;
     use crate::engine::packet::Packet;
     use crate::engine::packet::ParseError;
-    use crate::engine::GenericUlp;
     use ingot::types::ParseError as IngotParseError;
 
     #[test]

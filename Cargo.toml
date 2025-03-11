@@ -18,7 +18,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/oxidecomputer/opte"
 
@@ -46,21 +46,21 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.5"
-ctor = "0.2"
+ctor = "0.3"
 darling = "0.20"
 dyn-clone = "1.0"
 heapless = "0.8"
 ingot = { git = "https://github.com/oxidecomputer/ingot.git", rev = "bff93247fe75ff889121e39d494cc3805fc01906"}
-ipnetwork = { version = "0.20", default-features = false }
-itertools = { version = "0.13", default-features = false }
+ipnetwork = { version = "0.21", default-features = false }
+itertools = { version = "0.14", default-features = false }
 libc = "0.2"
-libnet = { git = "https://github.com/oxidecomputer/netadm-sys" }
+libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
 nix = { version = "0.29", features = ["signal", "user"] }
 pcap-parser = "0.16"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
 quote = "1.0"
-rand = "0.8.5"
+rand = "0.9.0"
 ron = "0.8"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }

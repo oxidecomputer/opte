@@ -16,8 +16,8 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
-use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::BTreeSet;
+use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -29,7 +29,6 @@ use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
-use opte::ddi::sync::KMutexType;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockType;
 use opte::engine::ether::EtherMeta;
@@ -51,10 +50,10 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
-use opte::engine::port::meta::ActionMeta;
-use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
+use opte::engine::port::meta::ActionMeta;
+use opte::engine::port::meta::ActionMetaValue;
 use opte::engine::predicate::DataPredicate;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
@@ -500,7 +499,7 @@ impl VpcMappings {
     }
 
     pub fn new() -> Self {
-        VpcMappings { inner: KMutex::new(BTreeMap::new(), KMutexType::Driver) }
+        VpcMappings { inner: KMutex::new(BTreeMap::new()) }
     }
 }
 
@@ -581,8 +580,8 @@ impl Virt2Boundary {
         pt6.init(KRwLockType::Driver);
 
         Virt2Boundary {
-            ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
-            ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
             pt4,
             pt6,
         }
@@ -736,8 +735,8 @@ impl Virt2Phys {
 
     pub fn new() -> Self {
         Virt2Phys {
-            ip4: KMutex::new(BTreeMap::new(), KMutexType::Driver),
-            ip6: KMutex::new(BTreeMap::new(), KMutexType::Driver),
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
         }
     }
 }

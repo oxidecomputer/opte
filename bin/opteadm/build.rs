@@ -4,8 +4,8 @@
 
 // Copyright 2023 Oxide Computer Company
 
-use anyhow::anyhow;
 use anyhow::Result;
+use anyhow::anyhow;
 use std::process::Command;
 
 fn main() -> Result<()> {

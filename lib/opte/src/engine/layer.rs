@@ -2,27 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! A layer in a port.
 
 use super::flow_table::Dump;
+use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
-use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::ioctl;
 use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
+use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
-use super::packet::FLOW_ID_DEFAULT;
-use super::port::meta::ActionMeta;
 use super::port::Transforms;
+use super::port::meta::ActionMeta;
 use super::rule;
-use super::rule::ht_probe;
 use super::rule::Action;
 use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
@@ -30,6 +29,9 @@ use super::rule::Finalized;
 use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
+use super::rule::ht_probe;
+use crate::ExecCtx;
+use crate::LogLevel;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -38,8 +40,6 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
-use crate::ExecCtx;
-use crate::LogLevel;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -576,15 +576,13 @@ impl Layer {
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-                unsafe {
-                    __dtrace_probe_gen__desc__fail(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir_c.as_ptr() as uintptr_t,
-                        flow,
-                        msg_c.as_ptr() as uintptr_t,
-                    );
-                }
+                __dtrace_probe_gen__desc__fail(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir_c.as_ptr() as uintptr_t,
+                    flow,
+                    msg_c.as_ptr() as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let name_s = self.name_c.to_str().unwrap();
@@ -611,15 +609,13 @@ impl Layer {
                 let dir_c = CString::new(format!("{}", dir)).unwrap();
                 let msg_c = CString::new(format!("{:?}", err)).unwrap();
 
-                unsafe {
-                    __dtrace_probe_gen__ht__fail(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir_c.as_ptr() as uintptr_t,
-                        flow,
-                        msg_c.as_ptr() as uintptr_t,
-                    );
-                }
+                __dtrace_probe_gen__ht__fail(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir_c.as_ptr() as uintptr_t,
+                    flow,
+                    msg_c.as_ptr() as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow.to_string();
@@ -648,14 +644,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_layer__process__entry(
-                        dir as uintptr_t,
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        ifid,
-                    );
-                }
+                __dtrace_probe_layer__process__entry(
+                    dir as uintptr_t,
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    ifid,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let ifid_s = ifid.to_string();
@@ -706,15 +700,15 @@ impl Layer {
                     if let Some(extra_cstr) = extra_cstr {
                         let _ = eb.append_name_raw(extra_cstr);
                     }
-                    __dtrace_probe_layer__process__return(
-                        dir as uintptr_t,
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        flow_before,
-                        flow_after,
-                        eb.as_ptr(),
-                    );
                 }
+                __dtrace_probe_layer__process__return(
+                    dir as uintptr_t,
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    flow_before,
+                    flow_after,
+                    eb.as_ptr(),
+                );
                 drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
@@ -1454,14 +1448,12 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                unsafe {
-                    __dtrace_probe_rule__deny(
-                        self.port_c.as_ptr() as uintptr_t,
-                        self.name_c.as_ptr() as uintptr_t,
-                        dir as uintptr_t,
-                        flow_id,
-                    );
-                }
+                __dtrace_probe_rule__deny(
+                    self.port_c.as_ptr() as uintptr_t,
+                    self.name_c.as_ptr() as uintptr_t,
+                    dir as uintptr_t,
+                    flow_id,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow_id.to_string();
@@ -1696,11 +1688,9 @@ impl RuleTable {
                     flow_id,
                 };
 
-                unsafe {
-                    __dtrace_probe_rule__no__match(
-                        &arg as *const rule_no_match_sdt_arg as uintptr_t,
-                    );
-                }
+                __dtrace_probe_rule__no__match(
+                    &arg as *const rule_no_match_sdt_arg as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = port.to_str().unwrap();
                 let layer_s = layer.to_str().unwrap();
@@ -1733,11 +1723,9 @@ impl RuleTable {
                     rule_type: action_str_c.as_ptr(),
                 };
 
-                unsafe {
-                    __dtrace_probe_rule__match(
-                        &arg as *const rule_match_sdt_arg as uintptr_t,
-                    );
-                }
+                __dtrace_probe_rule__match(
+                    &arg as *const rule_match_sdt_arg as uintptr_t,
+                );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = port.to_str().unwrap();
                 let layer_s = layer.to_str().unwrap();
@@ -1762,8 +1750,8 @@ impl RuleTable {
 }
 
 #[cfg(all(not(feature = "std"), not(test)))]
-extern "C" {
-    pub fn __dtrace_probe_gen__desc__fail(
+unsafe extern "C" {
+    pub safe fn __dtrace_probe_gen__desc__fail(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
@@ -1771,7 +1759,7 @@ extern "C" {
         msg: uintptr_t,
     );
 
-    pub fn __dtrace_probe_gen__ht__fail(
+    pub safe fn __dtrace_probe_gen__ht__fail(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
@@ -1779,13 +1767,13 @@ extern "C" {
         msg: uintptr_t,
     );
 
-    pub fn __dtrace_probe_layer__process__entry(
+    pub safe fn __dtrace_probe_layer__process__entry(
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
         ifid: *const InnerFlowId,
     );
-    pub fn __dtrace_probe_layer__process__return(
+    pub safe fn __dtrace_probe_layer__process__return(
         dir: uintptr_t,
         port: uintptr_t,
         name: uintptr_t,
@@ -1794,10 +1782,10 @@ extern "C" {
         res: *const LabelBlock<2>,
     );
 
-    pub fn __dtrace_probe_rule__match(arg: uintptr_t);
-    pub fn __dtrace_probe_rule__no__match(arg: uintptr_t);
+    pub safe fn __dtrace_probe_rule__match(arg: uintptr_t);
+    pub safe fn __dtrace_probe_rule__no__match(arg: uintptr_t);
 
-    pub fn __dtrace_probe_rule__deny(
+    pub safe fn __dtrace_probe_rule__deny(
         port: uintptr_t,
         layer: uintptr_t,
         dir: uintptr_t,
@@ -1829,8 +1817,8 @@ mod test {
     use ingot::tcp::Tcp;
     use ingot::types::HeaderLen;
 
-    use crate::engine::ip::v4::Ipv4;
     use crate::engine::GenericUlp;
+    use crate::engine::ip::v4::Ipv4;
 
     use super::*;
 

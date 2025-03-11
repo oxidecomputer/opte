@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Common routines for integration tests.
 
@@ -16,41 +16,42 @@ pub mod pcap;
 pub mod port_state;
 
 // Let's make our lives easier and pub use a bunch of stuff.
+pub use opte::ExecCtx;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
 pub use opte::ddi::mblk::MsgBlkIterMut;
+pub use opte::engine::GenericUlp;
+pub use opte::engine::NetworkParser;
 pub use opte::engine::ether::EtherMeta;
 pub use opte::engine::ether::EtherType;
 pub use opte::engine::ether::Ethernet;
+pub use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
+pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::geneve::GeneveMeta;
 pub use opte::engine::geneve::GeneveOption;
 pub use opte::engine::geneve::OxideOption;
 pub use opte::engine::geneve::Vni;
-pub use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
-pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::headers::IpAddr;
 pub use opte::engine::headers::IpCidr;
+pub use opte::engine::ip::L3Repr;
 pub use opte::engine::ip::v4::Ipv4;
 pub use opte::engine::ip::v4::Ipv4Addr;
 pub use opte::engine::ip::v4::Protocol;
 pub use opte::engine::ip::v6::Ipv6;
 pub use opte::engine::ip::v6::Ipv6Addr;
-pub use opte::engine::ip::L3Repr;
 pub use opte::engine::layer::DenyReason;
 pub use opte::engine::packet::LiteInPkt;
 pub use opte::engine::packet::LiteOutPkt;
 pub use opte::engine::packet::MblkLiteParsed;
 pub use opte::engine::packet::Packet;
 pub use opte::engine::packet::ParseError;
-pub use opte::engine::port::meta::ActionMeta;
 pub use opte::engine::port::DropReason;
 pub use opte::engine::port::Port;
 pub use opte::engine::port::PortBuilder;
 pub use opte::engine::port::ProcessResult;
 pub use opte::engine::port::ProcessResult::*;
-pub use opte::engine::GenericUlp;
-pub use opte::engine::NetworkParser;
+pub use opte::engine::port::meta::ActionMeta;
 pub use opte::ingot::ethernet::Ethertype;
 pub use opte::ingot::geneve::Geneve;
 pub use opte::ingot::geneve::GeneveOpt;
@@ -62,10 +63,10 @@ pub use opte::ingot::types::Emit;
 pub use opte::ingot::types::EmitDoesNotRelyOnBufContents;
 pub use opte::ingot::types::HeaderLen;
 pub use opte::ingot::udp::Udp;
-pub use opte::ExecCtx;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::DhcpCfg;
 pub use oxide_vpc::api::ExternalIpCfg;
+pub use oxide_vpc::api::GW_MAC_ADDR;
 pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
@@ -77,19 +78,18 @@ pub use oxide_vpc::api::SNat6Cfg;
 pub use oxide_vpc::api::SetFwRulesReq;
 pub use oxide_vpc::api::TunnelEndpoint;
 pub use oxide_vpc::api::VpcCfg;
-pub use oxide_vpc::api::GW_MAC_ADDR;
+pub use oxide_vpc::engine::VpcNetwork;
+pub use oxide_vpc::engine::VpcParser;
 pub use oxide_vpc::engine::firewall;
 pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
+pub use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
+pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
 pub use oxide_vpc::engine::overlay::VpcMappings;
-pub use oxide_vpc::engine::overlay::BOUNDARY_SERVICES_VNI;
-pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::router;
-pub use oxide_vpc::engine::VpcNetwork;
-pub use oxide_vpc::engine::VpcParser;
 pub use port_state::*;
 pub use smoltcp::wire::IpProtocol;
 pub use std::num::NonZeroU32;
@@ -337,7 +337,7 @@ pub fn oxide_net_setup2(
         IpCfg::Ipv6(ipv6) => {
             vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
         }
-        IpCfg::DualStack { ref ipv4, ref ipv6 } => {
+        IpCfg::DualStack { ipv4, ipv6 } => {
             vpc_map.add(IpAddr::Ip4(ipv4.private_ip), phys_net);
             vpc_map.add(IpAddr::Ip6(ipv6.private_ip), phys_net)
         }

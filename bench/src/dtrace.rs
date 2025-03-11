@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Tools for parsing lquantize histograms into `criterion`.
 
@@ -10,7 +10,7 @@ use super::MeasurementInfo;
 use criterion::measurement::Measurement;
 use criterion::measurement::ValueFormatter;
 use criterion::measurement::WallTime;
-use rand::distributions::WeightedIndex;
+use rand::distr::weighted::WeightedIndex;
 use rand::prelude::*;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -157,7 +157,7 @@ impl Measurement for DTraceHisto {
     // from. We build up the WeightedIndex once it is needed, at which
     // point it will effectively mirror the input distribution.
     fn end(&self, _i: Self::Intermediate) -> Self::Value {
-        let mut rng = thread_rng();
+        let mut rng = rand::rng();
         let idx = self.rng_idx.get_or_init(|| {
             WeightedIndex::new(self.buckets.iter().map(|x| x.1)).unwrap()
         });
