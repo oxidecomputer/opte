@@ -1253,16 +1253,21 @@ impl<N: NetworkImpl> Port<N> {
         // In case 1, we can also cache and reuse the same EmitSpec for
         // all hit packets.
         //
-        // Lock management here is generally optimistic. The strategy we employ
-        // is to attempt to grab a UFT entry from a read lock -- on a miss or
-        // an invalidated entry, we upgrade to a write lock (assuming we need to
-        // fallback to the slowpath), and attempt to read again. A second miss
-        // then leads to the slowpath. A successful fastpath hit may need to
-        // reacquire the write-lock if we end up closing out a TCP flow.
-
-        // The lock needs to be optional here because there is one
-        // case wherein we need to reacquire the lock -- invalidation
-        // by TCP state.
+        // Lock management here is generally optimistic -- most fastpath cases
+        // take a short hold on the reader lock.
+        //  - As a rule: once we determine that a packet is bound for the slow
+        //    path, we hold the writer lock until the packet is processed.
+        //  - When a packet arrives, look for a UFT using a reader lock.
+        //    Temporarily take the write lock if that entry is unusable.
+        //     - Drop writer if present and usable (fast path),
+        //     - Downgrade to the slowpath holding writer.
+        //  - If a UFT is held, progress TCP state based on flags.
+        //    Temporarily take writer if existing TCP state was closed out.
+        //     - Drop writer once flow closed, or
+        //     - Downgrade to the slowpath, if this is a new flow.
+        //     (Both of these cases are infrequent.)
+        //  - Finalise processing holding no lock (fastpath) or writer
+        //    (slowpath).
         let data = self.data.read();
 
         // (1) Check for UFT and precompiled.
@@ -1281,7 +1286,7 @@ impl<N: NetworkImpl> Port<N> {
         drop(data);
 
         // If we have a UFT miss or invalid entry, upgrade to a write lock and
-        // retry. This lets us use an optimistic lookup more often.
+        // fetch again. This lets us use an optimistic lookup more often.
         let (uft, mut lock) = match uft {
             Some(ref entry) if entry.state().epoch == epoch => (uft, None),
             Some(_) | None => {
@@ -1304,12 +1309,24 @@ impl<N: NetworkImpl> Port<N> {
             Slow,
         }
 
-        let decision = match uft {
-            // We have a valid UFT entry of some kind -- clone out the
-            // saved transforms so that we can drop the lock ASAP.
-            // Recheck epoch in case we took a write lock and re-read
-            // the UFT.
-            Some(entry) if entry.state().epoch == epoch => {
+        impl FastPathDecision {
+            fn as_u64(&self) -> u64 {
+                match self {
+                    FastPathDecision::CompiledUft(_) => 1,
+                    FastPathDecision::Uft(_) => 2,
+                    FastPathDecision::Slow => 3,
+                }
+            }
+        }
+
+        // We have either committed to our (suspected valid) UFT, or refetched
+        // it (may have been removed) under the write lock.
+        // Revalidate the entry in the latter case.
+        let mut decision = match uft {
+            // We have a valid UFT entry of some kind -- clone out the saved
+            // transforms so that we can drop the lock ASAP (if reacquired).
+            // Recheck epoch in case we took a write lock and re-read the UFT.
+            Some(entry) if lock.is_none() || entry.state().epoch == epoch => {
                 // The Fast Path.
                 drop(lock.take());
                 let xforms = &entry.state().xforms;
@@ -1327,10 +1344,9 @@ impl<N: NetworkImpl> Port<N> {
                 out
             }
 
-            // The entry is from a previous epoch; invalidate its UFT
+            // The entry is *definitely* from a previous epoch; invalidate its UFT
             // entries and proceed to rule processing.
-            // We will have been upgraded to a write lock if this was
-            // possible.
+            // We will have been upgraded to a write lock if this was possible.
             Some(entry) => {
                 let data = lock
                     .as_mut()
@@ -1348,29 +1364,16 @@ impl<N: NetworkImpl> Port<N> {
             None => FastPathDecision::Slow,
         };
 
-        // (1)/(2) UFT hit. Update stats, drop locks, validate TCP state.
-        //    We *almost always* know the result is modified.
-        //    This will produce an incorrect stat in the event that TCP invalidation
-        //    forces a reprocess, but I believe this is a necessary evil to keep work
-        //    out of the portlock today. The correct fix is to AtomicU64 those stats,
-        //    which we'll need for later metrics too.
-        //    However, fixing this up if we get it wrong is simple enough.
-        let mut invalidated_tcp = None;
-        let mut reprocess = false;
-
+        // (1)/(2) Update UFT hit stats, validate TCP state.
+        //    Whenever a TCP flow ends (or a new TCP flow unexpectedly begins
+        //    with the same flow ID), we need to remove the old TCP flow state
+        //    (and any attached UFTs) and *may* need to downgrade to slowpath
+        //    processing for stats purposes.
+        //
+        //    These are fairly infrequent paths in the TCP lifecycle.
         match &decision {
             FastPathDecision::CompiledUft(entry)
             | FastPathDecision::Uft(entry) => {
-                let dummy_res = Ok(InternalProcessResult::Modified);
-                match dir {
-                    Direction::In => {
-                        self.update_stats_in(&dummy_res);
-                    }
-                    Direction::Out => {
-                        self.update_stats_out(&dummy_res);
-                    }
-                }
-
                 entry.hit_at(process_start);
                 self.uft_hit_probe(dir, &flow_before, epoch, &process_start);
 
@@ -1388,126 +1391,135 @@ impl<N: NetworkImpl> Port<N> {
                         Direction::Out => None,
                     };
 
-                    match tcp_flow.state().update(
+                    let invalidated_tcp = match tcp_flow.state().update(
                         self.name_cstr.as_c_str(),
                         tcp,
                         dir,
                         pkt.len() as u64,
                         ufid_in,
                     ) {
-                        Ok(TcpState::Closed) => {
-                            invalidated_tcp = Some(Arc::clone(tcp_flow));
-                        }
+                        Ok(TcpState::Closed) => Some(Arc::clone(tcp_flow)),
                         Err(TcpFlowStateError::NewFlow { .. }) => {
-                            invalidated_tcp = Some(Arc::clone(tcp_flow));
-                            reprocess = true;
+                            let out = Some(Arc::clone(tcp_flow));
+                            decision = FastPathDecision::Slow;
+                            out
                         }
-                        _ => {}
+                        _ => None,
+                    };
+
+                    // Reacquire the writer to remove the flow if needed.
+                    // Elevate lock to full scope, if we are reprocessing
+                    // as well.
+                    if let Some(entry) = invalidated_tcp {
+                        let mut local_lock = self.data.write();
+
+                        let flow_lock = entry.state().inner.lock();
+                        let ufid_out = &flow_lock.outbound_ufid;
+
+                        let ufid_in = flow_lock.inbound_ufid.as_ref();
+
+                        // Because we've dropped the port lock, another packet could have
+                        // also invalidated this flow and removed the entry. It could even
+                        // install new UFT/TCP entries, depending on lock/process ordering.
+                        //
+                        // Verify that the state we want to remove still exists, and is
+                        // `Arc`-identical.
+                        if let Some(found_entry) =
+                            local_lock.tcp_flows.get(ufid_out)
+                        {
+                            if Arc::ptr_eq(found_entry, &entry) {
+                                self.uft_tcp_closed(
+                                    &mut local_lock,
+                                    ufid_out,
+                                    ufid_in,
+                                );
+                                _ = local_lock.tcp_flows.remove(ufid_out);
+                            }
+                        }
+
+                        // We've determined we're actually starting a new TCP flow (e.g.,
+                        // SYN on any other state) from an existing UFT entry.
+                        if matches!(decision, FastPathDecision::Slow) {
+                            lock = Some(local_lock);
+                        }
                     }
                 }
             }
             _ => {}
         }
 
-        // reprocess => invalidated_tcp.is_some();
-        debug_assert!(!reprocess || invalidated_tcp.is_some());
+        // (1) Execute precompiled, and exit.
+        if let FastPathDecision::CompiledUft(entry) = &decision {
+            let l4_hash = entry.state().l4_hash;
+            let tx = entry.state().xforms.compiled.as_ref().cloned().unwrap();
 
-        // We've determined we're actually starting a new TCP flow (e.g., SYN
-        // on any other state) from an existing UFT entry.
-        // We know the lock is dropped -- reacquire the lock to remove the flow.
-        // Elevate lock to full scope, if we are reprocessing as well.
-        if let Some(entry) = invalidated_tcp {
-            let mut local_lock = self.data.write();
+            let len = pkt.len();
+            let meta = pkt.meta_mut();
+            let body_csum = if tx.checksums_dirty {
+                meta.compute_body_csum()
+            } else {
+                None
+            };
+            meta.run_compiled_transform(&tx);
+            if let Some(csum) = body_csum {
+                meta.update_inner_checksums(csum);
+            }
+            let encap_len = meta.encap_len();
+            let ulp_len = (len - (encap_len as usize)) as u32;
+            let rewind = match tx.encap {
+                CompiledEncap::Pop => encap_len,
+                _ => 0,
+            };
+            let out = EmitSpec {
+                prepend: PushSpec::Fastpath(tx),
+                l4_hash,
+                rewind,
+                ulp_len,
+            };
 
-            let flow_lock = entry.state().inner.lock();
-            let ufid_out = &flow_lock.outbound_ufid;
-
-            let ufid_in = flow_lock.inbound_ufid.as_ref();
-
-            // Because we've dropped the port lock, another packet could have also
-            // invalidated this flow and removed the entry. It could even install
-            // new UFT/TCP entries, depending on lock/process ordering.
-            //
-            // Verify that the state we want to remove still exists, and is
-            // `Arc`-identical.
-            if let Some(found_entry) = local_lock.tcp_flows.get(ufid_out) {
-                if Arc::ptr_eq(found_entry, &entry) {
-                    self.uft_tcp_closed(&mut local_lock, ufid_out, ufid_in);
-                    _ = local_lock.tcp_flows.remove(ufid_out);
+            let flow_after = meta.flow();
+            let res = Ok(InternalProcessResult::Modified);
+            match dir {
+                Direction::In => {
+                    self.update_stats_in(&res);
+                }
+                Direction::Out => {
+                    self.update_stats_out(&res);
                 }
             }
-
-            if reprocess {
-                lock = Some(local_lock);
-            }
-        }
-
-        if !reprocess {
-            // (1) Execute precompiled, and exit.
-            if let FastPathDecision::CompiledUft(entry) = decision {
-                let l4_hash = entry.state().l4_hash;
-                let tx =
-                    entry.state().xforms.compiled.as_ref().cloned().unwrap();
-
-                let len = pkt.len();
-                let meta = pkt.meta_mut();
-                let body_csum = if tx.checksums_dirty {
-                    meta.compute_body_csum()
-                } else {
-                    None
-                };
-                meta.run_compiled_transform(&tx);
-                if let Some(csum) = body_csum {
-                    meta.update_inner_checksums(csum);
-                }
-                let encap_len = meta.encap_len();
-                let ulp_len = (len - (encap_len as usize)) as u32;
-                let rewind = match tx.encap {
-                    CompiledEncap::Pop => encap_len,
-                    _ => 0,
-                };
-                let out = EmitSpec {
-                    prepend: PushSpec::Fastpath(tx),
-                    l4_hash,
-                    rewind,
-                    ulp_len,
-                };
-
-                let flow_after = meta.flow();
-                let res = Ok(ProcessResult::Modified(out));
-                self.port_process_return_probe(
-                    dir,
-                    &flow_before,
-                    &flow_after,
-                    epoch,
-                    mblk_addr,
-                    &res,
-                    1,
-                );
-                return res;
-            }
+            let res = Ok(ProcessResult::Modified(out));
+            self.port_process_return_probe(
+                dir,
+                &flow_before,
+                &flow_after,
+                epoch,
+                mblk_addr,
+                &res,
+                decision.as_u64(),
+            );
+            return res;
         }
 
         // (2)/(3) Full-fat metadata is required.
         let mut pkt = pkt.to_full_meta();
         let mut ameta = ActionMeta::new();
 
-        let (res, path) = match (&decision, dir) {
+        let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
             // Reuse cached l4 hash.
-            (FastPathDecision::Uft(entry), _) if !reprocess => {
+            (FastPathDecision::Uft(entry), _) => {
                 let l4_hash = entry.state().l4_hash;
                 let tx = Arc::clone(&entry.state().xforms);
 
                 pkt.set_l4_hash(l4_hash);
                 tx.apply(&mut pkt, dir)?;
-                (Ok(InternalProcessResult::Modified), 2)
+                Ok(InternalProcessResult::Modified)
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
             // Cksum updates are left undone, so we perform those manually
             // outside the port lock.
-            (_, Direction::In) => {
+            (FastPathDecision::Slow, Direction::In) => {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
@@ -1520,18 +1532,12 @@ impl<N: NetworkImpl> Port<N> {
                     &mut ameta,
                 );
 
-                // Prevent double-counting reprocessed modify entries.
-                if !(reprocess
-                    && matches!(res, Ok(InternalProcessResult::Modified)))
-                {
-                    self.update_stats_in(&res);
-                }
                 drop(lock);
 
                 pkt.update_checksums();
-                (res, 3)
+                res
             }
-            (_, Direction::Out) => {
+            (FastPathDecision::Slow, Direction::Out) => {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
@@ -1539,20 +1545,21 @@ impl<N: NetworkImpl> Port<N> {
                 let res =
                     self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
 
-                // Prevent double-counting reprocessed modify entries.
-                if !(reprocess
-                    && matches!(res, Ok(InternalProcessResult::Modified)))
-                {
-                    self.update_stats_out(&res);
-                }
                 drop(lock);
 
                 pkt.update_checksums();
-                (res, 3)
+                res
             }
+
+            (FastPathDecision::CompiledUft(_), _) => unreachable!(),
         };
 
         let flow_after = *pkt.flow();
+
+        match dir {
+            Direction::In => self.update_stats_in(&res),
+            Direction::Out => self.update_stats_out(&res),
+        }
 
         let res = res.and_then(|v| match v {
             InternalProcessResult::Drop { reason } => {
@@ -1571,7 +1578,7 @@ impl<N: NetworkImpl> Port<N> {
             epoch,
             mblk_addr,
             &res,
-            path,
+            decision.as_u64(),
         );
         res
     }
@@ -2001,7 +2008,7 @@ impl<N: NetworkImpl> Port<N> {
         Ok(LayerResult::Allow)
     }
 
-    #[inline]
+    #[inline(always)]
     fn port_process_entry_probe(
         &self,
         dir: Direction,

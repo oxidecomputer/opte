@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 #![cfg_attr(feature = "kernel", feature(extern_types))]
 #![allow(non_camel_case_types)]
 #![no_std]
@@ -160,7 +160,7 @@ impl core::ops::SubAssign<u64> for KStatNamedValue {
 }
 
 impl KStatNamedValue {
-    /// Validates at compile time whether ._u64 can be safely used as
+    /// Validates at compile time whether `self._u64` can be safely used as
     /// an AtomicU64.
     const KSTAT_ATOMIC_U64_SAFE: () = if align_of::<KStatNamedValue>() % 8 == 0
     {

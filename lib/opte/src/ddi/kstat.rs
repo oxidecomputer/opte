@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Export Rust structs as illumos kstats.
 //!
@@ -32,7 +32,7 @@ cfg_if! {
 ///
 /// An implementation of this trait acts as a provider of "named"
 /// kstats (i.e. `KSTAT_TYPE_NAMED` in `kstat_create(9F)`). The kstats
-/// are always virtual (`KSTAT_FLAG_VRITUAL`), meaning that the
+/// are always virtual (`KSTAT_FLAG_VIRTUAL`), meaning that the
 /// allocation of the kstat data is performed by the caller (Rust).
 ///
 /// Rather than implementing this trait manually, the kstat-macro
