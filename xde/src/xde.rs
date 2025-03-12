@@ -17,8 +17,12 @@ use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
+use crate::ip::cpu;
+use crate::ip::ncpus;
+use crate::ip::processorid_t;
 use crate::mac;
 use crate::mac::ChecksumOffloadCapabs;
+use crate::mac::MacClient;
 use crate::mac::MacEmul;
 use crate::mac::MacHandle;
 use crate::mac::MacPromiscHandle;
@@ -79,6 +83,7 @@ use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
+use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
@@ -144,7 +149,9 @@ const XDE_CTL_STR: *const c_char = c"ctl".as_ptr();
 // Set once in `xde_attach`.
 static mut XDE_CTL_MINOR: minor_t = 0;
 
-/// A list of xde devices instantiated through xde_ioc_create.
+/// The central list of xde devices instantiated through xde_ioc_create.
+///
+/// Packet callbacks should refer to their own copy of this map.
 static mut XDE_DEVS: KRwLock<DevMap> = KRwLock::new(DevMap::new());
 fn xde_devs() -> &'static KRwLock<DevMap> {
     // SAFETY: this field is used mutably only once, during _init.
@@ -241,11 +248,11 @@ pub struct xde_underlay_port {
     pub mtu: u32,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle<DlsStream>,
+    mph: MacPromiscHandle<UnderlayDev>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
-    stream: Arc<DlsStream>,
+    stream: Arc<UnderlayDev>,
 }
 
 struct XdeState {
@@ -337,6 +344,27 @@ pub struct XdeDev {
     // ports to theoretically reduce contention around route expiry
     // and reinsertion.
     routes: RouteCache,
+
+    // Each port has its own copy of XDE_DEVS.
+    port_map: KMutex<DevMap>,
+}
+
+#[repr(C)]
+struct UnderlayDev {
+    stream: DlsStream,
+    ports_map: Vec<KMutex<DevMap>>,
+}
+
+impl core::fmt::Debug for UnderlayDev {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UnderlayDev").finish_non_exhaustive()
+    }
+}
+
+impl MacClient for UnderlayDev {
+    fn mac_client_handle(&self) -> Result<*mut mac::mac_client_handle, c_int> {
+        self.stream.mac_client_handle()
+    }
 }
 
 #[cfg(not(test))]
@@ -751,7 +779,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let mut guest_addr = cfg.guest_mac.bytes();
 
-    let mut xde = Box::new(XdeDev {
+    let mut xde = Arc::new(XdeDev {
         devname: req.xde_devname.clone(),
         linkid: req.linkid,
         mh: ptr::null_mut(),
@@ -773,7 +801,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2: underlay.u2.clone(),
         underlay_capab: underlay.shared_props,
         routes: RouteCache::default(),
+        port_map: KMutex::new(DevMap::default()),
     });
+    let xde_ref =
+        Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
     drop(underlay_);
 
     // set up upper mac
@@ -786,7 +817,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     };
 
     mreg.m_type_ident = MAC_PLUGIN_IDENT_ETHER;
-    mreg.m_driver = xde.as_mut() as *mut XdeDev as *mut c_void;
+    mreg.m_driver = xde_ref as *mut XdeDev as *mut c_void;
     mreg.m_dst_addr = core::ptr::null_mut();
     mreg.m_pdata = core::ptr::null_mut();
     mreg.m_pdata_size = 0;
@@ -806,7 +837,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_src_addr = guest_addr.as_mut_ptr();
 
     let reg_res = unsafe {
-        mac::mac_register(mreg as *mut mac::mac_register_t, &mut xde.mh)
+        mac::mac_register(mreg as *mut mac::mac_register_t, &mut xde_ref.mh)
     };
     match reg_res {
         0 => {}
@@ -822,7 +853,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     unsafe { mac::mac_free(mreg) };
 
     // setup dls
-    match unsafe { dls::dls_devnet_create(xde.mh, req.linkid, 0) } {
+    match unsafe { dls::dls_devnet_create(xde_ref.mh, req.linkid, 0) } {
         0 => {}
         err => {
             unsafe {
@@ -835,13 +866,36 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         }
     }
 
-    xde.link_state = mac::link_state_t::Up;
+    xde_ref.link_state = mac::link_state_t::Up;
     unsafe {
         mac::mac_link_update(xde.mh, xde.link_state);
         mac::mac_tx_update(xde.mh);
     }
 
     _ = devs.insert(xde);
+
+    // Update all ports's maps.
+    // TODO: not clone the WHOLE THING each time.
+    for port in devs.iter() {
+        let mut map = port.port_map.lock();
+        *map = devs.clone();
+    }
+
+    // Update all underlays' maps.
+    // TODO: not clone the WHOLE THING each time.
+    {
+        let underlay_ = state.underlay.lock();
+        let underlay = underlay_.as_ref().unwrap();
+        let ports =
+            [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
+        for port in ports {
+            for map in port {
+                let mut map = map.lock();
+                *map = devs.clone();
+            }
+        }
+    }
+
     Ok(NoResp::default())
 }
 
@@ -905,6 +959,29 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
 
     // Remove the xde device entry.
     _ = devs.remove(&req.xde_devname);
+
+    // Update all ports's maps.
+    // TODO: not clone the WHOLE THING each time.
+    for port in devs.iter() {
+        let mut map = port.port_map.lock();
+        *map = devs.clone();
+    }
+
+    // Update all underlays' maps.
+    // TODO: not clone the WHOLE THING each time.
+    {
+        let underlay_ = state.underlay.lock();
+        let underlay = underlay_.as_ref().unwrap();
+        let ports =
+            [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
+        for port in ports {
+            for map in port {
+                let mut map = map.lock();
+                *map = devs.clone();
+            }
+        }
+    }
+
     Ok(NoResp::default())
 }
 
@@ -1105,11 +1182,19 @@ fn create_underlay_port(
             msg: format!("failed to get linkid for {link_name}: {err}"),
         })?;
 
-    let stream =
-        Arc::new(DlsStream::open(link_id).map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to grab open stream for {link_name}: {e}"),
-        })?);
+    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!("failed to grab open stream for {link_name}: {e}"),
+    })?;
+
+    // Maybe also a RwLock?
+    let cpus = unsafe { ncpus } as usize;
+    let mut ports_map = Vec::with_capacity(cpus);
+    for _ in 0..cpus {
+        ports_map.push(KMutex::new(DevMap::new()));
+    }
+
+    let stream = Arc::new(UnderlayDev { stream, ports_map });
 
     // Setup promiscuous callback to receive all packets on this link.
     //
@@ -1474,7 +1559,7 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KRwLockReadGuard<DevMap>,
+    devs: &KMutexGuard<DevMap>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
@@ -1696,7 +1781,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         //
         // TODO Is there way to set mac_tx to must use result?
         drop(parsed_pkt);
-        stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+        stream.stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         return ptr::null_mut();
     }
 
@@ -1737,7 +1822,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let mut out_pkt = emit_spec.apply(pkt);
 
             if ip6_src == ip6_dst {
-                let devs = xde_devs().read();
+                let devs = src_dev.port_map.lock();
                 guest_loopback(src_dev, &devs, out_pkt, vni);
                 return ptr::null_mut();
             }
@@ -1811,7 +1896,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 MsgBlk::wrap_mblk(mblk).unwrap()
             };
 
-            underlay_dev.stream.tx_drop_on_no_desc(
+            underlay_dev.stream.stream.tx_drop_on_no_desc(
                 new_pkt,
                 hint,
                 MacTxFlags::empty(),
@@ -1831,7 +1916,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         },
 
         Ok(ProcessResult::Bypass) => {
-            stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+            stream.stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
         }
 
         Err(_) => {}
@@ -2030,8 +2115,8 @@ unsafe extern "C" fn xde_rx(
     // corresponding to the underlay port we're receiving on. Being
     // here in the callback means the `MacPromiscHandle` hasn't been
     // dropped yet and thus our `MacClientHandle` is also still valid.
-    let stream: Arc<DlsStream> = unsafe {
-        let mch_ptr = arg as *const DlsStream;
+    let stream: Arc<UnderlayDev> = unsafe {
+        let mch_ptr = arg as *const UnderlayDev;
         Arc::increment_strong_count(mch_ptr);
         Arc::from_raw(mch_ptr)
     };
@@ -2057,9 +2142,13 @@ unsafe extern "C" fn xde_rx(
     }
 }
 
+unsafe extern "C" {
+    safe fn curcpup() -> *mut cpu;
+}
+
 #[inline]
 unsafe fn xde_rx_one(
-    stream: &DlsStream,
+    stream: &UnderlayDev,
     mrh: *mut mac::mac_resource_handle,
     mut pkt: MsgBlk,
 ) {
@@ -2086,7 +2175,13 @@ unsafe fn xde_rx_one(
     };
 
     let meta = parsed_pkt.meta();
-    let devs = xde_devs().read();
+    let cpu_index = unsafe {
+        let cpu = curcpup();
+        // this is a dumb cast while I prototype this work.
+        // These are cpu_id, then cpu_seqid. We want the latter.
+        *(cpu as *mut processorid_t).offset(1)
+    };
+    let devs = stream.ports_map[cpu_index as usize].lock();
 
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
@@ -2145,7 +2240,7 @@ unsafe fn xde_rx_one(
             }
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }
