@@ -775,16 +775,13 @@ impl MsgBlk {
         }
 
         #[cfg(all(not(feature = "std"), not(test)))]
-        let res = unsafe {
+        unsafe {
             illumos_sys_hdrs::mac::mac_ether_set_pktinfo(
                 self.0.as_ptr(),
                 outer_meoi,
                 inner_meoi.map(|v| v as *const _).unwrap_or_else(ptr::null),
             )
-        };
-
-        #[cfg(any(feature = "std", test))]
-        let res = 0;
+        }
 
         Ok(())
     }
