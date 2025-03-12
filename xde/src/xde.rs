@@ -21,6 +21,7 @@ use crate::ip::cpu;
 use crate::ip::ncpus;
 use crate::ip::processorid_t;
 use crate::mac;
+use crate::mac::mac_rx_barrier;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacClient;
 use crate::mac::MacEmul;
@@ -1062,6 +1063,11 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // after the callback is removed.
             // Because there are no ports and we hold the write/management lock, no
             // one else will have or try to clone the Stream handle.
+
+            // TEST
+            if let Ok(mch) = u.stream.mac_client_handle() {unsafe {
+                mac_rx_barrier(mch);
+            }}
 
             // 2. Close the open stream handle.
             // The only other hold on this `DlsStream` is via `u.siphon`, which
