@@ -21,7 +21,6 @@ use crate::ip::cpu;
 use crate::ip::ncpus;
 use crate::ip::processorid_t;
 use crate::mac;
-use crate::mac::mac_rx_barrier;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacClient;
 use crate::mac::MacEmul;
@@ -37,6 +36,7 @@ use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
+use crate::mac::mac_rx_barrier;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -98,6 +98,7 @@ use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
+use opte::ddi::sync::KRwLockWriteGuard;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::NetworkImpl;
@@ -356,13 +357,13 @@ pub struct XdeDev {
     routes: RouteCache,
 
     // Each port has its own copy of XDE_DEVS.
-    port_map: KMutex<DevMap>,
+    port_map: KMutex<Arc<DevMap>>,
 }
 
 #[repr(C)]
 struct UnderlayDev {
     stream: DlsStream,
-    ports_map: Vec<KMutex<DevMap>>,
+    ports_map: Vec<KMutex<Arc<DevMap>>>,
 }
 
 impl core::fmt::Debug for UnderlayDev {
@@ -808,7 +809,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2: underlay.u2.clone(),
         underlay_capab: underlay.shared_props,
         routes: RouteCache::default(),
-        port_map: KMutex::new(DevMap::default()),
+        port_map: KMutex::new(Arc::new(DevMap::new())),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -880,28 +881,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     }
 
     _ = devs.insert(xde);
-
-    // Update all ports's maps.
-    // TODO: not clone the WHOLE THING each time.
-    for port in devs.iter() {
-        let mut map = port.port_map.lock();
-        *map = devs.clone();
-    }
-
-    // Update all underlays' maps.
-    // TODO: not clone the WHOLE THING each time.
-    {
-        let underlay_ = state.underlay.lock();
-        let underlay = underlay_.as_ref().unwrap();
-        let ports =
-            [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
-        for port in ports {
-            for map in port {
-                let mut map = map.lock();
-                *map = devs.clone();
-            }
-        }
-    }
+    refresh_maps(devs);
 
     Ok(NoResp::default())
 }
@@ -964,32 +944,37 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         }
     };
 
-    // Remove the xde device entry.
-    _ = devs.remove(&req.xde_devname);
+    // Remove the xde device entry. Clear its devmap to break any cycles.
+    if let Some(xde) = devs.remove(&req.xde_devname) {
+        let mut pmap = xde.port_map.lock();
+        *pmap = DevMap::new().into();
+    }
+    refresh_maps(devs);
 
-    // Update all ports's maps.
-    // TODO: not clone the WHOLE THING each time.
+    Ok(NoResp::default())
+}
+
+// NOTE: mut not used but effectively guaranteering writelock from ioctl.
+fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
+    let state = get_xde_state();
+    let new_map = Arc::new(devs.clone());
+
+    // Update all ports' maps.
     for port in devs.iter() {
         let mut map = port.port_map.lock();
-        *map = devs.clone();
+        *map = new_map.clone();
     }
 
     // Update all underlays' maps.
-    // TODO: not clone the WHOLE THING each time.
-    {
-        let underlay_ = state.underlay.lock();
-        let underlay = underlay_.as_ref().unwrap();
-        let ports =
-            [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
-        for port in ports {
-            for map in port {
-                let mut map = map.lock();
-                *map = devs.clone();
-            }
+    let underlay_ = state.underlay.lock();
+    let underlay = underlay_.as_ref().unwrap();
+    let ports = [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
+    for port in ports {
+        for map in port {
+            let mut map = map.lock();
+            *map = new_map.clone();
         }
     }
-
-    Ok(NoResp::default())
 }
 
 #[unsafe(no_mangle)]
@@ -1063,11 +1048,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // after the callback is removed.
             // Because there are no ports and we hold the write/management lock, no
             // one else will have or try to clone the Stream handle.
-
-            // TEST
-            if let Ok(mch) = u.stream.mac_client_handle() {unsafe {
-                mac_rx_barrier(mch);
-            }}
 
             // 2. Close the open stream handle.
             // The only other hold on this `DlsStream` is via `u.siphon`, which
@@ -1207,7 +1187,7 @@ fn create_underlay_port(
     let cpus = unsafe { ncpus } as usize;
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map.push(KMutex::new(DevMap::new()));
+        ports_map.push(KMutex::new(DevMap::new().into()));
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -1572,7 +1552,7 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KMutexGuard<DevMap>,
+    devs: &KMutexGuard<Arc<DevMap>>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
