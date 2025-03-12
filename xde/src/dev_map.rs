@@ -2,12 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use crate::xde::XdeDev;
-use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use opte::api::MacAddr;
 use opte::api::Vni;
 
@@ -15,7 +15,7 @@ use opte::api::Vni;
 // it is apparent that we have *far* faster `Ord` and `Eq` implementations
 // on these wider integer types than (Vni, MacAddr).
 type Key = (u32, u64);
-type Val = Box<XdeDev>;
+type Val = Arc<XdeDev>;
 
 /// `BTreeMap`-accelerated lookup of XDE ports.
 ///
@@ -23,10 +23,13 @@ type Val = Box<XdeDev>;
 /// pair. The former is used mostly by the control plane, and the latter by the
 /// data plane -- thus, querying by address provides a direct lookup. Any other
 /// lookups (e.g., multicast listeners) should return `Key`s or `&[Key]`s.
+#[derive(Clone)]
 pub struct DevMap {
     devs: BTreeMap<Key, Val>,
-    names: BTreeMap<String, Key>,
+    names: BTreeMap<String, Val>,
 }
+
+// NOTE: should we have a Weak variant?
 
 impl Default for DevMap {
     fn default() -> Self {
@@ -44,13 +47,14 @@ impl DevMap {
     /// Returns an existing port, if one exists.
     pub fn insert(&mut self, val: Val) -> Option<Val> {
         let key = get_key(&val);
-        _ = self.names.insert(val.devname.clone(), key);
+        _ = self.names.insert(val.devname.clone(), val.clone());
         self.devs.insert(key, val)
     }
 
     /// Remove an `XdeDev` using its name.
     pub fn remove(&mut self, name: &str) -> Option<Val> {
-        self.devs.remove(&self.names.remove(name)?)
+        let key = get_key(&self.names.remove(name)?);
+        self.devs.remove(&key)
     }
 
     /// Return a reference to an `XdeDev` using its address.
@@ -64,7 +68,7 @@ impl DevMap {
     #[inline]
     #[must_use]
     pub fn get_by_name(&self, name: &str) -> Option<&Val> {
-        self.devs.get(self.names.get(name)?)
+        self.names.get(name)
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
