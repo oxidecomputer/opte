@@ -292,7 +292,7 @@ fn raw_install() -> Result<()> {
     conf_path.extend(&["xde", "xde.conf"]);
 
     let mut kmod_dir = meta.target_directory.clone();
-    kmod_dir.extend(&[KMOD_TARGET, "release", "xde"]);
+    kmod_dir.extend(&[KMOD_TARGET, "release-lto", "xde"]);
 
     let opteadm_dir = meta.target_directory.join("release/opteadm");
 
@@ -322,7 +322,7 @@ enum BuildTarget {
 
 fn build_cargo_bin(
     target: &[&str],
-    release: bool,
+    profile: &str,
     cwd: Option<&str>,
     current_cargo: bool,
 ) -> Result<()> {
@@ -343,9 +343,7 @@ fn build_cargo_bin(
 
     command.arg("build");
     command.args(target);
-    if release {
-        command.arg("--release");
-    }
+    command.args(["--profile", profile]);
 
     let mut dir = meta.workspace_root.clone().into_std_path_buf();
     if let Some(cwd) = cwd {
@@ -371,25 +369,25 @@ fn build_cargo_bin(
 
 impl BuildTarget {
     fn build(&self, debug: bool) -> Result<()> {
-        let profile = if debug { "debug" } else { "release" };
+        let (profile, xde_profile) = if debug { ("debug", "debug") } else { ("release", "release-lto") };
         match self {
             Self::OpteAdm => {
                 println!("Building opteadm ({profile}).");
-                build_cargo_bin(&["--bin", "opteadm"], !debug, None, true)
+                build_cargo_bin(&["--bin", "opteadm"], profile, None, true)
             }
             Self::Xde => {
                 println!("Building xde ({profile}).");
                 let meta = cargo_meta();
-                build_cargo_bin(&[], !debug, Some("xde"), false)?;
+                build_cargo_bin(&[], xde_profile, Some("xde"), false)?;
 
-                let (folder, out_name) = if debug {
-                    ("debug", "xde.dbg")
+                let out_name = if debug {
+                    "xde.dbg"
                 } else {
-                    ("release", "xde")
+                    "xde"
                 };
                 let target_dir = meta
                     .target_directory
-                    .join(format!("{KMOD_TARGET}/{folder}"));
+                    .join(format!("{KMOD_TARGET}/{xde_profile}"));
 
                 println!("Linking xde kmod...");
                 Command::new("ld")
@@ -409,12 +407,12 @@ impl BuildTarget {
                     .context("failed to link XDE kernel module")?;
 
                 println!("Building xde dev link helper ({profile}).");
-                build_cargo_bin(&[], !debug, Some("xde/xde-link"), false)?;
+                build_cargo_bin(&[], profile, Some("xde/xde-link"), false)?;
 
                 // verify no panicking in the devfsadm plugin
                 let nm_output = Command::new("nm")
                     .arg(meta.target_directory.join(format!(
-                        "i686-unknown-illumos/{folder}/libxde_link.so"
+                        "i686-unknown-illumos/{profile}/libxde_link.so"
                     )))
                     .output()?;
 
