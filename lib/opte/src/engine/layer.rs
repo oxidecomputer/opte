@@ -745,7 +745,7 @@ impl Layer {
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
-        let mut stats = KStatNamed::new(
+        let stats = KStatNamed::new(
             "xde",
             &format!("{}_{}", port, name),
             LayerStats::new(),
