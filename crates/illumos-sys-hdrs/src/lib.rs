@@ -12,10 +12,11 @@ pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
 
-use core::cell::UnsafeCell;
 use core::ptr;
+use core::sync::atomic::AtomicI32;
+use core::sync::atomic::AtomicI64;
+use core::sync::atomic::AtomicU32;
 use core::sync::atomic::AtomicU64;
-use core::sync::atomic::Ordering;
 
 // The following are "C type" aliases for native Rust types so that
 // the native illumos structures may be defined almost verbatim to the
@@ -120,51 +121,6 @@ impl kstat_named_t {
         Self::default()
     }
 
-    #[inline]
-    pub fn val_u64(&self) -> u64 {
-        self.value.as_u64().load(Ordering::Relaxed)
-    }
-}
-
-impl Default for kstat_named_t {
-    fn default() -> Self {
-        Self {
-            name: [0; KSTAT_STRLEN],
-            dtype: 0,
-            value: KStatNamedValue(UnsafeCell::new(_KStatNamedValue {
-                _c: [0; 16],
-            })),
-        }
-    }
-}
-
-#[repr(C)]
-pub union _KStatNamedValue {
-    _c: [c_char; 16],
-    _i32: i32,
-    _u32: u32,
-    _i64: i64,
-    _u64: u64,
-}
-
-#[repr(transparent)]
-pub struct KStatNamedValue(UnsafeCell<_KStatNamedValue>);
-
-impl core::ops::AddAssign<u64> for KStatNamedValue {
-    #[inline]
-    fn add_assign(&mut self, other: u64) {
-        self.incr_u64(other);
-    }
-}
-
-impl core::ops::SubAssign<u64> for KStatNamedValue {
-    #[inline]
-    fn sub_assign(&mut self, other: u64) {
-        self.decr_u64(other);
-    }
-}
-
-impl KStatNamedValue {
     /// Validates at compile time whether `self._u64` can be safely used as
     /// an AtomicU64.
     const KSTAT_ATOMIC_U64_SAFE: () = if align_of::<KStatNamedValue>() % 8 == 0
@@ -173,29 +129,46 @@ impl KStatNamedValue {
         panic!("Platform does not meet u64 8B alignment for AtomicU64");
     };
 
+    /// Interprets the value of this named kstat as a `u64`.
+    ///
+    /// # SAFETY
+    /// Callers must ensure that `self` is interpreted as only *one* class of
+    /// atomic integer. Mixed-width atomic read/writes on the same kstat are
+    /// undefined behaviour.
     #[inline(always)]
     #[allow(clippy::let_unit_value)]
-    fn as_u64(&self) -> &AtomicU64 {
+    pub unsafe fn as_u64(&self) -> &AtomicU64 {
         _ = Self::KSTAT_ATOMIC_U64_SAFE;
         // SAFETY: KStatNamedValue must have 8B alignment on target platform.
-        //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.}
-        unsafe { AtomicU64::from_ptr(self.0.get().cast()) }
+        //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.
+        unsafe { &self.value._u64 }
     }
+}
 
-    #[inline]
-    pub fn set_u64(&self, val: u64) {
-        self.as_u64().store(val, Ordering::Relaxed);
+impl Default for kstat_named_t {
+    fn default() -> Self {
+        Self {
+            name: [0; KSTAT_STRLEN],
+            dtype: 0,
+            value: KStatNamedValue { _c: [0; 16] },
+        }
     }
+}
 
-    #[inline]
-    pub fn incr_u64(&self, val: u64) {
-        self.as_u64().fetch_add(val, Ordering::Relaxed);
-    }
+use core::mem::ManuallyDrop;
 
-    #[inline]
-    pub fn decr_u64(&self, val: u64) {
-        self.as_u64().fetch_sub(val, Ordering::Relaxed);
-    }
+#[repr(C)]
+pub union KStatNamedValue {
+    _c: [c_char; 16],
+
+    // ManuallyDrop or Copy are required in a union (to guarantee
+    // no drop code runs).
+    // We know that atomic integer types have no `Drop` impl, so
+    // these are equivalent to the `Atomic` types.
+    _i32: ManuallyDrop<AtomicI32>,
+    _u32: ManuallyDrop<AtomicU32>,
+    _i64: ManuallyDrop<AtomicI64>,
+    _u64: ManuallyDrop<AtomicU64>,
 }
 
 pub const KSTAT_FLAG_VIRTUAL: c_int = 0x1;

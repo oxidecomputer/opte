@@ -11,6 +11,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 
 pub use kstat_macro::KStatProvider;
 
@@ -22,9 +24,6 @@ cfg_if! {
             c_void, kstat_t, kstat_create, kstat_delete, kstat_install,
             kstat_named_init, kstat_named_t, KSTAT_STRLEN, KSTAT_TYPE_NAMED,
         };
-    } else {
-        use core::sync::atomic::AtomicU64;
-        use core::sync::atomic::Ordering;
     }
 }
 
@@ -220,38 +219,11 @@ impl KStatU64 {
         Ok(())
     }
 
-    pub fn new() -> Self {
-        Self { inner: kstat_named_t::new() }
-    }
-
-    pub fn set(&self, val: u64) {
-        self.inner.value.set_u64(val);
-    }
-
-    pub fn val(&self) -> u64 {
-        self.inner.val_u64()
-    }
-
-    pub fn incr(&self, val: u64) {
-        self.inner.value.incr_u64(val);
-    }
-
-    pub fn decr(&self, val: u64) {
-        self.inner.value.decr_u64(val);
-    }
-}
-
-impl core::ops::AddAssign<u64> for KStatU64 {
-    #[inline]
-    fn add_assign(&mut self, other: u64) {
-        self.incr(other);
-    }
-}
-
-impl core::ops::SubAssign<u64> for KStatU64 {
-    #[inline]
-    fn sub_assign(&mut self, other: u64) {
-        self.decr(other);
+    #[inline(always)]
+    fn inner(&self) -> &AtomicU64 {
+        // SAFETY: only `inner.as_u64` is called on this type, so mixed-width
+        // reads/writes are disallowed.
+        unsafe { self.inner.as_u64() }
     }
 }
 
@@ -267,24 +239,45 @@ impl KStatU64 {
         Ok(())
     }
 
+    #[inline(always)]
+    fn inner(&self) -> &AtomicU64 {
+        &self.value
+    }
+}
+
+impl KStatU64 {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn set(&self, val: u64) {
-        self.value.store(val, Ordering::Relaxed);
+        self.inner().store(val, Ordering::Relaxed)
     }
 
     pub fn val(&self) -> u64 {
-        self.value.load(Ordering::Relaxed)
+        self.inner().load(Ordering::Relaxed)
     }
 
     pub fn incr(&self, val: u64) {
-        self.value.fetch_add(val, Ordering::Relaxed);
+        self.inner().fetch_add(val, Ordering::Relaxed);
     }
 
     pub fn decr(&self, val: u64) {
-        self.value.fetch_sub(val, Ordering::Relaxed);
+        self.inner().fetch_sub(val, Ordering::Relaxed);
+    }
+}
+
+impl core::ops::AddAssign<u64> for KStatU64 {
+    #[inline]
+    fn add_assign(&mut self, other: u64) {
+        self.incr(other);
+    }
+}
+
+impl core::ops::SubAssign<u64> for KStatU64 {
+    #[inline]
+    fn sub_assign(&mut self, other: u64) {
+        self.decr(other);
     }
 }
 
