@@ -12,7 +12,7 @@ pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
 
-use core::mem::transmute;
+use core::cell::UnsafeCell;
 use core::ptr;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
@@ -131,19 +131,24 @@ impl Default for kstat_named_t {
         Self {
             name: [0; KSTAT_STRLEN],
             dtype: 0,
-            value: KStatNamedValue { _c: [0; 16] },
+            value: KStatNamedValue(UnsafeCell::new(_KStatNamedValue {
+                _c: [0; 16],
+            })),
         }
     }
 }
 
 #[repr(C)]
-pub union KStatNamedValue {
+pub union _KStatNamedValue {
     _c: [c_char; 16],
     _i32: i32,
     _u32: u32,
     _i64: i64,
     _u64: u64,
 }
+
+#[repr(transparent)]
+pub struct KStatNamedValue(UnsafeCell<_KStatNamedValue>);
 
 impl core::ops::AddAssign<u64> for KStatNamedValue {
     #[inline]
@@ -170,26 +175,26 @@ impl KStatNamedValue {
 
     #[inline(always)]
     #[allow(clippy::let_unit_value)]
-    pub fn as_u64(&self) -> &AtomicU64 {
+    fn as_u64(&self) -> &AtomicU64 {
         _ = Self::KSTAT_ATOMIC_U64_SAFE;
         // SAFETY: KStatNamedValue must have 8B alignment on target platform.
-        //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.
-        unsafe { transmute::<&u64, &AtomicU64>(&self._u64) }
+        //         Validated by compile time check in `KSTAT_ATOMIC_U64_SAFE`.}
+        unsafe { AtomicU64::from_ptr(self.0.get().cast()) }
     }
 
     #[inline]
     pub fn set_u64(&self, val: u64) {
-        core::hint::black_box(self.as_u64().store(val, Ordering::Relaxed));
+        self.as_u64().store(val, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn incr_u64(&self, val: u64) {
-        core::hint::black_box(self.as_u64().fetch_add(val, Ordering::Relaxed));
+        self.as_u64().fetch_add(val, Ordering::Relaxed);
     }
 
     #[inline]
     pub fn decr_u64(&self, val: u64) {
-        core::hint::black_box(self.as_u64().fetch_sub(val, Ordering::Relaxed));
+        self.as_u64().fetch_sub(val, Ordering::Relaxed);
     }
 }
 
