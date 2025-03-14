@@ -216,11 +216,16 @@ fn elevate(operation: &str, extra_args: &[&str]) -> Result<bool> {
 }
 
 fn cmd_build(release_only: bool) -> Result<()> {
-    let modes = if release_only { &[false][..] } else { &[true, false] };
+    let modes = if release_only {
+        &[PkgProfile::Release][..]
+    } else {
+        &[PkgProfile::Release, PkgProfile::Debug]
+    };
 
     for release_mode in modes {
         BuildTarget::OpteAdm.build(*release_mode)?;
         BuildTarget::Xde.build(*release_mode)?;
+        BuildTarget::XdeLink.build(*release_mode)?;
     }
 
     Ok(())
@@ -315,9 +320,42 @@ fn raw_install() -> Result<()> {
     Ok(())
 }
 
+#[derive(Copy, Clone, Debug)]
+enum PkgProfile {
+    Debug,
+    Release,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum RustProfile {
+    Debug,
+    Release,
+    ReleaseLto,
+}
+
+impl RustProfile {
+    const fn name(self) -> &'static str {
+        match self {
+            RustProfile::Debug => "dev",
+            RustProfile::Release => "release",
+            RustProfile::ReleaseLto => "release-lto",
+        }
+    }
+
+    const fn folder(self) -> &'static str {
+        match self {
+            RustProfile::Debug => "debug",
+            RustProfile::Release => "release",
+            RustProfile::ReleaseLto => "release-lto",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 enum BuildTarget {
     OpteAdm,
     Xde,
+    XdeLink,
 }
 
 fn build_cargo_bin(
@@ -368,26 +406,35 @@ fn build_cargo_bin(
 }
 
 impl BuildTarget {
-    fn build(&self, debug: bool) -> Result<()> {
-        let (profile, xde_profile) = if debug { ("debug", "debug") } else { ("release", "release-lto") };
+    const fn rust_profile(self, profile: PkgProfile) -> RustProfile {
+        match (profile, self) {
+            (PkgProfile::Debug, _) => RustProfile::Debug,
+            (PkgProfile::Release, BuildTarget::Xde) => RustProfile::ReleaseLto,
+            (PkgProfile::Release, _) => RustProfile::Release,
+        }
+    }
+
+    fn build(&self, profile: PkgProfile) -> Result<()> {
+        let meta = cargo_meta();
+        let rust_profile = self.rust_profile(profile);
+        let p_name = rust_profile.name();
+        let p_folder = rust_profile.folder();
         match self {
             Self::OpteAdm => {
-                println!("Building opteadm ({profile}).");
-                build_cargo_bin(&["--bin", "opteadm"], profile, None, true)
+                println!("Building opteadm ({p_name}).");
+                build_cargo_bin(&["--bin", "opteadm"], p_name, None, true)
             }
             Self::Xde => {
-                println!("Building xde ({profile}).");
-                let meta = cargo_meta();
-                build_cargo_bin(&[], xde_profile, Some("xde"), false)?;
+                println!("Building xde ({p_name}).");
+                build_cargo_bin(&[], p_name, Some("xde"), false)?;
 
-                let out_name = if debug {
-                    "xde.dbg"
-                } else {
-                    "xde"
+                let out_name = match profile {
+                    PkgProfile::Debug => "xde.dbg",
+                    PkgProfile::Release => "xde",
                 };
                 let target_dir = meta
                     .target_directory
-                    .join(format!("{KMOD_TARGET}/{xde_profile}"));
+                    .join(format!("{KMOD_TARGET}/{p_folder}"));
 
                 println!("Linking xde kmod...");
                 Command::new("ld")
@@ -405,14 +452,16 @@ impl BuildTarget {
                     ])
                     .output_nocapture()
                     .context("failed to link XDE kernel module")?;
-
-                println!("Building xde dev link helper ({profile}).");
-                build_cargo_bin(&[], profile, Some("xde/xde-link"), false)?;
+                Ok(())
+            }
+            Self::XdeLink => {
+                println!("Building xde dev link helper ({p_name}).");
+                build_cargo_bin(&[], p_name, Some("xde/xde-link"), false)?;
 
                 // verify no panicking in the devfsadm plugin
                 let nm_output = Command::new("nm")
                     .arg(meta.target_directory.join(format!(
-                        "i686-unknown-illumos/{profile}/libxde_link.so"
+                        "i686-unknown-illumos/{p_folder}/libxde_link.so"
                     )))
                     .output()?;
 
