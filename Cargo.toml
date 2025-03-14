@@ -83,4 +83,7 @@ poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipat
 
 [profile.release]
 debug = 2
+
+[profile.release-lto]
+inherits = "release"
 lto = true
