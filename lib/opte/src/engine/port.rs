@@ -65,6 +65,8 @@ use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
+use crate::ddi::sync::KRwLock;
+use crate::ddi::sync::KRwLockType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
@@ -325,7 +327,6 @@ impl PortBuilder {
     ) -> result::Result<Port<N>, PortCreateError> {
         let data = PortData {
             state: PortState::Ready,
-            stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             // At this point the layer pipeline is immutable, thus we
             // move the layers out of the mutex.
             layers: self.layers.into_inner(),
@@ -339,14 +340,18 @@ impl PortBuilder {
             ),
         };
 
+        let mut data = KRwLock::new(data);
+        data.init(KRwLockType::Driver);
+
         Ok(Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
             mac: self.mac,
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
+            stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             net,
-            data: KMutex::new(data),
+            data,
         })
     }
 
@@ -668,7 +673,6 @@ struct PortStats {
 
 struct PortData {
     state: PortState,
-    stats: KStatNamed<PortStats>,
     layers: Vec<Layer>,
     uft_in: FlowTable<UftEntry<InnerFlowId>>,
     uft_out: FlowTable<UftEntry<InnerFlowId>>,
@@ -740,8 +744,9 @@ pub struct Port<N: NetworkImpl> {
     // probes.
     name_cstr: CString,
     mac: MacAddr,
+    stats: KStatNamed<PortStats>,
     net: N,
-    data: KMutex<PortData>,
+    data: KRwLock<PortData>,
 }
 
 // Convert:
@@ -798,7 +803,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn pause(&self) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Running])?;
         data.state = PortState::Paused;
         Ok(())
@@ -813,7 +818,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for all states. If the port is already
     /// in the running state, this is a no op.
     pub fn start(&self) {
-        self.data.lock().state = PortState::Running;
+        self.data.write().state = PortState::Running;
     }
 
     /// Reset the port.
@@ -829,7 +834,7 @@ impl<N: NetworkImpl> Port<N> {
         // It's imperative to hold the lock for the entire function so
         // that its side effects are atomic from the point of view of
         // other threads.
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         data.state = PortState::Ready;
 
         // Clear all dynamic state related to the creation of flows.
@@ -844,7 +849,7 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Get the current [`PortState`].
     pub fn state(&self) -> PortState {
-        self.data.lock().state
+        self.data.read().state
     }
 
     /// Add a new `Rule` to the layer named by `layer`.
@@ -869,7 +874,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
         for layer in &mut data.layers {
@@ -955,7 +960,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<ioctl::DumpLayerResp> {
-        let data = self.data.lock();
+        let data = self.data.read();
 
         for l in &data.layers {
             if l.name() == name {
@@ -976,7 +981,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_tcp_flows(&self) -> Result<ioctl::DumpTcpFlowsResp> {
-        let data = self.data.lock();
+        let data = self.data.read();
         check_state!(
             data.state,
             [PortState::Running, PortState::Paused, PortState::Restored]
@@ -993,7 +998,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn clear_uft(&self) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Running])?;
         data.uft_in.clear();
         data.uft_out.clear();
@@ -1009,7 +1014,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn clear_lft(&self, layer: &str) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Running])?;
         data.layers
             .iter_mut()
@@ -1029,7 +1034,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_uft(&self) -> Result<ioctl::DumpUftResp> {
-        let data = self.data.lock();
+        let data = self.data.read();
 
         check_state!(
             data.state,
@@ -1080,7 +1085,7 @@ impl<N: NetworkImpl> Port<N> {
 
     #[inline(always)]
     fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         let now = now.unwrap_or_else(Moment::now);
         check_state!(data.state, [PortState::Running])?;
 
@@ -1118,7 +1123,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         rule: &Rule<Finalized>,
     ) -> Result<Option<RuleId>> {
-        let data = self.data.lock();
+        let data = self.data.read();
 
         for layer in &data.layers {
             if layer.name() == layer_name {
@@ -1137,7 +1142,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
-        let data = self.data.lock();
+        let data = self.data.read();
         for l in &data.layers {
             if l.name() == layer {
                 return l.action(idx);
@@ -1153,7 +1158,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn layer_stats_snap(&self, layer: &str) -> Option<LayerStatsSnap> {
-        let data = self.data.lock();
+        let data = self.data.read();
 
         for l in &data.layers {
             if l.name() == layer {
@@ -1170,7 +1175,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn list_layers(&self) -> ioctl::ListLayersResp {
-        let data = self.data.lock();
+        let data = self.data.read();
         let mut tmp = vec![];
 
         for layer in &data.layers {
@@ -1247,23 +1252,55 @@ impl<N: NetworkImpl> Port<N> {
         //
         // In case 1, we can also cache and reuse the same EmitSpec for
         // all hit packets.
-
-        // The lock needs to be optional here because there is one
-        // case wherein we need to reacquire the lock -- invalidation
-        // by TCP state.
-        let mut lock = Some(self.data.lock());
-        let data = lock.as_mut().expect("lock should be held on this codepath");
+        //
+        // Lock management here is generally optimistic -- most fastpath cases
+        // take a short hold on the reader lock.
+        //  - As a rule: once we determine that a packet is bound for the slow
+        //    path, we hold the writer lock until the packet is processed.
+        //  - When a packet arrives, look for a UFT using a reader lock.
+        //    Temporarily take the write lock if that entry is unusable.
+        //     - Drop writer if present and usable (fast path),
+        //     - Downgrade to the slowpath holding writer.
+        //  - If a UFT is held, progress TCP state based on flags.
+        //    Temporarily take writer if existing TCP state was closed out.
+        //     - Drop writer once flow closed, or
+        //     - Downgrade to the slowpath, if this is a new flow.
+        //     (Both of these cases are infrequent.)
+        //  - Finalise processing holding no lock (fastpath) or writer
+        //    (slowpath).
+        let data = self.data.read();
 
         // (1) Check for UFT and precompiled.
-        let epoch = self.epoch();
+        let mut epoch = self.epoch();
         check_state!(data.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(data.state))?;
 
         self.port_process_entry_probe(dir, &flow_before, epoch, mblk_addr);
 
-        let uft: Option<&Arc<FlowEntry<UftEntry<InnerFlowId>>>> = match dir {
+        let uft: Option<Arc<FlowEntry<UftEntry<InnerFlowId>>>> = (match dir {
             Direction::Out => data.uft_out.get(&flow_before),
             Direction::In => data.uft_in.get(&flow_before),
+        })
+        .map(Arc::clone);
+
+        drop(data);
+
+        // If we have a UFT miss or invalid entry, upgrade to a write lock and
+        // fetch again. This lets us use an optimistic lookup more often.
+        let (uft, mut lock) = match uft {
+            Some(ref entry) if entry.state().epoch == epoch => (uft, None),
+            Some(_) | None => {
+                let data = self.data.write();
+                epoch = self.epoch();
+                (
+                    (match dir {
+                        Direction::Out => data.uft_out.get(&flow_before),
+                        Direction::In => data.uft_in.get(&flow_before),
+                    })
+                    .map(Arc::clone),
+                    Some(data),
+                )
+            }
         };
 
         enum FastPathDecision {
@@ -1272,29 +1309,48 @@ impl<N: NetworkImpl> Port<N> {
             Slow,
         }
 
-        let decision = match uft {
-            // We have a valid UFT entry of some kind -- clone out the
-            // saved transforms so that we can drop the lock ASAP.
-            Some(entry) if entry.state().epoch == epoch => {
+        impl FastPathDecision {
+            fn as_u64(&self) -> u64 {
+                match self {
+                    FastPathDecision::CompiledUft(_) => 1,
+                    FastPathDecision::Uft(_) => 2,
+                    FastPathDecision::Slow => 3,
+                }
+            }
+        }
+
+        // We have either committed to our (suspected valid) UFT, or refetched
+        // it (may have been removed) under the write lock.
+        // Revalidate the entry in the latter case.
+        let mut decision = match uft {
+            // We have a valid UFT entry of some kind -- clone out the saved
+            // transforms so that we can drop the lock ASAP (if reacquired).
+            // Recheck epoch in case we took a write lock and re-read the UFT.
+            Some(entry) if lock.is_none() || entry.state().epoch == epoch => {
                 // The Fast Path.
+                drop(lock.take());
                 let xforms = &entry.state().xforms;
                 let out = if xforms.compiled.is_some() {
-                    FastPathDecision::CompiledUft(Arc::clone(entry))
+                    FastPathDecision::CompiledUft(entry)
                 } else {
-                    FastPathDecision::Uft(Arc::clone(entry))
+                    FastPathDecision::Uft(entry)
                 };
 
                 match dir {
-                    Direction::In => data.stats.vals.in_uft_hit += 1,
-                    Direction::Out => data.stats.vals.out_uft_hit += 1,
+                    Direction::In => self.stats.vals.in_uft_hit.incr(1),
+                    Direction::Out => self.stats.vals.out_uft_hit.incr(1),
                 }
 
                 out
             }
 
-            // The entry is from a previous epoch; invalidate its UFT
+            // The entry is *definitely* from a previous epoch; invalidate its UFT
             // entries and proceed to rule processing.
+            // We will have been upgraded to a write lock if this was possible.
             Some(entry) => {
+                let data = lock
+                    .as_mut()
+                    .expect("lock should be held on this codepath");
                 let epoch = entry.state().epoch;
                 let owned_pair = *entry.state().pair.lock();
                 let (ufid_in, ufid_out) = match dir {
@@ -1308,38 +1364,16 @@ impl<N: NetworkImpl> Port<N> {
             None => FastPathDecision::Slow,
         };
 
-        // (1)/(2) UFT hit. Update stats, drop locks, validate TCP state.
-        //    We *almost always* know the result is modified.
-        //    This will produce an incorrect stat in the event that TCP invalidation
-        //    forces a reprocess, but I believe this is a necessary evil to keep work
-        //    out of the portlock today. The correct fix is to AtomicU64 those stats,
-        //    which we'll need for later metrics too.
-        //    However, fixing this up if we get it wrong is simple enough.
-        let mut invalidated_tcp = None;
-        let mut reprocess = false;
-
+        // (1)/(2) Update UFT hit stats, validate TCP state.
+        //    Whenever a TCP flow ends (or a new TCP flow unexpectedly begins
+        //    with the same flow ID), we need to remove the old TCP flow state
+        //    (and any attached UFTs) and *may* need to downgrade to slowpath
+        //    processing for stats purposes.
+        //
+        //    These are fairly infrequent paths in the TCP lifecycle.
         match &decision {
             FastPathDecision::CompiledUft(entry)
             | FastPathDecision::Uft(entry) => {
-                // TODO: Ideally the Kstat should be holding AtomicU64s, then we get
-                // out of the lock sooner. Note that we don't need to *apply* a given
-                // set of transforms in order to know which stats we'll modify.
-                let dummy_res = Ok(InternalProcessResult::Modified);
-                match dir {
-                    Direction::In => {
-                        Self::update_stats_in(&mut data.stats.vals, &dummy_res);
-                    }
-                    Direction::Out => {
-                        Self::update_stats_out(
-                            &mut data.stats.vals,
-                            &dummy_res,
-                        );
-                    }
-                }
-
-                let _ = data;
-                drop(lock.take());
-
                 entry.hit_at(process_start);
                 self.uft_hit_probe(dir, &flow_before, epoch, &process_start);
 
@@ -1357,126 +1391,135 @@ impl<N: NetworkImpl> Port<N> {
                         Direction::Out => None,
                     };
 
-                    match tcp_flow.state().update(
+                    let invalidated_tcp = match tcp_flow.state().update(
                         self.name_cstr.as_c_str(),
                         tcp,
                         dir,
                         pkt.len() as u64,
                         ufid_in,
                     ) {
-                        Ok(TcpState::Closed) => {
-                            invalidated_tcp = Some(Arc::clone(tcp_flow));
-                        }
+                        Ok(TcpState::Closed) => Some(Arc::clone(tcp_flow)),
                         Err(TcpFlowStateError::NewFlow { .. }) => {
-                            invalidated_tcp = Some(Arc::clone(tcp_flow));
-                            reprocess = true;
+                            let out = Some(Arc::clone(tcp_flow));
+                            decision = FastPathDecision::Slow;
+                            out
                         }
-                        _ => {}
+                        _ => None,
+                    };
+
+                    // Reacquire the writer to remove the flow if needed.
+                    // Elevate lock to full scope, if we are reprocessing
+                    // as well.
+                    if let Some(entry) = invalidated_tcp {
+                        let mut local_lock = self.data.write();
+
+                        let flow_lock = entry.state().inner.lock();
+                        let ufid_out = &flow_lock.outbound_ufid;
+
+                        let ufid_in = flow_lock.inbound_ufid.as_ref();
+
+                        // Because we've dropped the port lock, another packet could have
+                        // also invalidated this flow and removed the entry. It could even
+                        // install new UFT/TCP entries, depending on lock/process ordering.
+                        //
+                        // Verify that the state we want to remove still exists, and is
+                        // `Arc`-identical.
+                        if let Some(found_entry) =
+                            local_lock.tcp_flows.get(ufid_out)
+                        {
+                            if Arc::ptr_eq(found_entry, &entry) {
+                                self.uft_tcp_closed(
+                                    &mut local_lock,
+                                    ufid_out,
+                                    ufid_in,
+                                );
+                                _ = local_lock.tcp_flows.remove(ufid_out);
+                            }
+                        }
+
+                        // We've determined we're actually starting a new TCP flow (e.g.,
+                        // SYN on any other state) from an existing UFT entry.
+                        if matches!(decision, FastPathDecision::Slow) {
+                            lock = Some(local_lock);
+                        }
                     }
                 }
             }
             _ => {}
         }
 
-        // reprocess => invalidated_tcp.is_some();
-        debug_assert!(!reprocess || invalidated_tcp.is_some());
+        // (1) Execute precompiled, and exit.
+        if let FastPathDecision::CompiledUft(entry) = &decision {
+            let l4_hash = entry.state().l4_hash;
+            let tx = entry.state().xforms.compiled.as_ref().cloned().unwrap();
 
-        // We've determined we're actually starting a new TCP flow (e.g., SYN
-        // on any other state) from an existing UFT entry.
-        // We know the lock is dropped -- reacquire the lock to remove the flow.
-        // Elevate lock to full scope, if we are reprocessing as well.
-        if let Some(entry) = invalidated_tcp {
-            let mut local_lock = self.data.lock();
+            let len = pkt.len();
+            let meta = pkt.meta_mut();
+            let body_csum = if tx.checksums_dirty {
+                meta.compute_body_csum()
+            } else {
+                None
+            };
+            meta.run_compiled_transform(&tx);
+            if let Some(csum) = body_csum {
+                meta.update_inner_checksums(csum);
+            }
+            let encap_len = meta.encap_len();
+            let ulp_len = (len - (encap_len as usize)) as u32;
+            let rewind = match tx.encap {
+                CompiledEncap::Pop => encap_len,
+                _ => 0,
+            };
+            let out = EmitSpec {
+                prepend: PushSpec::Fastpath(tx),
+                l4_hash,
+                rewind,
+                ulp_len,
+            };
 
-            let flow_lock = entry.state().inner.lock();
-            let ufid_out = &flow_lock.outbound_ufid;
-
-            let ufid_in = flow_lock.inbound_ufid.as_ref();
-
-            // Because we've dropped the port lock, another packet could have also
-            // invalidated this flow and removed the entry. It could even install
-            // new UFT/TCP entries, depending on lock/process ordering.
-            //
-            // Verify that the state we want to remove still exists, and is
-            // `Arc`-identical.
-            if let Some(found_entry) = local_lock.tcp_flows.get(ufid_out) {
-                if Arc::ptr_eq(found_entry, &entry) {
-                    self.uft_tcp_closed(&mut local_lock, ufid_out, ufid_in);
-                    _ = local_lock.tcp_flows.remove(ufid_out);
+            let flow_after = meta.flow();
+            let res = Ok(InternalProcessResult::Modified);
+            match dir {
+                Direction::In => {
+                    self.update_stats_in(&res);
+                }
+                Direction::Out => {
+                    self.update_stats_out(&res);
                 }
             }
-
-            if reprocess {
-                lock = Some(local_lock);
-            }
-        }
-
-        if !reprocess {
-            // (1) Execute precompiled, and exit.
-            if let FastPathDecision::CompiledUft(entry) = decision {
-                let l4_hash = entry.state().l4_hash;
-                let tx =
-                    entry.state().xforms.compiled.as_ref().cloned().unwrap();
-
-                let len = pkt.len();
-                let meta = pkt.meta_mut();
-                let body_csum = if tx.checksums_dirty {
-                    meta.compute_body_csum()
-                } else {
-                    None
-                };
-                meta.run_compiled_transform(&tx);
-                if let Some(csum) = body_csum {
-                    meta.update_inner_checksums(csum);
-                }
-                let encap_len = meta.encap_len();
-                let ulp_len = (len - (encap_len as usize)) as u32;
-                let rewind = match tx.encap {
-                    CompiledEncap::Pop => encap_len,
-                    _ => 0,
-                };
-                let out = EmitSpec {
-                    prepend: PushSpec::Fastpath(tx),
-                    l4_hash,
-                    rewind,
-                    ulp_len,
-                };
-
-                let flow_after = meta.flow();
-                let res = Ok(ProcessResult::Modified(out));
-                self.port_process_return_probe(
-                    dir,
-                    &flow_before,
-                    &flow_after,
-                    epoch,
-                    mblk_addr,
-                    &res,
-                    1,
-                );
-                return res;
-            }
+            let res = Ok(ProcessResult::Modified(out));
+            self.port_process_return_probe(
+                dir,
+                &flow_before,
+                &flow_after,
+                epoch,
+                mblk_addr,
+                &res,
+                decision.as_u64(),
+            );
+            return res;
         }
 
         // (2)/(3) Full-fat metadata is required.
         let mut pkt = pkt.to_full_meta();
         let mut ameta = ActionMeta::new();
 
-        let (res, path) = match (&decision, dir) {
+        let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
             // Reuse cached l4 hash.
-            (FastPathDecision::Uft(entry), _) if !reprocess => {
+            (FastPathDecision::Uft(entry), _) => {
                 let l4_hash = entry.state().l4_hash;
                 let tx = Arc::clone(&entry.state().xforms);
 
                 pkt.set_l4_hash(l4_hash);
                 tx.apply(&mut pkt, dir)?;
-                (Ok(InternalProcessResult::Modified), 2)
+                Ok(InternalProcessResult::Modified)
             }
 
             // (3) Full-table processing for the packet, then drop the lock.
             // Cksum updates are left undone, so we perform those manually
             // outside the port lock.
-            (_, Direction::In) => {
+            (FastPathDecision::Slow, Direction::In) => {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
@@ -1489,18 +1532,12 @@ impl<N: NetworkImpl> Port<N> {
                     &mut ameta,
                 );
 
-                // Prevent double-counting reprocessed modify entries.
-                if !(reprocess
-                    && matches!(res, Ok(InternalProcessResult::Modified)))
-                {
-                    Self::update_stats_in(&mut data.stats.vals, &res);
-                }
                 drop(lock);
 
                 pkt.update_checksums();
-                (res, 3)
+                res
             }
-            (_, Direction::Out) => {
+            (FastPathDecision::Slow, Direction::Out) => {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
@@ -1508,20 +1545,21 @@ impl<N: NetworkImpl> Port<N> {
                 let res =
                     self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
 
-                // Prevent double-counting reprocessed modify entries.
-                if !(reprocess
-                    && matches!(res, Ok(InternalProcessResult::Modified)))
-                {
-                    Self::update_stats_out(&mut data.stats.vals, &res);
-                }
                 drop(lock);
 
                 pkt.update_checksums();
-                (res, 3)
+                res
             }
+
+            (FastPathDecision::CompiledUft(_), _) => unreachable!(),
         };
 
         let flow_after = *pkt.flow();
+
+        match dir {
+            Direction::In => self.update_stats_in(&res),
+            Direction::Out => self.update_stats_out(&res),
+        }
 
         let res = res.and_then(|v| match v {
             InternalProcessResult::Drop { reason } => {
@@ -1540,7 +1578,7 @@ impl<N: NetworkImpl> Port<N> {
             epoch,
             mblk_addr,
             &res,
-            path,
+            decision.as_u64(),
         );
         res
     }
@@ -1568,7 +1606,7 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         id: RuleId,
     ) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
         for layer in &mut data.layers {
@@ -1621,7 +1659,7 @@ impl<N: NetworkImpl> Port<N> {
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
         for layer in &mut data.layers {
@@ -1642,7 +1680,7 @@ impl<N: NetworkImpl> Port<N> {
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
-        let mut data = self.data.lock();
+        let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
         for layer in &mut data.layers {
@@ -1658,14 +1696,14 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Grab a snapshot of the port statistics.
     pub fn stats_snap(&self) -> PortStatsSnap {
-        self.data.lock().stats.vals.snapshot()
+        self.stats.vals.snapshot()
     }
 
     /// Return the [`TcpState`] of a given flow.
     #[cfg(any(feature = "test-help", test))]
     pub fn tcp_state(&self, flow: &InnerFlowId) -> Option<TcpState> {
         self.data
-            .lock()
+            .read()
             .tcp_flows
             .get(flow)
             .map(|entry| entry.state().tcp_state())
@@ -1970,7 +2008,7 @@ impl<N: NetworkImpl> Port<N> {
         Ok(LayerResult::Allow)
     }
 
-    #[inline]
+    #[inline(always)]
     fn port_process_entry_probe(
         &self,
         dir: Direction,
@@ -2281,7 +2319,7 @@ impl<N: NetworkImpl> Port<N> {
     ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::In;
 
-        data.stats.vals.in_uft_miss += 1;
+        self.stats.vals.in_uft_miss.incr(1);
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
         match res {
@@ -2478,7 +2516,7 @@ impl<N: NetworkImpl> Port<N> {
     ) -> result::Result<InternalProcessResult, ProcessError> {
         use Direction::Out;
 
-        data.stats.vals.out_uft_miss += 1;
+        self.stats.vals.out_uft_miss.incr(1);
         let mut tcp_closed = false;
 
         // For outbound traffic the TCP flow table must be checked
@@ -2661,23 +2699,24 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     fn update_stats_in(
-        stats: &mut PortStats,
+        &self,
         res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
+        let stats = &self.stats.vals;
         match res {
             Ok(InternalProcessResult::Drop { reason }) => {
-                stats.in_drop += 1;
+                stats.in_drop.incr(1);
 
                 match reason {
-                    DropReason::HandlePkt => stats.in_drop_handle_pkt += 1,
-                    DropReason::Layer { .. } => stats.in_drop_layer += 1,
-                    DropReason::TcpErr => stats.in_drop_tcp_err += 1,
+                    DropReason::HandlePkt => stats.in_drop_handle_pkt.incr(1),
+                    DropReason::Layer { .. } => stats.in_drop_layer.incr(1),
+                    DropReason::TcpErr => stats.in_drop_tcp_err.incr(1),
                 }
             }
 
-            Ok(InternalProcessResult::Modified) => stats.in_modified += 1,
+            Ok(InternalProcessResult::Modified) => stats.in_modified.incr(1),
 
-            Ok(InternalProcessResult::Hairpin(_)) => stats.in_hairpin += 1,
+            Ok(InternalProcessResult::Hairpin(_)) => stats.in_hairpin.incr(1),
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
@@ -2687,28 +2726,29 @@ impl<N: NetworkImpl> Port<N> {
             // to just have a top-level error counter in the
             // PortStats, and then also publisher LayerStats for each
             // layer along with the different error counts.
-            Err(_) => stats.in_process_err += 1,
+            Err(_) => stats.in_process_err.incr(1),
         }
     }
 
     fn update_stats_out(
-        stats: &mut PortStats,
+        &self,
         res: &result::Result<InternalProcessResult, ProcessError>,
     ) {
+        let stats = &self.stats.vals;
         match res {
             Ok(InternalProcessResult::Drop { reason }) => {
-                stats.out_drop += 1;
+                stats.out_drop.incr(1);
 
                 match reason {
-                    DropReason::HandlePkt => stats.out_drop_handle_pkt += 1,
-                    DropReason::Layer { .. } => stats.out_drop_layer += 1,
-                    DropReason::TcpErr => stats.out_drop_tcp_err += 1,
+                    DropReason::HandlePkt => stats.out_drop_handle_pkt.incr(1),
+                    DropReason::Layer { .. } => stats.out_drop_layer.incr(1),
+                    DropReason::TcpErr => stats.out_drop_tcp_err.incr(1),
                 }
             }
 
-            Ok(InternalProcessResult::Modified) => stats.out_modified += 1,
+            Ok(InternalProcessResult::Modified) => stats.out_modified.incr(1),
 
-            Ok(InternalProcessResult::Hairpin(_)) => stats.out_hairpin += 1,
+            Ok(InternalProcessResult::Hairpin(_)) => stats.out_hairpin.incr(1),
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
@@ -2718,7 +2758,7 @@ impl<N: NetworkImpl> Port<N> {
             // to just have a top-level error counter in the
             // PortStats, and then also publisher LayerStats for each
             // layer along with the different error counts.
-            Err(_) => stats.out_process_err += 1,
+            Err(_) => stats.out_process_err.incr(1),
         }
     }
 }
@@ -2738,14 +2778,14 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Return the list of layer names.
     pub fn layers(&self) -> Vec<String> {
-        self.data.lock().layers.iter().map(|l| l.name().to_string()).collect()
+        self.data.read().layers.iter().map(|l| l.name().to_string()).collect()
     }
 
     /// Get the number of flows currently in the layer and direction
     /// specified. The value `"uft"` can be used to get the number of
     /// UFT flows.
     pub fn num_flows(&self, layer: &str, dir: Direction) -> u32 {
-        let data = self.data.lock();
+        let data = self.data.read();
         use Direction::*;
 
         match (layer, dir) {
@@ -2766,7 +2806,7 @@ impl<N: NetworkImpl> Port<N> {
     /// Return the number of rules registered for the given layer in
     /// the given direction.
     pub fn num_rules(&self, layer_name: &str, dir: Direction) -> usize {
-        let data = self.data.lock();
+        let data = self.data.read();
         data.layers
             .iter()
             .find(|layer| layer.name() == layer_name)

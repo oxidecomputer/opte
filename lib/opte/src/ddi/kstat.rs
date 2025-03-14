@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Export Rust structs as illumos kstats.
 //!
@@ -11,6 +11,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use core::fmt;
 use core::fmt::Display;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 
 pub use kstat_macro::KStatProvider;
 
@@ -29,7 +31,7 @@ cfg_if! {
 ///
 /// An implementation of this trait acts as a provider of "named"
 /// kstats (i.e. `KSTAT_TYPE_NAMED` in `kstat_create(9F)`). The kstats
-/// are always virtual (`KSTAT_FLAG_VRITUAL`), meaning that the
+/// are always virtual (`KSTAT_FLAG_VIRTUAL`), meaning that the
 /// allocation of the kstat data is performed by the caller (Rust).
 ///
 /// Rather than implementing this trait manually, the kstat-macro
@@ -217,39 +219,18 @@ impl KStatU64 {
         Ok(())
     }
 
-    pub fn new() -> Self {
-        Self { inner: kstat_named_t::new() }
-    }
-
-    pub fn set(&mut self, val: u64) {
-        self.inner.value.set_u64(val);
-    }
-
-    pub fn val(&self) -> u64 {
-        self.inner.val_u64()
-    }
-}
-
-#[cfg(all(not(feature = "std"), not(test)))]
-impl core::ops::AddAssign<u64> for KStatU64 {
-    #[inline]
-    fn add_assign(&mut self, other: u64) {
-        self.inner.value += other;
-    }
-}
-
-#[cfg(all(not(feature = "std"), not(test)))]
-impl core::ops::SubAssign<u64> for KStatU64 {
-    #[inline]
-    fn sub_assign(&mut self, other: u64) {
-        self.inner.value -= other;
+    #[inline(always)]
+    fn inner(&self) -> &AtomicU64 {
+        // SAFETY: only `inner.as_u64` is called on this type, so mixed-width
+        // reads/writes are disallowed.
+        unsafe { self.inner.as_u64() }
     }
 }
 
 #[cfg(any(feature = "std", test))]
 #[derive(Default)]
 pub struct KStatU64 {
-    value: u64,
+    value: AtomicU64,
 }
 
 #[cfg(any(feature = "std", test))]
@@ -258,30 +239,45 @@ impl KStatU64 {
         Ok(())
     }
 
+    #[inline(always)]
+    fn inner(&self) -> &AtomicU64 {
+        &self.value
+    }
+}
+
+impl KStatU64 {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn set(&mut self, val: u64) {
-        self.value = val;
+    pub fn set(&self, val: u64) {
+        self.inner().store(val, Ordering::Relaxed)
     }
 
     pub fn val(&self) -> u64 {
-        self.value
+        self.inner().load(Ordering::Relaxed)
+    }
+
+    pub fn incr(&self, val: u64) {
+        self.inner().fetch_add(val, Ordering::Relaxed);
+    }
+
+    pub fn decr(&self, val: u64) {
+        self.inner().fetch_sub(val, Ordering::Relaxed);
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl core::ops::AddAssign<u64> for KStatU64 {
+    #[inline]
     fn add_assign(&mut self, other: u64) {
-        self.value += other;
+        self.incr(other);
     }
 }
 
-#[cfg(any(feature = "std", test))]
 impl core::ops::SubAssign<u64> for KStatU64 {
+    #[inline]
     fn sub_assign(&mut self, other: u64) {
-        self.value -= other;
+        self.decr(other);
     }
 }
 
