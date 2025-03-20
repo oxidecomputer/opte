@@ -14,7 +14,7 @@ mkdir -p proto/kernel/drv/amd64
 mkdir -p proto/opt/oxide/opte/bin
 mkdir -p proto/usr/lib/devfsadm/linkmod
 cp ../target/release/opteadm proto/opt/oxide/opte/bin/
-cp ../target/x86_64-unknown-unknown/release/xde proto/kernel/drv/amd64
+cp ../target/x86_64-unknown-unknown/release-lto/xde proto/kernel/drv/amd64
 cp ../xde/xde.conf proto/kernel/drv/
 cp ../target/i686-unknown-illumos/release/libxde_link.so proto/usr/lib/devfsadm/linkmod/SUNW_xde_link.so
 
