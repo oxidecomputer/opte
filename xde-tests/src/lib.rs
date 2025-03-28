@@ -468,9 +468,9 @@ pub fn single_node_over_real_nic(
     // Create any null ports before our actual one, to get worst-case
     // lookups in the linear case.
     let underlay_addr = my_info.underlay_addr.to_string();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     while null_ports.len() as u32 != null_port_count {
-        let i = rng.gen_range(0..usable_macs.len());
+        let i = rng.random_range(0..usable_macs.len());
         let taken_mac = usable_macs.swap_remove(i).to_string();
 
         // VIP reuse is not an issue, we aren't using these ports for communication.
