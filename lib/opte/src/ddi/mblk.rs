@@ -628,7 +628,9 @@ impl MsgBlk {
     /// consume `self`. The caller of this function now owns the
     /// `mblk_t` segment chain.
     pub fn unwrap_mblk(self) -> NonNull<mblk_t> {
-        AsMblk::unwrap_mblk(self).unwrap()
+        // SAFETY: this type's `AsMblk` always returns `Some`
+        AsMblk::unwrap_mblk(self)
+            .expect("unwrapping a single mblk is always infallible")
     }
 
     /// Wrap the `mblk_t` packet in a [`MsgBlk`], taking ownership of
@@ -749,13 +751,13 @@ impl MsgBlk {
                 0,
                 0,
                 0,
-                ckflags.bits() as u32,
+                ckflags.bits(),
             );
             if flags.contains(MblkOffloadFlags::HW_LSO) {
                 illumos_sys_hdrs::mac::lso_info_set(
                     self.0.as_ptr(),
                     mss,
-                    MblkOffloadFlags::HW_LSO.bits() as u32,
+                    MblkOffloadFlags::HW_LSO.bits(),
                 );
             }
         }
@@ -809,7 +811,7 @@ impl MsgBlk {
             );
         };
 
-        MblkOffloadFlags::from_bits_retain((cso_out | lso_out) as u16)
+        MblkOffloadFlags::from_bits_retain(cso_out | lso_out)
     }
 }
 

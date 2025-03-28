@@ -306,11 +306,12 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     #[inline]
     fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
         if let Some(l3) = self.inner_l3.as_mut() {
-            match (self.inner_ulp.as_mut(), body_csum) {
-                (Some(ulp), Some(body_csum)) if ulp.has_ulp_csum() => {
+            if let (Some(ulp), Some(body_csum)) =
+                (self.inner_ulp.as_mut(), body_csum)
+            {
+                if ulp.has_ulp_csum() {
                     ulp.compute_checksum(body_csum, l3);
                 }
-                _ => {}
             }
             if l3.has_ip_csum() {
                 l3.compute_checksum();
@@ -437,11 +438,10 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
     #[inline]
     fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
-        match body_csum {
-            Some(body_csum) if self.inner_ulp.has_ulp_csum() => {
+        if let Some(body_csum) = body_csum {
+            if self.inner_ulp.has_ulp_csum() {
                 self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
             }
-            _ => {}
         }
         if self.inner_l3.has_ip_csum() {
             self.inner_l3.compute_checksum();

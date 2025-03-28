@@ -252,6 +252,9 @@ pub struct mac_capab_lso_t {
 
 bitflags::bitflags! {
 /// Classes of TCP segmentation offload supported by a MAC provider.
+///
+/// These are derived from `#define LSO_TX_*` statements in
+/// mac_provider.h, omitting the enum prefix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TcpLsoFlags: u32 {
     /// The device supports TCP LSO over IPv4.
@@ -263,6 +266,9 @@ pub struct TcpLsoFlags: u32 {
 }
 
 /// Supported LSO use specific to [`TcpLsoFlags::TUNNEL_TCP`].
+///
+/// These are derived from `#define LSO_TX_TUNNEL_*` statements in
+/// mac_provider.h, omitting the enum prefix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TunnelTcpLsoFlags: u32 {
     /// The device can fill the outer L4 (e.g., UDP) checksum
@@ -272,7 +278,8 @@ pub struct TunnelTcpLsoFlags: u32 {
 
 /// Classes of checksum offload suppported by a MAC provider.
 ///
-/// Defined in dlpi.h.
+/// These are derived from `#define HCKSUM_*` statements in
+/// dlpi.h, omitting the enum prefix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChecksumOffloadCapabs: u32 {
     /// Legacy definition --  CSO is enabled on the device.
@@ -299,6 +306,9 @@ pub struct ChecksumOffloadCapabs: u32 {
 
 /// Classes of checksum offload suppported for tunnelled packets by a
 /// MAC provider.
+///
+/// These are derived from `#define MAC_CSO_TUN_*` statements in
+/// mac_provider.h, omitting the enum prefix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TunnelCsoFlags: u32 {
     /// The inner IPv4 checksum can be entirely computed in hardware.

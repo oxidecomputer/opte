@@ -130,6 +130,8 @@ use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
 
+const ETHERNET_MTU: u16 = 1500;
+
 // Entry limits for the various flow tables.
 const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
 const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
@@ -793,7 +795,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_priv_props = core::ptr::null_mut();
     mreg.m_instance = c_uint::MAX; // let mac handle this
     mreg.m_min_sdu = 1;
-    mreg.m_max_sdu = 1500; // TODO hardcode
+    mreg.m_max_sdu = u32::from(ETHERNET_MTU); // TODO hardcode
     mreg.m_multicast_sdu = 0;
     mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
@@ -1157,7 +1159,11 @@ unsafe fn init_underlay_ingress_handlers(
 ) -> Result<UnderlayState, OpteError> {
     let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
     let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
-    Ok(UnderlayState { u1: u1.into(), u2: u2.into(), shared_props: i1 & i2 })
+    Ok(UnderlayState {
+        u1: u1.into(),
+        u2: u2.into(),
+        shared_props: i1.mutual_capabs(&i2),
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1652,10 +1658,15 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             return ptr::null_mut();
         }
     };
-    let meoi_len = parsed_pkt.len() as u32;
+    let old_len = parsed_pkt.len();
 
     let meta = parsed_pkt.meta();
-    let non_eth_payl_bytes = (&meta.inner_l3, &meta.inner_ulp).packet_length();
+    let Ok(non_eth_payl_bytes) =
+        u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
+    else {
+        opte::engine::dbg!("sum of packet L3/L4 exceeds u32::MAX");
+        return ptr::null_mut();
+    };
 
     let (l4_flag, l4_ty) = match &meta.inner_ulp {
         Some(ValidUlp::Tcp(_)) => {
@@ -1667,16 +1678,30 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         _ => (MacEtherOffloadFlags::empty(), IpProtocol(0)),
     };
 
+    // If L3 headers are too long to represent in the MEOI API, then
+    // drop the packet (e.g., >u16::MAX on v6 extensions).
+    let Ok(meoi_l3hlen) = u16::try_from(meta.inner_l3.packet_length()) else {
+        opte::engine::dbg!("packet L3 exceeds u16::MAX");
+        return ptr::null_mut();
+    };
+
+    let Ok(meoi_len) = u32::try_from(old_len) else {
+        opte::engine::dbg!("packet exceeds u32::MAX");
+        return ptr::null_mut();
+    };
+
     let ulp_meoi = mac_ether_offload_info_t {
         meoi_flags: MacEtherOffloadFlags::L2INFO_SET
             | MacEtherOffloadFlags::L3INFO_SET
             | l4_flag,
         meoi_len,
-        meoi_l2hlen: meta.inner_eth.packet_length() as u8,
+        meoi_l2hlen: u8::try_from(meta.inner_eth.packet_length())
+            .expect("L2 should never exceed ~22B (QinQ)"),
         meoi_l3proto: meta.inner_eth.ethertype().0,
-        meoi_l3hlen: meta.inner_l3.packet_length() as u16,
+        meoi_l3hlen,
         meoi_l4proto: l4_ty.0,
-        meoi_l4hlen: meta.inner_ulp.packet_length() as u8,
+        meoi_l4hlen: u8::try_from(meta.inner_ulp.packet_length())
+            .expect("L4 should never exceed 60B (max TCP options)"),
 
         ..Default::default()
     };
@@ -1735,6 +1760,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
             let mut out_pkt = emit_spec.apply(pkt);
+            let new_len = out_pkt.byte_len();
 
             if ip6_src == ip6_dst {
                 let devs = xde_devs().read();
@@ -1742,22 +1768,34 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 return ptr::null_mut();
             }
 
+            let Ok(encap_len) = u32::try_from(new_len.saturating_sub(old_len))
+            else {
+                opte::engine::err!(
+                    "tried to push encap_len greater than u32::MAX"
+                );
+                return ptr::null_mut();
+            };
+
             // Boost MSS to use full jumbo frames if we know our path
             // can be served purely on internal links.
             // Recall that SDU does not include L2 size, hence 'non_eth_payl'
             let mut flags = offload_flags;
             let inner_mtu = if mtu_unrestricted {
-                src_dev.underlay_capab.mtu - 70
+                src_dev.underlay_capab.mtu - encap_len
             } else {
-                1500
+                u32::from(ETHERNET_MTU)
             };
-            let mss = inner_mtu - (non_eth_payl_bytes as u32);
+            let mss = inner_mtu - non_eth_payl_bytes;
 
             // As underlay devices may need to emulate tunnelled LSO, then we
             // need to strip the flag to prevent a drop, in cases where we'd
             // ask to split a packet back into... 1 segment.
             // Hardware tends to handle this without issue.
-            if meoi_len - (Ethernet::MINIMUM_LENGTH as u32) <= inner_mtu {
+            if meoi_len.saturating_sub(
+                u32::try_from(Ethernet::MINIMUM_LENGTH)
+                    .expect("14B < u32::MAX"),
+            ) <= inner_mtu
+            {
                 flags.remove(MblkOffloadFlags::HW_LSO);
             }
 
@@ -1768,14 +1806,19 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     | MacEtherOffloadFlags::L3INFO_SET
                     | MacEtherOffloadFlags::L4INFO_SET
                     | MacEtherOffloadFlags::TUNINFO_SET,
-                meoi_l2hlen: Ethernet::MINIMUM_LENGTH as u8,
+                meoi_l2hlen: u8::try_from(Ethernet::MINIMUM_LENGTH)
+                    .expect("14B < u8::MAX"),
                 meoi_l3proto: Ethertype::IPV6.0,
-                meoi_l3hlen: Ipv6::MINIMUM_LENGTH as u16,
+                meoi_l3hlen: u16::try_from(Ipv6::MINIMUM_LENGTH)
+                    .expect("40B < u16::MAX"),
                 meoi_l4proto: IpProtocol::UDP.0,
-                meoi_l4hlen: Udp::MINIMUM_LENGTH as u8,
+                meoi_l4hlen: u8::try_from(Udp::MINIMUM_LENGTH)
+                    .expect("8B < u8::MAX"),
                 meoi_tuntype: MacTunType::GENEVE,
-                meoi_tunhlen: Geneve::MINIMUM_LENGTH as u16,
-                meoi_len: out_pkt.byte_len() as u32,
+                meoi_tunhlen: u16::try_from(Geneve::MINIMUM_LENGTH)
+                    .expect("8B < u16::MAX"),
+                // meoi_len will be recomputed by consumers.
+                meoi_len: u32::try_from(new_len).unwrap_or(u32::MAX),
             };
 
             if let Err(e) = out_pkt.fill_parse_info(&tun_meoi, Some(&ulp_meoi))
@@ -1925,7 +1968,7 @@ unsafe extern "C" fn xde_mc_getcapab(
                     upstream_lso.lso_basic_tcp_ipv6.lso_max,
                 )
             } else {
-                (u16::MAX as u32, u16::MAX as u32)
+                (u32::from(u16::MAX), u32::from(u16::MAX))
             };
 
             unsafe {
@@ -2106,7 +2149,8 @@ unsafe fn xde_rx_one(
     };
 
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let mss_estimate = 1500 - (&meta.inner_l3, &meta.inner_ulp).packet_length();
+    let mss_estimate = usize::from(ETHERNET_MTU)
+        - (&meta.inner_l3, &meta.inner_ulp).packet_length();
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
@@ -2133,7 +2177,10 @@ unsafe fn xde_rx_one(
             // (e.g., no GRO/large frame support).
             // HW_LSO will cause viona to treat this packet as though it were
             // a locally delivered segment making use of LSO.
-            if is_tcp && npkt.len() > 1500 + Ethernet::MINIMUM_LENGTH {
+            if is_tcp
+                && npkt.len()
+                    > usize::from(ETHERNET_MTU) + Ethernet::MINIMUM_LENGTH
+            {
                 npkt.request_offload(
                     MblkOffloadFlags::HW_LSO,
                     mss_estimate as u32,

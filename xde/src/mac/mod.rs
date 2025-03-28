@@ -427,6 +427,8 @@ impl Drop for MacPerimeterHandle {
 bitflags! {
 /// Flagset for requesting emulation on any packets marked
 /// with the given offloads.
+///
+/// Derived from `mac_emul_t` (mac.h).
 pub struct MacEmul: u32 {
     /// Calculate the L3/L4 checksums.
     const HWCKSUM_EMUL = MAC_HWCKSUM_EMUL;
@@ -516,62 +518,60 @@ impl OffloadInfo {
 
         out
     }
-}
 
-impl core::ops::BitAnd for OffloadInfo {
-    type Output = Self;
-
-    fn bitand(self, rhs: Self) -> Self::Output {
+    /// Return the set of capabilities and MTUs compatible across one or more
+    /// underlay devices.
+    pub fn mutual_capabs(&self, other: &Self) -> Self {
         Self {
             cso_state: mac_capab_cso_t {
-                cso_flags: self.cso_state.cso_flags & rhs.cso_state.cso_flags,
+                cso_flags: self.cso_state.cso_flags & other.cso_state.cso_flags,
                 cso_tunnel: cso_tunnel_t {
                     ct_flags: self.cso_state.cso_tunnel.ct_flags
-                        & rhs.cso_state.cso_tunnel.ct_flags,
+                        & other.cso_state.cso_tunnel.ct_flags,
                     ct_encap_max: self
                         .cso_state
                         .cso_tunnel
                         .ct_encap_max
-                        .min(rhs.cso_state.cso_tunnel.ct_encap_max),
+                        .min(other.cso_state.cso_tunnel.ct_encap_max),
                     ct_types: self.cso_state.cso_tunnel.ct_types
-                        & rhs.cso_state.cso_tunnel.ct_types,
+                        & other.cso_state.cso_tunnel.ct_types,
                 },
             },
             lso_state: mac_capab_lso_t {
-                lso_flags: self.lso_state.lso_flags & rhs.lso_state.lso_flags,
+                lso_flags: self.lso_state.lso_flags & other.lso_state.lso_flags,
                 lso_basic_tcp_ipv4: lso_basic_tcp_ipv4_t {
                     lso_max: self
                         .lso_state
                         .lso_basic_tcp_ipv4
                         .lso_max
-                        .min(rhs.lso_state.lso_basic_tcp_ipv4.lso_max),
+                        .min(other.lso_state.lso_basic_tcp_ipv4.lso_max),
                 },
                 lso_basic_tcp_ipv6: lso_basic_tcp_ipv6_t {
                     lso_max: self
                         .lso_state
                         .lso_basic_tcp_ipv6
                         .lso_max
-                        .min(rhs.lso_state.lso_basic_tcp_ipv6.lso_max),
+                        .min(other.lso_state.lso_basic_tcp_ipv6.lso_max),
                 },
                 lso_tunnel_tcp: lso_tunnel_tcp_t {
                     tun_pay_max: self
                         .lso_state
                         .lso_tunnel_tcp
                         .tun_pay_max
-                        .min(rhs.lso_state.lso_tunnel_tcp.tun_pay_max),
+                        .min(other.lso_state.lso_tunnel_tcp.tun_pay_max),
                     tun_encap_max: self
                         .lso_state
                         .lso_tunnel_tcp
                         .tun_encap_max
-                        .min(rhs.lso_state.lso_tunnel_tcp.tun_encap_max),
+                        .min(other.lso_state.lso_tunnel_tcp.tun_encap_max),
                     tun_flags: self.lso_state.lso_tunnel_tcp.tun_flags
-                        & rhs.lso_state.lso_tunnel_tcp.tun_flags,
+                        & other.lso_state.lso_tunnel_tcp.tun_flags,
                     tun_types: self.lso_state.lso_tunnel_tcp.tun_types
-                        & rhs.lso_state.lso_tunnel_tcp.tun_types,
+                        & other.lso_state.lso_tunnel_tcp.tun_types,
                     tun_pad: [0; 2],
                 },
             },
-            mtu: self.mtu.min(rhs.mtu),
+            mtu: self.mtu.min(other.mtu),
         }
     }
 }

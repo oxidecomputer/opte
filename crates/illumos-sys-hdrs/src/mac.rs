@@ -7,8 +7,6 @@
 #[cfg(feature = "kernel")]
 use crate::mblk_t;
 use bitflags::bitflags;
-#[cfg(feature = "kernel")]
-use core::ffi::c_int;
 
 // ======================================================================
 // uts/common/sys/mac_provider.h
@@ -19,6 +17,9 @@ bitflags! {
 #[derive(Clone, Copy, Debug, Default)]
 /// Flags which denote the valid fields of a `mac_ether_offload_info_t`
 /// or `mac_ether_tun_info_t`.
+///
+/// These are derived from `mac_ether_offload_flags_t` (mac_provider.h,
+/// omitting the `MEOI_` prefix).
 pub struct MacEtherOffloadFlags: u32 {
     /// `l2hlen` and `l3proto` are set.
     const L2INFO_SET     = 1 << 0;
@@ -37,6 +38,10 @@ pub struct MacEtherOffloadFlags: u32 {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+/// The type of tunnel in use for a packet's outermost layer.
+///
+/// These are derived from `mac_ether_tun_type_t` (mac_provider.h,
+/// omitting the `METT_` prefix).
 pub struct MacTunType(u32);
 
 impl MacTunType {
@@ -93,9 +98,11 @@ unsafe extern "C" {
 
 bitflags! {
 /// Flags which denote checksum and LSO state for an `mblk_t`.
+///
+/// These are derived from `#define`s in pattr.h.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct MblkOffloadFlags: u16 {
-    /// Tx: IPv4 header checksum must be computer by hardware.
+pub struct MblkOffloadFlags: u32 {
+    /// Tx: IPv4 header checksum must be computed by hardware.
     const HCK_IPV4_HDRCKSUM = 1 << 0;
     /// Rx: IPv4 header checksum was verified correct by hardware.
     const HCK_IPV4_HDRCKSUM_OK = Self::HCK_IPV4_HDRCKSUM.bits();
@@ -109,40 +116,48 @@ pub struct MblkOffloadFlags: u16 {
     const HCK_FULLCKSUM_OK = 1 << 3;
     /// Tx: Hardware must perform LSO.
     const HW_LSO = 1 << 4;
-
+    /// Tx: The inner frame's IPv4 header checksum must be computed by
+    /// hardware.
     const HCK_INNER_V4CKSUM = 1 << 5;
-
+    /// Rx: The inner frame's IPv4 header checksum was verified correct by
+    /// hardware.
     const HCK_INNER_V4CKSUM_OK = 1 << 6;
-
+    /// * Tx: Compute inner L4 partial checksum based on MEOI parse offsets.
     const HCK_INNER_PARTIAL = 1 << 7;
-
+    /// * Tx: Compute full (pseudo + l4 + payload) cksum for this packet's
+    /// inner L4.
     const HCK_INNER_FULL = 1 << 8;
-
+    /// Rx: Hardware has verified that inner L3/L4 checksums are correct.
     const HCK_INNER_FULL_OK = 1 << 9;
-
+    /// The union of all checksum-related flags.
     const HCK_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits() |
         Self::HCK_FULLCKSUM_OK.bits() | Self::HCK_INNER_V4CKSUM.bits() |
         Self::HCK_INNER_V4CKSUM_OK.bits() | Self::HCK_INNER_PARTIAL.bits() |
         Self::HCK_INNER_FULL.bits() | Self::HCK_INNER_FULL_OK.bits();
-
+    /// The union of all checksum-related flags used in the transmit path
+    /// (i.e., indicating missing checksums).
     const HCK_TX_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits() |
         Self::HCK_INNER_V4CKSUM.bits() | Self::HCK_INNER_PARTIAL.bits() |
         Self::HCK_INNER_FULL.bits();
-
+    /// The union of all checksum-related flags used in the transmit path
+    /// for outer headers (untunnelled packets and encap layers).
     const HCK_OUTER_TX_FLAGS = Self::HCK_IPV4_HDRCKSUM.bits() |
         Self::HCK_PARTIALCKSUM.bits() | Self::HCK_FULLCKSUM.bits();
-
+    /// The union of all checksum-related flags for outer headers (untunnelled
+    /// packets and encap layers).
     const HCK_OUTER_FLAGS = Self::HCK_OUTER_TX_FLAGS.bits() |
         Self::HCK_IPV4_HDRCKSUM_OK.bits() | Self::HCK_FULLCKSUM_OK.bits();
-
+    /// The union of all checksum-related flags used in the transmit path
+    /// for inner headers (tunnelled packets).
     const HCK_INNER_TX_FLAGS = Self::HCK_INNER_V4CKSUM.bits() |
         Self::HCK_INNER_PARTIAL.bits() | Self::HCK_INNER_FULL.bits();
-
+    /// The union of all checksum-related flags for inner headers (tunnelled
+    /// packets).
     const HCK_INNER_FLAGS = Self::HCK_INNER_TX_FLAGS.bits() |
         Self::HCK_INNER_V4CKSUM_OK.bits() | Self::HCK_INNER_FULL_OK.bits();
-
+    /// The union of all LSO-related flags.
     const HW_LSO_FLAGS = Self::HW_LSO.bits();
 }
 }
