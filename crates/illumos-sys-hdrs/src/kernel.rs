@@ -370,6 +370,9 @@ pub const DDI_PSEUDO: *const c_char = c"ddi_pseudo".as_ptr();
 pub const KM_SLEEP: i32 = 0x0000;
 pub const KM_NOSLEEP: i32 = 0x0001;
 
+pub const MAXNAMELEN: c_int = 256;
+pub const MAXLINKNAMELEN: c_int = 32;
+pub const MAXPATHLEN: usize = 1024;
 pub const MODREV_1: c_int = 1;
 
 pub const S_IFCHR: c_int = 0x2000;

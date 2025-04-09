@@ -4,6 +4,7 @@
 
 // Copyright 2024 Oxide Computer Company
 
+use anyhow::Context;
 use anyhow::Result;
 use opteadm::OpteAdm;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -354,6 +355,27 @@ pub fn two_node_topology() -> Result<Topology> {
 
     println!("setup zone b");
     b.setup(&opte1.name, opte1.ip())?;
+
+    // We now need to establish an NDP cache entry both ways, otherwise
+    // we'll write zero for both MAC addrs and the packet *will* be dropped --
+    // we're not in promisc anymore :). One ping from the global zone will suffice.
+    let ping_res = Command::new("ping")
+        .args([
+            "-A",
+            "inet6",
+            "-i",
+            &sim.end_b,
+            &format!("{}%{}", ll0.ip, sim.end_a),
+        ])
+        .output()
+        .with_context(|| "calling 'ping' over simnet")?;
+
+    if !ping_res.status.success() {
+        anyhow::bail!(
+            "Failed to ping over simnet links!\nstderr:{:?}",
+            std::str::from_utf8(&ping_res.stderr)
+        );
+    }
 
     Ok(Topology {
         xde,
