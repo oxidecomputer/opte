@@ -199,20 +199,16 @@ pub struct SNat<T: ConcreteIpAddr> {
     icmp_pool: Arc<NatPool<T>>,
 }
 
-enum GenIcmpErr<T: Display> {
+enum GenIcmpErr {
     MetaNotFound,
-    NotRequest(T),
 }
 
-impl<T: Display> From<GenIcmpErr<T>> for GenDescError {
-    fn from(val: GenIcmpErr<T>) -> Self {
+impl From<GenIcmpErr> for GenDescError {
+    fn from(val: GenIcmpErr) -> Self {
         GenDescError::Unexpected {
             msg: match val {
                 GenIcmpErr::MetaNotFound => {
                     "No ICMP metadata found despite Protocol::ICMP".to_string()
-                }
-                GenIcmpErr::NotRequest(v) => {
-                    format!("Expected ICMP Echo Request, found: {}", v)
                 }
             },
         }
@@ -236,7 +232,11 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
         }
     }
 
-    // A helper method for generating an SNAT + ICMP(v6) action descriptor.
+    /// A helper method for generating an SNAT + ICMP(v6) action descriptor.
+    ///
+    /// Only echo requests will be admitted, as these a) signify a new flow,
+    /// and b) are SNAT-compatible via their Echo ID parameter. All other ICMP
+    /// packets are explicitly dropped.
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
@@ -246,37 +246,38 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
 
         let echo_ident = match T::MESSAGE_PROTOCOL {
             Protocol::ICMP => {
-                let icmp = meta
-                    .inner_icmp()
-                    .ok_or(GenIcmpErr::<Icmpv4Message>::MetaNotFound)?;
-                if icmp.ty() != u8::from(Icmpv4Message::EchoRequest) {
-                    Err(GenIcmpErr::NotRequest(icmp.ty()).into())
+                let icmp = meta.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
+
+                Ok(if icmp.ty() == u8::from(Icmpv4Message::EchoRequest) {
+                    icmp.echo_id()
                 } else {
-                    Ok(icmp.echo_id())
-                }
+                    None
+                })
             }
             Protocol::ICMPv6 => {
-                let icmp6 = meta
-                    .inner_icmp6()
-                    .ok_or(GenIcmpErr::<Icmpv6Message>::MetaNotFound)?;
-                if icmp6.ty() != u8::from(Icmpv6Message::EchoRequest) {
-                    Err(GenIcmpErr::NotRequest(icmp6.ty()).into())
+                let icmp6 =
+                    meta.inner_icmp6().ok_or(GenIcmpErr::MetaNotFound)?;
+
+                Ok(if icmp6.ty() == u8::from(Icmpv6Message::EchoRequest) {
+                    icmp6.echo_id()
                 } else {
-                    Ok(icmp6.echo_id())
-                }
+                    None
+                })
             }
             _ => Err(GenDescError::Unexpected {
                 msg: "Mistakenly called gen_icmp_desc on non ICMP(v6)."
                     .to_string(),
             }),
-        }?
-        .ok_or(GenDescError::Unexpected {
-            msg: "No ICMP(v6) echo ID found in metadata".to_string(),
-        })?;
+        }?;
 
-        let desc = SNatIcmpEchoDesc { nat, echo_ident };
-
-        Ok(AllowOrDeny::Allow(Arc::new(desc)))
+        if let Some(echo_ident) = echo_ident {
+            Ok(AllowOrDeny::Allow(Arc::new(SNatIcmpEchoDesc {
+                nat,
+                echo_ident,
+            })))
+        } else {
+            Ok(AllowOrDeny::Deny)
+        }
     }
 }
 
