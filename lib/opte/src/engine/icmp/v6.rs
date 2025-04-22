@@ -646,8 +646,8 @@ impl HairpinAction for NeighborAdvertisement {
 impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 128) | (0, 129) => {
+        match (self.ty().into(), self.code()) {
+            (Icmpv6Message::EchoRequest, 0) | (Icmpv6Message::EchoReply, 0) => {
                 ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
                     .ok()
                     .map(|(v, ..)| v.id())
@@ -660,8 +660,8 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
 impl<B: ByteSlice> QueryEcho for ValidIcmpV6<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 128) | (0, 129) => {
+        match (self.ty().into(), self.code()) {
+            (Icmpv6Message::EchoRequest, 0) | (Icmpv6Message::EchoReply, 0) => {
                 ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
                     .ok()
                     .map(|(v, ..)| v.id())

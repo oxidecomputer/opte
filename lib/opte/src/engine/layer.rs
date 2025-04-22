@@ -1391,7 +1391,7 @@ impl Layer {
     ) {
         // XXX increment stat
         ectx.log.log(
-            LogLevel::Error,
+            LogLevel::Note,
             &format!(
                 "failed to generate descriptor for stateful action: {} {:?}",
                 flow, err
@@ -1409,7 +1409,7 @@ impl Layer {
     ) {
         // XXX increment stat
         ectx.log.log(
-            LogLevel::Error,
+            LogLevel::Note,
             &format!(
                 "failed to generate HdrTransform for static action: {} {:?}",
                 flow, err
