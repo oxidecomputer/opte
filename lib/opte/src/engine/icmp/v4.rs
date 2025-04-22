@@ -24,6 +24,7 @@ use ingot::types::HeaderParse;
 use opte::engine::Checksum as OpteCsum;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
+use smoltcp::wire::Icmpv4Message;
 
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -198,8 +199,8 @@ impl Display for MessageType {
 impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 0) | (0, 8) => {
+        match (self.ty().into(), self.code()) {
+            (Icmpv4Message::EchoRequest, 0) | (Icmpv4Message::EchoReply, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())
@@ -212,8 +213,8 @@ impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
 impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.code(), self.ty()) {
-            (0, 0) | (0, 8) => {
+        match (self.ty().into(), self.code()) {
+            (Icmpv4Message::EchoRequest, 0) | (Icmpv4Message::EchoReply, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())
