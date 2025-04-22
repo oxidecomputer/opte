@@ -31,8 +31,12 @@ pub struct MacEtherOffloadFlags: u32 {
     const TUNINFO_SET    = 1 << 3;
     /// The ethernet header contains a VLAN tag.
     const VLAN_TAGGED    = 1 << 4;
-    /// The packet is fragmented at L3.
-    const L3_FRAGMENT    = 1 << 5;
+    /// The packet is fragmented at L3, and this packet is not the last
+    /// fragment. L4 headers are expected to be present.
+    const L3_FRAG_MORE   = 1 << 5;
+    /// The packet is fragmented at L3, and this packet is not the first
+    /// fragment.
+    const L3_FRAG_OFFSET = 1 << 6;
 }
 }
 
