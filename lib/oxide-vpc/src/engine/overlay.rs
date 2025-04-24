@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The Oxide Network VPC Overlay.
 //!
@@ -237,6 +237,7 @@ impl StaticAction for EncapAction {
 
         let phys_target = match target {
             RouterTargetInternal::InternetGateway(_) => {
+                action_meta.set_internal_target(false);
                 match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
@@ -259,6 +260,7 @@ impl StaticAction for EncapAction {
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
                 Some(phys) => {
+                    action_meta.set_internal_target(true);
                     PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni }
                 }
 

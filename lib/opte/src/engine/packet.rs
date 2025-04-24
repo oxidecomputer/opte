@@ -2,14 +2,9 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
-//!
-//! TODO
-//!
-//! * Add hardware offload information to [`Packet`].
-//!
 
 use super::Direction;
 use super::LightweightMeta;
@@ -38,6 +33,7 @@ use super::ip::v6::Ipv6Ref;
 use super::parse::NoEncap;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
+use super::port::meta::ActionMeta;
 use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
@@ -964,7 +960,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
     #[inline]
     /// Convert a packet's metadata into a set of instructions
     /// needed to serialize all its changes to the wire.
-    pub fn emit_spec(&mut self) -> Result<EmitSpec, ingot::types::ParseError>
+    pub fn emit_spec(
+        &mut self,
+        action_meta: &ActionMeta,
+    ) -> Result<EmitSpec, ingot::types::ParseError>
     where
         T::Chunk: ByteSliceMut,
     {
@@ -1169,6 +1168,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
             ulp_len: encapped_len as u32,
             prepend: PushSpec::Slowpath(push_spec.into()),
             l4_hash,
+            mtu_unrestricted: action_meta.is_internal_target(),
         })
     }
 
@@ -1586,11 +1586,18 @@ pub struct EmitSpec {
     pub(crate) l4_hash: u32,
     pub(crate) rewind: u16,
     pub(crate) ulp_len: u32,
+    pub(crate) mtu_unrestricted: bool,
 }
 
 impl Default for EmitSpec {
     fn default() -> Self {
-        Self { prepend: PushSpec::NoOp, l4_hash: 0, rewind: 0, ulp_len: 0 }
+        Self {
+            prepend: PushSpec::NoOp,
+            l4_hash: 0,
+            rewind: 0,
+            ulp_len: 0,
+            mtu_unrestricted: false,
+        }
     }
 }
 
@@ -1600,6 +1607,14 @@ impl EmitSpec {
     #[must_use]
     pub fn l4_hash(&self) -> u32 {
         self.l4_hash
+    }
+
+    /// Return whether this packet's route allows the use of a full jumbo frame
+    /// MSS.
+    #[inline]
+    #[must_use]
+    pub fn mtu_unrestricted(&self) -> bool {
+        self.mtu_unrestricted
     }
 
     /// Perform final structural transformations to a packet (removal of
@@ -1736,6 +1751,7 @@ impl EmitSpec {
                 }
 
                 if let Some(mut prepend) = prepend {
+                    pkt.copy_offload_info_to(&mut prepend);
                     prepend.append(pkt);
                     prepend
                 } else {

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Constructs used in packet parsing, such as choices over protocol
 //! and complete packet definitions.
@@ -83,6 +83,7 @@ pub enum Ulp {
 }
 
 impl<B: ByteSlice> ValidUlp<B> {
+    #[inline]
     pub fn csum(&self) -> [u8; 2] {
         match self {
             ValidUlp::Tcp(t) => t.checksum(),
@@ -92,9 +93,24 @@ impl<B: ByteSlice> ValidUlp<B> {
         }
         .to_be_bytes()
     }
+
+    /// Return whether the ULP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    #[inline]
+    pub fn has_ulp_csum(&self) -> bool {
+        let csum = match self {
+            ValidUlp::Tcp(t) => t.checksum(),
+            ValidUlp::Udp(u) => u.checksum(),
+            ValidUlp::IcmpV4(i4) => i4.checksum(),
+            ValidUlp::IcmpV6(i6) => i6.checksum(),
+        };
+
+        csum != 0
+    }
 }
 
 impl<B: ByteSliceMut> ValidUlp<B> {
+    #[inline]
     pub fn compute_checksum(
         &mut self,
         mut body_csum: Checksum,
@@ -288,12 +304,18 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
     }
 
     #[inline]
-    fn update_inner_checksums(&mut self, body_csum: Checksum) {
+    fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
         if let Some(l3) = self.inner_l3.as_mut() {
-            if let Some(ulp) = self.inner_ulp.as_mut() {
-                ulp.compute_checksum(body_csum, l3);
+            if let (Some(ulp), Some(body_csum)) =
+                (self.inner_ulp.as_mut(), body_csum)
+            {
+                if ulp.has_ulp_csum() {
+                    ulp.compute_checksum(body_csum, l3);
+                }
             }
-            l3.compute_checksum();
+            if l3.has_ip_csum() {
+                l3.compute_checksum();
+            }
         }
     }
 
@@ -415,9 +437,15 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
     }
 
     #[inline]
-    fn update_inner_checksums(&mut self, body_csum: Checksum) {
-        self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
-        self.inner_l3.compute_checksum();
+    fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
+        if let Some(body_csum) = body_csum {
+            if self.inner_ulp.has_ulp_csum() {
+                self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
+            }
+        }
+        if self.inner_l3.has_ip_csum() {
+            self.inner_l3.compute_checksum();
+        }
     }
 
     #[inline]

@@ -12,6 +12,8 @@ pub mod kernel;
 #[cfg(feature = "kernel")]
 pub use kernel::*;
 
+pub mod mac;
+
 use core::ptr;
 use core::sync::atomic::AtomicI32;
 use core::sync::atomic::AtomicI64;
@@ -246,6 +248,8 @@ pub struct dblk_t {
     pub db_struioun: u64,        // imprecise
     pub db_fthdr: *const c_void, // imprecise
     pub db_credp: *const c_void, // imprecise
+
+    pub db_meoi: [u8; 16], // imprecise
 }
 
 impl Default for dblk_t {
@@ -269,6 +273,8 @@ impl Default for dblk_t {
             db_struioun: 0,
             db_fthdr: ptr::null(),
             db_credp: ptr::null(),
+
+            db_meoi: Default::default(),
         }
     }
 }

@@ -45,6 +45,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Debug;
@@ -319,6 +320,14 @@ impl Display for HdrTransform {
     }
 }
 
+bitflags! {
+    #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+    pub struct TransformFlags: u8 {
+        const CSUM_DIRTY = 1;
+        const INTERNAL_DESTINATION = 1 << 1;
+    }
+}
+
 /// Header transformations matching a simple format, amenable
 /// to fastpath compilation:
 /// * Encap is either pushed or popped in its entirety,
@@ -331,10 +340,24 @@ pub struct CompiledTransform {
     pub inner_ether: Option<EtherMod>,
     pub inner_ip: Option<IpMod>,
     pub inner_ulp: Option<UlpMetaModify>,
-    pub checksums_dirty: bool,
+    pub flags: TransformFlags,
 }
 
 impl CompiledTransform {
+    /// Does this transform modify any fields which factor into the
+    /// inner frame's L3/L4 checksums?
+    #[inline]
+    pub fn checksums_dirty(&self) -> bool {
+        self.flags.contains(TransformFlags::CSUM_DIRTY)
+    }
+
+    /// Can the remote side of this flow be accessed purely using
+    /// internal/private paths?
+    #[inline]
+    pub fn internal_destination(&self) -> bool {
+        self.flags.contains(TransformFlags::INTERNAL_DESTINATION)
+    }
+
     #[inline(always)]
     pub fn transform_ether<V: ByteSliceMut>(
         &self,
@@ -463,13 +486,14 @@ impl CompiledEncap {
             return pkt;
         };
 
-        let mut prepend = if pkt.head_capacity() < bytes.len() {
-            let mut pkt = MsgBlk::new_ethernet(bytes.len());
-            pkt.pop_all();
-            Some(pkt)
-        } else {
-            None
-        };
+        let mut prepend =
+            if pkt.ref_count() > 1 || pkt.head_capacity() < bytes.len() {
+                let mut pkt = MsgBlk::new_ethernet(bytes.len());
+                pkt.pop_all();
+                Some(pkt)
+            } else {
+                None
+            };
 
         let target = if let Some(prepend) = prepend.as_mut() {
             prepend
@@ -498,6 +522,7 @@ impl CompiledEncap {
         *l4_len_slot = (l4_len as u16).to_be_bytes();
 
         if let Some(mut prepend) = prepend {
+            pkt.copy_offload_info_to(&mut prepend);
             prepend.append(pkt);
             prepend
         } else {
