@@ -6,6 +6,7 @@
 
 use anyhow::Result;
 use opteadm::OpteAdm;
+use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::DhcpCfg;
@@ -131,15 +132,16 @@ impl OptePort {
         let mut filters = Filters::new();
         filters.set_hosts(Address::Any);
         filters.set_ports(Ports::Any);
-        adm.add_firewall_rule(
-            &self.name,
-            &FirewallRule {
+        adm.add_firewall_rule(&AddFwRuleReq {
+            port_name: self.name.clone(),
+            rule: FirewallRule {
                 direction: Direction::In,
                 action: FirewallAction::Allow,
                 priority: 0,
                 filters,
             },
-        )?;
+        })?;
+
         Ok(())
     }
 
