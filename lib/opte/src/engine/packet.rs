@@ -1726,6 +1726,7 @@ mod test {
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
     use ingot::udp::Udp;
+    use opte_api::Ipv4Addr;
     use opte_api::Ipv6Addr;
     use opte_api::MacAddr;
 
