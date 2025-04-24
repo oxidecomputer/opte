@@ -11,8 +11,6 @@ use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
-use super::ioctl;
-use super::ioctl::ActionDescEntryDump;
 use super::packet::BodyTransformError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
@@ -52,7 +50,11 @@ use core::num::NonZeroU32;
 use core::result;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
+use opte_api::ActionDescEntryDump;
 use opte_api::Direction;
+use opte_api::DumpLayerResp;
+use opte_api::RuleDump;
+use opte_api::RuleTableEntryDump;
 
 #[derive(Debug)]
 pub enum LayerError {
@@ -548,11 +550,11 @@ impl Layer {
 
     /// Dump the contents of this layer. This is used for presenting
     /// the layer state in a human-friendly manner.
-    pub(crate) fn dump(&self) -> ioctl::DumpLayerResp {
+    pub(crate) fn dump(&self) -> DumpLayerResp<InnerFlowId> {
         let rules_in = self.rules_in.dump();
         let rules_out = self.rules_out.dump();
         let ftd = self.ft.dump();
-        ioctl::DumpLayerResp {
+        DumpLayerResp {
             name: self.name.to_string(),
             ft_in: ftd.ft_in,
             ft_out: ftd.ft_out,
@@ -1533,13 +1535,9 @@ struct RuleTableEntry {
     rule: Rule<rule::Finalized>,
 }
 
-impl From<&RuleTableEntry> for ioctl::RuleTableEntryDump {
+impl From<&RuleTableEntry> for RuleTableEntryDump {
     fn from(rte: &RuleTableEntry) -> Self {
-        Self {
-            id: rte.id,
-            hits: rte.hits,
-            rule: super::ioctl::RuleDump::from(&rte.rule),
-        }
+        Self { id: rte.id, hits: rte.hits, rule: RuleDump::from(&rte.rule) }
     }
 }
 
@@ -1579,10 +1577,10 @@ impl RuleTable {
         self.next_id += 1;
     }
 
-    fn dump(&self) -> Vec<ioctl::RuleTableEntryDump> {
+    fn dump(&self) -> Vec<RuleTableEntryDump> {
         let mut dump = Vec::new();
         for rte in &self.rules {
-            dump.push(ioctl::RuleTableEntryDump::from(rte));
+            dump.push(RuleTableEntryDump::from(rte));
         }
         dump
     }

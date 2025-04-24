@@ -108,14 +108,14 @@ impl OptePort {
             vni: Vni::new(1701u32).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
         };
-        let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
+        let adm = OpteAdm::open()?;
         adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;
         Ok(OptePort { name: name.into(), cfg })
     }
 
     /// Add an overlay routing entry to this port.
     pub fn add_router_entry(&self, dest: &str) -> Result<()> {
-        let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
+        let adm = OpteAdm::open()?;
         adm.add_router_entry(&AddRouterEntryReq {
             port_name: self.name.clone(),
             dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
@@ -127,7 +127,7 @@ impl OptePort {
 
     /// Allow all traffic through the overlay firewall.
     pub fn fw_allow_all(&self) -> Result<()> {
-        let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
+        let adm = OpteAdm::open()?;
         let mut filters = Filters::new();
         filters.set_hosts(Address::Any);
         filters.set_ports(Ports::Any);
@@ -165,7 +165,7 @@ impl OptePort {
 impl Drop for OptePort {
     /// When this port is dropped, remove it from the underlying xde device.
     fn drop(&mut self) {
-        let adm = match OpteAdm::open(OpteAdm::XDE_CTL) {
+        let adm = match OpteAdm::open() {
             Ok(adm) => adm,
             Err(e) => {
                 eprintln!("failed to open xde device on drop: {}", e);
@@ -187,14 +187,14 @@ pub struct Xde {}
 impl Xde {
     /// Set the underlay data links that all OPTE ports will use.
     fn set_xde_underlay(dev0: &str, dev1: &str) -> Result<()> {
-        let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
+        let adm = OpteAdm::open()?;
         adm.set_xde_underlay(dev0, dev1)?;
         Ok(())
     }
 
     /// Set the virtual to physical port mappings that all OPTE ports will use.
     fn set_v2p(vip: &str, ether: &str, ip: &str) -> Result<()> {
-        let adm = OpteAdm::open(OpteAdm::XDE_CTL)?;
+        let adm = OpteAdm::open()?;
         adm.set_v2p(&SetVirt2PhysReq {
             vip: vip.parse().unwrap(),
             phys: PhysNet {
@@ -212,7 +212,7 @@ impl Drop for Xde {
     fn drop(&mut self) {
         // The module can no longer be successfully removed until the underlay
         // has been cleared. This may not have been done, so this is fallible.
-        if let Ok(adm) = OpteAdm::open(OpteAdm::XDE_CTL) {
+        if let Ok(adm) = OpteAdm::open() {
             let _ = adm.clear_xde_underlay();
         }
 

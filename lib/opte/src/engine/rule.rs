@@ -63,6 +63,7 @@ use ingot::types::InlineHeader;
 use ingot::types::Read;
 use ingot::udp::UdpMut;
 use opte_api::Direction;
+use opte_api::RuleDump;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSliceMut;
@@ -1113,18 +1114,16 @@ impl Rule<Finalized> {
     }
 }
 
-impl From<&Rule<Finalized>> for super::ioctl::RuleDump {
+impl From<&Rule<Finalized>> for RuleDump {
     fn from(rule: &Rule<Finalized>) -> Self {
         let predicates = rule.state.preds.as_ref().map_or(vec![], |rp| {
             rp.hdr_preds.iter().map(ToString::to_string).collect()
         });
-        let data_predicates = rule
-            .state
-            .preds
-            .as_ref()
-            .map_or(vec![], |rp| rp.data_preds.clone());
+        let data_predicates = rule.state.preds.as_ref().map_or(vec![], |rp| {
+            rp.data_preds.iter().map(|v| v.to_string()).collect()
+        });
 
-        super::ioctl::RuleDump {
+        RuleDump {
             priority: rule.priority,
             predicates,
             data_predicates,

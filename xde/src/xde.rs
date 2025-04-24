@@ -2368,7 +2368,7 @@ fn dump_layer_hdlr(
         return Err(OpteError::PortNotFound(req.port_name));
     };
 
-    api::dump_layer(&dev.port, &req)
+    dev.port.dump_layer(&req.name)
 }
 
 #[unsafe(no_mangle)]
@@ -2381,7 +2381,7 @@ fn dump_tcp_flows_hdlr(
         return Err(OpteError::PortNotFound(req.port_name));
     };
 
-    api::dump_tcp_flows(&dev.port, &req)
+    dev.port.dump_tcp_flows()
 }
 
 #[unsafe(no_mangle)]

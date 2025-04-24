@@ -19,10 +19,6 @@ use super::headers::EncapPush;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
-use super::ioctl;
-use super::ioctl::TcpFlowEntryDump;
-use super::ioctl::TcpFlowStateDump;
-use super::ioctl::UftEntryDump;
 use super::ip::L3Repr;
 use super::ip::v4::Ipv4;
 use super::ip::v6::Ipv6;
@@ -51,7 +47,6 @@ use super::rule::Rule;
 use super::rule::TransformFlags;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
-use super::tcp::TcpState;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use crate::ExecCtx;
@@ -97,8 +92,17 @@ use ingot::types::Read;
 use ingot::udp::Udp;
 use meta::ActionMeta;
 use opte_api::Direction;
+use opte_api::DumpLayerResp;
+use opte_api::DumpTcpFlowsResp;
+use opte_api::DumpUftResp;
+use opte_api::LayerDesc;
+use opte_api::ListLayersResp;
 use opte_api::MacAddr;
 use opte_api::OpteError;
+use opte_api::TcpFlowEntryDump;
+use opte_api::TcpFlowStateDump;
+use opte_api::TcpState;
+use opte_api::UftEntryDump;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
@@ -373,12 +377,12 @@ impl PortBuilder {
     }
 
     /// List each [`Layer`] under this port.
-    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+    pub fn list_layers(&self) -> ListLayersResp {
         let mut tmp = vec![];
         let lock = self.layers.lock();
 
         for layer in lock.iter() {
-            tmp.push(ioctl::LayerDesc {
+            tmp.push(LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
@@ -388,7 +392,7 @@ impl PortBuilder {
             });
         }
 
-        ioctl::ListLayersResp { layers: tmp }
+        ListLayersResp { layers: tmp }
     }
 
     /// Return the name of the port.
@@ -963,7 +967,7 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid for any [`PortState`].
-    pub fn dump_layer(&self, name: &str) -> Result<ioctl::DumpLayerResp> {
+    pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp<InnerFlowId>> {
         let data = self.data.read();
 
         for l in &data.layers {
@@ -984,14 +988,14 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
-    pub fn dump_tcp_flows(&self) -> Result<ioctl::DumpTcpFlowsResp> {
+    pub fn dump_tcp_flows(&self) -> Result<DumpTcpFlowsResp<InnerFlowId>> {
         let data = self.data.read();
         check_state!(
             data.state,
             [PortState::Running, PortState::Paused, PortState::Restored]
         )?;
 
-        Ok(ioctl::DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
+        Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
@@ -1037,7 +1041,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
-    pub fn dump_uft(&self) -> Result<ioctl::DumpUftResp> {
+    pub fn dump_uft(&self) -> Result<DumpUftResp<InnerFlowId>> {
         let data = self.data.read();
 
         check_state!(
@@ -1053,7 +1057,7 @@ impl<N: NetworkImpl> Port<N> {
         let out_num_flows = data.uft_out.num_flows();
         let out_flows = data.uft_out.dump();
 
-        Ok(ioctl::DumpUftResp {
+        Ok(DumpUftResp {
             in_limit,
             in_num_flows,
             in_flows,
@@ -1178,12 +1182,12 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid for any [`PortState`].
-    pub fn list_layers(&self) -> ioctl::ListLayersResp {
+    pub fn list_layers(&self) -> ListLayersResp {
         let data = self.data.read();
         let mut tmp = vec![];
 
         for layer in &data.layers {
-            tmp.push(ioctl::LayerDesc {
+            tmp.push(LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
                 rules_out: layer.num_rules(Direction::Out),
@@ -1193,7 +1197,7 @@ impl<N: NetworkImpl> Port<N> {
             });
         }
 
-        ioctl::ListLayersResp { layers: tmp }
+        ListLayersResp { layers: tmp }
     }
 
     /// Return the MAC address of this port.
@@ -2988,9 +2992,9 @@ impl Display for TcpFlowEntryState {
 }
 
 impl Dump for TcpFlowEntryStateInner {
-    type DumpVal = TcpFlowEntryDump;
+    type DumpVal = TcpFlowEntryDump<InnerFlowId>;
 
-    fn dump(&self, hits: u64) -> TcpFlowEntryDump {
+    fn dump(&self, hits: u64) -> Self::DumpVal {
         TcpFlowEntryDump {
             hits,
             inbound_ufid: self.inbound_ufid,
@@ -3004,9 +3008,9 @@ impl Dump for TcpFlowEntryStateInner {
 }
 
 impl Dump for TcpFlowEntryState {
-    type DumpVal = TcpFlowEntryDump;
+    type DumpVal = TcpFlowEntryDump<InnerFlowId>;
 
-    fn dump(&self, hits: u64) -> TcpFlowEntryDump {
+    fn dump(&self, hits: u64) -> Self::DumpVal {
         let inner = self.inner.lock();
         inner.dump(hits)
     }

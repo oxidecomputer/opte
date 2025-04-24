@@ -18,7 +18,6 @@ pub mod geneve;
 #[macro_use]
 pub mod headers;
 pub mod icmp;
-pub mod ioctl;
 pub mod ip;
 pub mod layer;
 pub mod nat;
