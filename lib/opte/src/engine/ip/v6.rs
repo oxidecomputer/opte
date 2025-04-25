@@ -213,7 +213,7 @@ pub fn v6_get_next_header<V: ByteSlice>(
             Some(Ok(ValidLowRentV6Eh::IpV6ExtFragment(f))) => f.next_header(),
             Some(Ok(ValidLowRentV6Eh::IpV6Ext6564(f))) => f.next_header(),
             _ => curr_ipp,
-        }
+        },
     })
 }
 

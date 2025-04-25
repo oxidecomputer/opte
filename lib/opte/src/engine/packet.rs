@@ -1223,6 +1223,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         self.state.meta.body.prepare();
 
         match self.body_mut() {
+            // TODO: need to pass in SOME part of the ULP.
             Some(body_segs) => xform.run(dir, body_segs),
             None => {
                 self.state.body_modified = false;
