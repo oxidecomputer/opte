@@ -52,7 +52,7 @@ pub struct Ipv4 {
 
     #[ingot(default = 128)]
     pub hop_limit: u8,
-    #[ingot(is = "u8", next_layer)]
+    #[ingot(zerocopy, next_layer)]
     pub protocol: IpProtocol,
     pub checksum: u16be,
 

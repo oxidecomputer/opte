@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! IPv6 Headers.
 
@@ -24,9 +24,8 @@ use ingot::ip::LowRentV6EhRepr;
 use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::FieldMut;
 use ingot::types::FieldRef;
-use ingot::types::Header;
 use ingot::types::HeaderLen;
-use ingot::types::ParseChoice;
+use ingot::types::HeaderParse;
 use ingot::types::primitives::*;
 use ingot::types::util::Repeated;
 pub use opte_api::Ipv6Addr;
@@ -50,7 +49,7 @@ pub struct Ipv6 {
     pub flow_label: u20be,
 
     pub payload_len: u16be,
-    #[ingot(is = "u8", next_layer)]
+    #[ingot(zerocopy, next_layer)]
     pub next_header: IpProtocol,
     #[ingot(default = 128)]
     pub hop_limit: u8,
@@ -163,18 +162,7 @@ pub fn v6_set_next_header<V: ByteSliceMut>(
                 v6.set_next_header(ipp);
             }
         },
-        FieldMut::Raw(Header::Repr(a)) => match a.iter_mut().last() {
-            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => {
-                f.next_header = ipp;
-            }
-            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => {
-                f.next_header = ipp;
-            }
-            None => {
-                v6.set_next_header(ipp);
-            }
-        },
-        FieldMut::Raw(Header::Raw(a)) => {
+        FieldMut::Raw(a) => {
             // This would be better done over all `Repeated` in ingot,
             // however making mutable access generic in that case proved
             // challenging. We can just do it manually for now.
@@ -221,16 +209,11 @@ pub fn v6_get_next_header<V: ByteSlice>(
             Some(LowRentV6EhRepr::IpV6Ext6564(f)) => f.next_header,
             None => curr_ipp,
         },
-        FieldRef::Raw(Header::Repr(a)) => match a.iter().last() {
-            Some(LowRentV6EhRepr::IpV6ExtFragment(f)) => f.next_header,
-            Some(LowRentV6EhRepr::IpV6Ext6564(f)) => f.next_header,
-            None => curr_ipp,
-        },
-        FieldRef::Raw(Header::Raw(a)) => match a.iter(Some(curr_ipp)).last() {
+        FieldRef::Raw(a) => match a.iter(Some(curr_ipp)).last() {
             Some(Ok(ValidLowRentV6Eh::IpV6ExtFragment(f))) => f.next_header(),
             Some(Ok(ValidLowRentV6Eh::IpV6Ext6564(f))) => f.next_header(),
             _ => curr_ipp,
-        },
+        }
     })
 }
 

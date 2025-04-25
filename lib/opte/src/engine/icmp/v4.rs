@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! ICMPv4 headers and processing.
 
@@ -17,6 +17,7 @@ use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
 use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV4Type;
 use ingot::icmp::ValidIcmpV4;
 use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
@@ -24,7 +25,6 @@ use ingot::types::HeaderParse;
 use opte::engine::Checksum as OpteCsum;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
-use smoltcp::wire::Icmpv4Message;
 
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
@@ -63,7 +63,7 @@ impl HairpinAction for IcmpEchoReply {
             )));
         };
 
-        let ty = MessageType::from(icmp.ty());
+        let ty = MessageType::from(icmp.ty().0);
 
         // We'll be recycling the sequence and identity.
         let rest_of_hdr = match (ty, icmp.code()) {
@@ -95,14 +95,14 @@ impl HairpinAction for IcmpEchoReply {
             valid => {
                 let mut csum =
                     OpteCsum::from(HeaderChecksum::wrap(valid.to_be_bytes()));
-                csum.sub_bytes(&[icmp.ty(), icmp.code()]);
+                csum.sub_bytes(&[icmp.ty().0, icmp.code()]);
                 csum
             }
         };
 
-        let ty = wire::Icmpv4Message::EchoReply.into();
+        let ty = IcmpV4Type::ECHO_REPLY;
         let code = 0;
-        csum.add_bytes(&[ty, code]);
+        csum.add_bytes(&[ty.0, code]);
 
         // Build the reply in place, and send it out.
         let body_len: usize = meta.body().len();
@@ -199,8 +199,8 @@ impl Display for MessageType {
 impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.ty().into(), self.code()) {
-            (Icmpv4Message::EchoRequest, 0) | (Icmpv4Message::EchoReply, 0) => {
+        match (self.ty(), self.code()) {
+            (IcmpV4Type::ECHO, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())
@@ -213,8 +213,8 @@ impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
 impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.ty().into(), self.code()) {
-            (Icmpv4Message::EchoRequest, 0) | (Icmpv4Message::EchoReply, 0) => {
+        match (self.ty(), self.code()) {
+            (IcmpV4Type::ECHO, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())

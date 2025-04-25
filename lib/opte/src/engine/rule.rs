@@ -66,6 +66,8 @@ use opte_api::Direction;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSliceMut;
+use ingot::icmp::IcmpV4Type;
+use ingot::icmp::IcmpV6Type;
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
 pub trait ResourceEntry {}
@@ -435,7 +437,7 @@ impl CompiledTransform {
                 }
             }
             (ValidUlp::IcmpV4(pkt), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 8 =>
+                if pkt.ty() == IcmpV4Type::ECHO || pkt.ty() == IcmpV4Type::ECHO_REPLY =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]
@@ -443,7 +445,7 @@ impl CompiledTransform {
                 }
             }
             (ValidUlp::IcmpV6(pkt), Some(tx))
-                if pkt.ty() == 128 || pkt.ty() == 129 =>
+                if pkt.ty() == IcmpV6Type::ECHO_REQUEST || pkt.ty() == IcmpV6Type::ECHO_REPLY =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]

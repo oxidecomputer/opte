@@ -2101,7 +2101,7 @@ fn test_guest_to_gateway_icmpv6_ping(
 
     // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
     let mut reply_body = icmp6.emit_vec();
-    let msg_type = Icmpv6Message::from(icmp6.ty());
+    let msg_type = Icmpv6Message::from(icmp6.ty().0);
     let msg_code = icmp6.code();
 
     reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Geneve headers and their related actions.
 //!
@@ -18,7 +18,6 @@ use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
-use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::udp::Udp;
 pub use opte_api::Vni;
@@ -65,19 +64,7 @@ pub fn validate_geneve<V: ByteSlice>(
                     )?;
                 }
             }
-            ingot::types::FieldRef::Raw(Header::Repr(g)) => {
-                for opt in g.iter() {
-                    if !opt.option_type.is_critical() {
-                        continue;
-                    }
-
-                    GeneveOption::from_code_and_ty(
-                        opt.class,
-                        opt.option_type.0,
-                    )?;
-                }
-            }
-            ingot::types::FieldRef::Raw(Header::Raw(g)) => {
+            ingot::types::FieldRef::Raw(g) => {
                 for opt in g.iter(None) {
                     let Ok(opt) = opt else {
                         break;
@@ -261,21 +248,7 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
                 }
             }
         }
-        ingot::types::FieldRef::Raw(Header::Repr(g)) => {
-            for opt in g.iter() {
-                out = matches!(
-                    GeneveOption::from_code_and_ty(
-                        opt.class,
-                        opt.option_type.0,
-                    ),
-                    Ok(GeneveOption::Oxide(OxideOption::External))
-                );
-                if out {
-                    break;
-                }
-            }
-        }
-        ingot::types::FieldRef::Raw(Header::Raw(g)) => {
+        ingot::types::FieldRef::Raw(g) => {
             for opt in g.iter(None) {
                 let Ok(opt) = opt else {
                     break;

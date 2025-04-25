@@ -493,7 +493,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
                 icmp.checksum().to_be_bytes(),
             ));
 
-            csum.sub_bytes(&[icmp.ty(), icmp.code()]);
+            csum.sub_bytes(&[icmp.ty().0, icmp.code()]);
             csum.sub_bytes(icmp.rest_of_hdr_ref());
 
             Some(csum)
@@ -507,7 +507,7 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
                 icmp.checksum().to_be_bytes(),
             ));
 
-            csum.sub_bytes(&[icmp.ty(), icmp.code()]);
+            csum.sub_bytes(&[icmp.ty().0, icmp.code()]);
             csum.sub_bytes(icmp.rest_of_hdr_ref());
 
             Some(csum)
@@ -673,7 +673,7 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
 #[cfg(test)]
 mod test {
     use crate::engine::checksum::Checksum as OpteCsum;
-    use ingot::types::ParseChoice;
+    use ingot::types::HeaderParse;
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::wire::Icmpv4Packet;
     use smoltcp::wire::Icmpv4Repr;

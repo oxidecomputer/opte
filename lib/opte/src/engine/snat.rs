@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
@@ -39,13 +39,13 @@ use core::fmt::Display;
 use core::ops::RangeInclusive;
 use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV6Ref;
+use ingot::icmp::IcmpV4Type;
+use ingot::icmp::IcmpV6Type;
 use opte_api::Direction;
 use opte_api::IpAddr;
 use opte_api::Ipv4Addr;
 use opte_api::Ipv6Addr;
 use opte_api::Protocol;
-use smoltcp::wire::Icmpv4Message;
-use smoltcp::wire::Icmpv6Message;
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
@@ -248,7 +248,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
             Protocol::ICMP => {
                 let icmp = meta.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
 
-                Ok(if icmp.ty() == u8::from(Icmpv4Message::EchoRequest) {
+                Ok(if icmp.ty() == IcmpV4Type::ECHO {
                     icmp.echo_id()
                 } else {
                     None
@@ -258,7 +258,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 let icmp6 =
                     meta.inner_icmp6().ok_or(GenIcmpErr::MetaNotFound)?;
 
-                Ok(if icmp6.ty() == u8::from(Icmpv6Message::EchoRequest) {
+                Ok(if icmp6.ty() == IcmpV6Type::ECHO_REQUEST {
                     icmp6.echo_id()
                 } else {
                     None
