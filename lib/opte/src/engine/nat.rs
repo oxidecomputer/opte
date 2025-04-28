@@ -9,8 +9,10 @@
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::ip::v4::Ipv4Mut;
+use super::ip::v4::Ipv4Ref;
 use super::ip::v4::ValidIpv4;
 use super::ip::v6::Ipv6Mut;
+use super::ip::v6::Ipv6Ref;
 use super::ip::v6::ValidIpv6;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
@@ -277,11 +279,21 @@ impl BodyTransform for IcmpV4Nat {
             // - 64b of L4 upwards.
             // Since this isn't SNAT, we don't need to be concerned with
             // the ULP.
+            //
+            // Here (and in ICMPv6) we need to be aware that the inner frame
+            // originally had the opposite direction to the current packet.
             if let Ok((mut hdr, ..)) = ValidIpv4::parse(body) {
                 match dir {
-                    Direction::In => hdr.set_destination(self.priv_ip),
-                    Direction::Out => hdr.set_source(self.external_ip),
+                    Direction::In if hdr.source() == self.external_ip => {
+                        hdr.set_source(self.priv_ip)
+                    }
+                    Direction::Out if hdr.destination() == self.priv_ip => {
+                        hdr.set_destination(self.external_ip)
+                    }
+                    _ => {}
                 }
+
+                hdr.compute_checksum();
             }
         }
 
@@ -304,8 +316,13 @@ struct IcmpV6Nat {
 impl IcmpV6Nat {
     fn apply(&self, dir: Direction, hdr: &mut ValidIpv6<&mut [u8]>) {
         match dir {
-            Direction::In => hdr.set_destination(self.priv_ip),
-            Direction::Out => hdr.set_source(self.external_ip),
+            Direction::In if hdr.source() == self.external_ip => {
+                hdr.set_source(self.priv_ip)
+            }
+            Direction::Out if hdr.destination() == self.priv_ip => {
+                hdr.set_destination(self.external_ip)
+            }
+            _ => {}
         }
     }
 }
