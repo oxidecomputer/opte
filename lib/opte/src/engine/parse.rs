@@ -60,6 +60,7 @@ use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
 use ingot::types::NextLayer;
 use ingot::types::ParseControl;
+use ingot::types::ToOwnedPacket;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
@@ -67,6 +68,7 @@ use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
 use zerocopy::ByteSliceMut;
 use zerocopy::IntoBytes;
+use zerocopy::SplitByteSlice;
 
 #[choice(on = IpProtocol)]
 pub enum L4 {
@@ -80,6 +82,20 @@ pub enum Ulp {
     Udp = IpProtocol::UDP,
     IcmpV4 = IpProtocol::ICMP,
     IcmpV6 = IpProtocol::ICMP_V6,
+}
+
+impl<B: ByteSlice + SplitByteSlice> Ulp<B> {
+    #[inline]
+    pub fn repr(&self) -> UlpRepr {
+        // Unwrap safety: to_owned is infallible on all these types
+        // (no inner reparsing is required).
+        match self {
+            Ulp::Tcp(t) => t.to_owned(None).unwrap().into(),
+            Ulp::Udp(t) => t.to_owned(None).unwrap().into(),
+            Ulp::IcmpV4(t) => t.to_owned(None).unwrap().into(),
+            Ulp::IcmpV6(t) => t.to_owned(None).unwrap().into(),
+        }
+    }
 }
 
 impl<B: ByteSlice> ValidUlp<B> {
