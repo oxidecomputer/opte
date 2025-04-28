@@ -368,7 +368,7 @@ impl BodyTransform for IcmpV6Nat {
 
                 // At long last, data. We should be able to pull out v6.
                 if let Ok((mut v6, ..)) =
-                    ValidIpv6::parse(hdr.data_mut().as_mut())
+                    ValidIpv6::parse(hdr.original_packet_mut().as_mut())
                 {
                     self.apply(dir, &mut v6);
                 }

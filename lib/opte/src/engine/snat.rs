@@ -248,7 +248,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
             Protocol::ICMP => {
                 let icmp = meta.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
 
-                Ok(if icmp.ty() == IcmpV4Type::ECHO {
+                Ok(if icmp.ty() == IcmpV4Type::ECHO_REQUEST {
                     icmp.echo_id()
                 } else {
                     None

@@ -4671,7 +4671,7 @@ fn select_eip_conditioned_on_igw() {
 
 #[test]
 fn icmp_inner_has_nat_applied() {
-    let mut pcap = PcapBuilder::new("icmp_inner_rewrite.pcap");
+    let mut pcap = PcapBuilder::new("icmp4_inner_rewrite.pcap");
     let (g1, g1_cfg, ..) = multi_external_ip_setup(1, true);
 
     let eph_ip = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();

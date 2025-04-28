@@ -437,7 +437,7 @@ impl CompiledTransform {
                 }
             }
             (ValidUlp::IcmpV4(pkt), Some(tx))
-                if pkt.ty() == IcmpV4Type::ECHO
+                if pkt.ty() == IcmpV4Type::ECHO_REQUEST
                     || pkt.ty() == IcmpV4Type::ECHO_REPLY =>
             {
                 if let Some(new_id) = tx.icmp_id {

@@ -200,7 +200,7 @@ impl<B: ByteSlice> QueryEcho for IcmpV4Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.ty(), self.code()) {
-            (IcmpV4Type::ECHO, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
+            (IcmpV4Type::ECHO_REQUEST, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())
@@ -214,7 +214,7 @@ impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
         match (self.ty(), self.code()) {
-            (IcmpV4Type::ECHO, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
+            (IcmpV4Type::ECHO_REQUEST, 0) | (IcmpV4Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(self.rest_of_hdr_ref().as_slice())
                     .ok()
                     .map(|(v, ..)| v.id())
