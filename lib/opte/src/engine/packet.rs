@@ -245,6 +245,7 @@ pub trait BodyTransform: fmt::Display + DynClone + Send + Sync {
     fn run(
         &self,
         dir: Direction,
+        ulp: Option<&UlpRepr>,
         body: &mut [u8],
     ) -> Result<(), BodyTransformError>;
 }
@@ -257,6 +258,7 @@ pub enum BodyTransformError {
     ParseFailure(String),
     Todo(String),
     UnexpectedBody(String),
+    Incompatible,
 }
 
 impl From<smoltcp::wire::Error> for BodyTransformError {
@@ -1222,9 +1224,29 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         self.state.body_modified = true;
         self.state.meta.body.prepare();
 
+        // TODO: this is pretty punishing and repeats a buch of work.
+        // Teach ingot how to do this, and do it ONCE.
+        let ulp = match self.state.meta.inner_ulp() {
+            Some(Ulp::Tcp(t)) => {
+                Some(t.to_owned(None).map(UlpRepr::from)).transpose()
+            }
+            Some(Ulp::Udp(t)) => {
+                Some(t.to_owned(None).map(UlpRepr::from)).transpose()
+            }
+            Some(Ulp::IcmpV4(t)) => {
+                Some(t.to_owned(None).map(UlpRepr::from)).transpose()
+            }
+            Some(Ulp::IcmpV6(t)) => {
+                Some(t.to_owned(None).map(UlpRepr::from)).transpose()
+            }
+            None => Ok(None),
+        };
+
+        let ulp =
+            ulp.map_err(|e| BodyTransformError::ParseFailure(e.to_string()))?;
+
         match self.body_mut() {
-            // TODO: need to pass in SOME part of the ULP.
-            Some(body_segs) => xform.run(dir, body_segs),
+            Some(body_segs) => xform.run(dir, ulp.as_ref(), body_segs),
             None => {
                 self.state.body_modified = false;
                 Err(BodyTransformError::NoPayload)

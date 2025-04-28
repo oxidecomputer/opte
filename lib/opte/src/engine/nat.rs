@@ -13,10 +13,12 @@ use super::ip::v4::ValidIpv4;
 use super::ip::v6::Ipv6Mut;
 use super::ip::v6::ValidIpv6;
 use super::packet::BodyTransform;
+use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::Packet;
 use super::parse::Ulp;
+use super::parse::UlpRepr;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -26,14 +28,13 @@ use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
 use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
+use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::hash::Hash;
 use crc32fast::Hasher;
-use ingot::icmp::IcmpV4Type;
-use ingot::icmp::IcmpV6Type;
 use ingot::icmp::ndisc::OptionMut;
 use ingot::icmp::ndisc::OptionRedirectMut;
 use ingot::icmp::ndisc::OptionRef;
@@ -263,11 +264,14 @@ impl BodyTransform for IcmpV4Nat {
     fn run(
         &self,
         dir: Direction,
+        ulp: Option<&UlpRepr>,
         body: &mut [u8],
-    ) -> Result<(), super::packet::BodyTransformError> {
-        let ty = IcmpV4Type::ECHO;
+    ) -> Result<(), BodyTransformError> {
+        let Some(UlpRepr::IcmpV4(icmp)) = ulp else {
+            return Err(BodyTransformError::Incompatible);
+        };
 
-        if ty.payload_is_packet() {
+        if icmp.ty.payload_is_packet() {
             // These ICMP packet types include:
             // - The IP header
             // - 64b of L4 upwards.
@@ -310,11 +314,14 @@ impl BodyTransform for IcmpV6Nat {
     fn run(
         &self,
         dir: Direction,
+        ulp: Option<&UlpRepr>,
         mut body: &mut [u8],
     ) -> Result<(), super::packet::BodyTransformError> {
-        let ty = IcmpV6Type::ECHO_REQUEST;
+        let Some(UlpRepr::IcmpV6(icmp)) = ulp else {
+            return Err(BodyTransformError::Incompatible);
+        };
 
-        if ty.payload_is_packet() {
+        if icmp.ty.payload_is_packet() {
             // These ICMP packet types include as much of the packet as can be
             // replicated without violating known MTU.
             // Since this isn't SNAT, we don't need to be concerned with
@@ -322,7 +329,7 @@ impl BodyTransform for IcmpV6Nat {
             if let Ok((mut hdr, ..)) = ValidIpv6::parse(body) {
                 self.apply(dir, &mut hdr);
             }
-        } else if ty.is_neighbor_discovery() {
+        } else if icmp.ty.is_neighbor_discovery() {
             // NDisc packets use a TLV list of options in the body structure.
             // If we spot any redirected packets, then attempt to fix them up.
             while !body.is_empty() {
