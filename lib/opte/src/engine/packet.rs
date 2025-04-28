@@ -46,6 +46,7 @@ use crate::engine::geneve::GeneveMeta;
 use crate::engine::geneve::valid_geneve_has_oxide_external;
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::Cell;
