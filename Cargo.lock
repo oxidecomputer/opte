@@ -934,7 +934,8 @@ dependencies = [
 [[package]]
 name = "ingot"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?branch=felixmcfelix%2Ficmp-plus#3a63bfcf65141e77217fbdadb218a9c889b1d656"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bf487a5cb3a9d3346e5b7dac34193ba0b2aefe5d1c196e8caf454c19e200a04"
 dependencies = [
  "bitflags 2.9.0",
  "ingot-macros",
@@ -947,7 +948,8 @@ dependencies = [
 [[package]]
 name = "ingot-macros"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?branch=felixmcfelix%2Ficmp-plus#3a63bfcf65141e77217fbdadb218a9c889b1d656"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f13f59bddb02b9927bdf5e20a7204c92bcff649496f54a591091c0c2cb27cbf"
 dependencies = [
  "darling",
  "itertools 0.13.0",
@@ -960,7 +962,8 @@ dependencies = [
 [[package]]
 name = "ingot-types"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/ingot.git?branch=felixmcfelix%2Ficmp-plus#3a63bfcf65141e77217fbdadb218a9c889b1d656"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31cffa0c771a619697bc33dff4fb4771a6f87b0f6864793a3efac4e8ee50c78"
 dependencies = [
  "ingot-macros",
  "macaddr",
