@@ -34,8 +34,10 @@ use opte::engine::ip::L3;
 use opte::engine::ip::ValidL3;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::ip::v4::Ipv4Ref;
+use opte::engine::ip::v4::ValidIpv4;
 use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Ref;
+use opte::engine::ip::v6::ValidIpv6;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkFullParsed;
 use opte::engine::packet::MismatchError;
@@ -2101,7 +2103,7 @@ fn test_guest_to_gateway_icmpv6_ping(
 
     // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
     let mut reply_body = icmp6.emit_vec();
-    let msg_type = Icmpv6Message::from(icmp6.ty());
+    let msg_type = Icmpv6Message::from(icmp6.ty().0);
     let msg_code = icmp6.code();
 
     reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
@@ -4665,4 +4667,151 @@ fn select_eip_conditioned_on_igw() {
             "stats.port.out_modified",
         ]
     );
+}
+
+#[test]
+fn icmp_inner_has_nat_applied() {
+    let mut pcap = PcapBuilder::new("icmp4_inner_rewrite.pcap");
+    let (g1, g1_cfg, ..) = multi_external_ip_setup(1, true);
+
+    let eph_ip = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();
+    let remote_addr: Ipv4Addr = "4.4.4.4".parse().unwrap();
+
+    let icmp = Icmpv4Repr::TimeExceeded {
+        reason: smoltcp::wire::Icmpv4TimeExceeded::TtlExpired,
+        header: smoltcp::wire::Ipv4Repr {
+            src_addr: remote_addr.into(),
+            dst_addr: g1_cfg.ipv4().private_ip.into(),
+            next_header: IpProtocol::Udp,
+            payload_len: 256,
+            hop_limit: 0,
+        },
+        data: &[0x12, 0x34, 0x00, 0x34, 0x00, 0xf8, 0x00, 0x00],
+    };
+
+    let mut body_bytes = vec![0u8; icmp.buffer_len()];
+    let mut req_pkt = Icmpv4Packet::new_unchecked(&mut body_bytes);
+    icmp.emit(&mut req_pkt, &Default::default());
+
+    let eth = Ethernet {
+        destination: g1_cfg.gateway_mac,
+        source: g1_cfg.guest_mac,
+        ethertype: Ethertype::IPV4,
+    };
+
+    let mut ip: L3<&mut [u8]> = Ipv4 {
+        source: g1_cfg.ipv4().private_ip,
+        destination: remote_addr.into(),
+        protocol: IngotIpProto::ICMP,
+        total_len: (icmp.buffer_len() + Ipv4::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    }
+    .into();
+    ip.compute_checksum();
+
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
+    pcap.add_pkt(&pkt_m);
+
+    let pkt = Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::Out, pkt);
+    expect_modified!(res, pkt_m);
+    pcap.add_pkt(&pkt_m);
+
+    // Assert that the IP header carried within has had its destination
+    // address adjusted from private -> ephemeral IP.
+    let final_pkt =
+        Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let meta = final_pkt.to_full_meta();
+    let body = meta.body().unwrap();
+    let (v4, ..) = ValidIpv4::parse(body).unwrap();
+    assert_eq!(v4.destination(), eph_ip);
+}
+
+#[test]
+fn icmpv6_inner_has_nat_applied() {
+    let mut pcap = PcapBuilder::new("icmp6_inner_rewrite.pcap");
+    let (mut g1, g1_cfg, ..) = multi_external_ip_setup(1, true);
+
+    let rule = "dir=in action=allow priority=9 protocol=ICMP6";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    let eph_ip = g1_cfg.ipv6().external_ips.ephemeral_ip.unwrap();
+    let remote_addr: Ipv6Addr = "2001:4860:4860::8888".parse().unwrap();
+
+    let icmp = Icmpv6Repr::DstUnreachable {
+        reason: smoltcp::wire::Icmpv6DstUnreachable::PortUnreachable,
+        header: smoltcp::wire::Ipv6Repr {
+            src_addr: eph_ip.into(),
+            dst_addr: remote_addr.into(),
+            next_header: IpProtocol::Udp,
+            // Unimportant -- header is truncated.
+            payload_len: 256,
+            hop_limit: 255,
+        },
+        data: &[0x12, 0x34, 0x00, 0x34, 0x00, 0xf8, 0x00, 0x00],
+    };
+
+    let mut body_bytes = vec![0u8; icmp.buffer_len()];
+    let mut req_pkt = Icmpv6Packet::new_unchecked(&mut body_bytes);
+    icmp.emit(
+        &Ipv6Address::from_bytes(&remote_addr.bytes()).into(),
+        &Ipv6Address::from_bytes(&eph_ip.bytes()).into(),
+        &mut req_pkt,
+        &Default::default(),
+    );
+
+    let eth = Ethernet {
+        destination: g1_cfg.guest_mac,
+        source: BS_MAC_ADDR,
+        ethertype: Ethertype::IPV6,
+    };
+
+    let ip = Ipv6 {
+        source: remote_addr,
+        destination: eph_ip.into(),
+        next_header: IngotIpProto::ICMP_V6,
+        payload_len: icmp.buffer_len() as u16,
+        hop_limit: 64,
+        ..Default::default()
+    };
+
+    let bsvc_phys = TestIpPhys {
+        ip: BS_IP_ADDR,
+        mac: BS_MAC_ADDR,
+        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+    };
+
+    let pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
+    let mut pkt_m = encap_external(
+        pkt_m,
+        bsvc_phys,
+        TestIpPhys {
+            ip: g1_cfg.phys_ip,
+            mac: g1_cfg.guest_mac,
+            vni: g1_cfg.vni,
+        },
+    );
+    pcap.add_pkt(&pkt_m);
+
+    let pkt = Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::In, pkt);
+    expect_modified!(res, pkt_m);
+    pcap.add_pkt(&pkt_m);
+
+    // Assert that the IP header carried within has had its source
+    // address adjusted from ephemeral -> private IP.
+    let final_pkt =
+        Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let meta = final_pkt.to_full_meta();
+    let body = meta.body().unwrap();
+    let (v6, ..) = ValidIpv6::parse(body).unwrap();
+    assert_eq!(v6.source(), g1_cfg.ipv6().private_ip);
 }

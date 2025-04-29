@@ -54,8 +54,10 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV4Type;
 use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Ref;
+use ingot::icmp::IcmpV6Type;
 use ingot::ip::IpProtocol;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
@@ -436,7 +438,8 @@ impl CompiledTransform {
                 }
             }
             (ValidUlp::IcmpV4(pkt), Some(tx))
-                if pkt.ty() == 0 || pkt.ty() == 8 =>
+                if pkt.ty() == IcmpV4Type::ECHO_REQUEST
+                    || pkt.ty() == IcmpV4Type::ECHO_REPLY =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]
@@ -444,7 +447,8 @@ impl CompiledTransform {
                 }
             }
             (ValidUlp::IcmpV6(pkt), Some(tx))
-                if pkt.ty() == 128 || pkt.ty() == 129 =>
+                if pkt.ty() == IcmpV6Type::ECHO_REQUEST
+                    || pkt.ty() == IcmpV6Type::ECHO_REPLY =>
             {
                 if let Some(new_id) = tx.icmp_id {
                     pkt.rest_of_hdr_mut()[..2]

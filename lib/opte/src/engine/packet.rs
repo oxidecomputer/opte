@@ -109,6 +109,7 @@ pub trait BodyTransform: fmt::Display + DynClone + Send + Sync {
     fn run(
         &self,
         dir: Direction,
+        ulp: Option<&UlpRepr>,
         body: &mut [u8],
     ) -> Result<(), BodyTransformError>;
 }
@@ -121,6 +122,7 @@ pub enum BodyTransformError {
     ParseFailure(String),
     Todo(String),
     UnexpectedBody(String),
+    Incompatible,
 }
 
 impl From<smoltcp::wire::Error> for BodyTransformError {
@@ -1086,8 +1088,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         self.state.body_modified = true;
         self.state.meta.body.prepare();
 
+        let ulp = self.state.meta.inner_ulp().map(|v| v.repr());
+
         match self.body_mut() {
-            Some(body_segs) => xform.run(dir, body_segs),
+            Some(body_segs) => xform.run(dir, ulp.as_ref(), body_segs),
             None => {
                 self.state.body_modified = false;
                 Err(BodyTransformError::NoPayload)

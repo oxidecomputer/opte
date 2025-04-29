@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
@@ -632,7 +632,7 @@ impl DataPredicate {
                     return false;
                 };
 
-                mt.is_match(&IcmpMessageType::from(icmp.ty()))
+                mt.is_match(&IcmpMessageType::from(icmp.ty().0))
             }
 
             Self::Icmpv6MsgType(mt) => {
@@ -641,7 +641,7 @@ impl DataPredicate {
                     return false;
                 };
 
-                mt.is_match(&Icmpv6MessageType::from(icmp6.ty()))
+                mt.is_match(&Icmpv6MessageType::from(icmp6.ty().0))
             }
 
             Self::Dhcpv6MsgType(mt) => {

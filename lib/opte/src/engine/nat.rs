@@ -2,15 +2,25 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! 1:1 NAT.
 
 use super::headers::HeaderAction;
 use super::headers::IpMod;
+use super::ip::v4::Ipv4Mut;
+use super::ip::v4::Ipv4Ref;
+use super::ip::v4::ValidIpv4;
+use super::ip::v6::Ipv6Mut;
+use super::ip::v6::Ipv6Ref;
+use super::ip::v6::ValidIpv6;
+use super::packet::BodyTransform;
+use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::Packet;
+use super::parse::Ulp;
+use super::parse::UlpRepr;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -20,15 +30,25 @@ use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
 use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
+use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::hash::Hash;
 use crc32fast::Hasher;
+use ingot::icmp::ndisc::OptionMut;
+use ingot::icmp::ndisc::OptionRedirectMut;
+use ingot::icmp::ndisc::OptionRef;
+use ingot::icmp::ndisc::OptionType as NdiscOptionType;
+use ingot::icmp::ndisc::ValidOption as NdiscOption;
+use ingot::icmp::ndisc::ValidOptionRedirect;
+use ingot::types::HeaderParse;
 use itertools::Itertools;
 use opte_api::Direction;
 use opte_api::IpAddr;
+use opte_api::Ipv4Addr;
+use opte_api::Ipv6Addr;
 
 /// A trait which allows a VPC implementation to specify how NAT actions
 /// can be re-verified after a rule change.
@@ -209,6 +229,159 @@ impl ActionDesc for NatDesc {
 
     fn is_valid(&self) -> bool {
         self.verifier.is_addr_valid(&self.external_ip)
+    }
+
+    fn gen_bt(
+        &self,
+        _dir: Direction,
+        meta: &super::packet::MblkPacketData,
+        _payload_seg: &[u8],
+    ) -> Result<Option<Box<dyn BodyTransform>>, rule::GenBtError> {
+        // ICMPv4/v6 traffic can carry frames which they were generated
+        // in response to. We need to also apply our NAT transform to
+        // these.
+        match (meta.inner_ulp(), self.priv_ip, self.external_ip) {
+            (
+                Some(Ulp::IcmpV4(_)),
+                IpAddr::Ip4(priv_ip),
+                IpAddr::Ip4(external_ip),
+            ) => Ok(Some(Box::new(IcmpV4Nat { priv_ip, external_ip }))),
+            (
+                Some(Ulp::IcmpV6(_)),
+                IpAddr::Ip6(priv_ip),
+                IpAddr::Ip6(external_ip),
+            ) => Ok(Some(Box::new(IcmpV6Nat { priv_ip, external_ip }))),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct IcmpV4Nat {
+    priv_ip: Ipv4Addr,
+    external_ip: Ipv4Addr,
+}
+
+impl BodyTransform for IcmpV4Nat {
+    fn run(
+        &self,
+        dir: Direction,
+        ulp: Option<&UlpRepr>,
+        body: &mut [u8],
+    ) -> Result<(), BodyTransformError> {
+        let Some(UlpRepr::IcmpV4(icmp)) = ulp else {
+            return Err(BodyTransformError::Incompatible);
+        };
+
+        if icmp.ty.payload_is_packet() {
+            // These ICMP packet types include:
+            // - The IP header
+            // - 64b of L4 upwards.
+            // Since this isn't SNAT, we don't need to be concerned with
+            // the ULP.
+            //
+            // Here (and in ICMPv6) we need to be aware that the inner frame
+            // originally had the opposite direction to the current packet.
+            if let Ok((mut hdr, ..)) = ValidIpv4::parse(body) {
+                match dir {
+                    Direction::In if hdr.source() == self.external_ip => {
+                        hdr.set_source(self.priv_ip)
+                    }
+                    Direction::Out if hdr.destination() == self.priv_ip => {
+                        hdr.set_destination(self.external_ip)
+                    }
+                    _ => {}
+                }
+
+                hdr.compute_checksum();
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for IcmpV4Nat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[nested]: {} <=> {}", self.priv_ip, self.external_ip)
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct IcmpV6Nat {
+    priv_ip: Ipv6Addr,
+    external_ip: Ipv6Addr,
+}
+
+impl IcmpV6Nat {
+    fn apply(&self, dir: Direction, hdr: &mut ValidIpv6<&mut [u8]>) {
+        match dir {
+            Direction::In if hdr.source() == self.external_ip => {
+                hdr.set_source(self.priv_ip)
+            }
+            Direction::Out if hdr.destination() == self.priv_ip => {
+                hdr.set_destination(self.external_ip)
+            }
+            _ => {}
+        }
+    }
+}
+
+impl BodyTransform for IcmpV6Nat {
+    fn run(
+        &self,
+        dir: Direction,
+        ulp: Option<&UlpRepr>,
+        mut body: &mut [u8],
+    ) -> Result<(), super::packet::BodyTransformError> {
+        let Some(UlpRepr::IcmpV6(icmp)) = ulp else {
+            return Err(BodyTransformError::Incompatible);
+        };
+
+        if icmp.ty.payload_is_packet() {
+            // These ICMP packet types include as much of the packet as can be
+            // replicated without violating known MTU.
+            // Since this isn't SNAT, we don't need to be concerned with
+            // the ULP.
+            if let Ok((mut hdr, ..)) = ValidIpv6::parse(body) {
+                self.apply(dir, &mut hdr);
+            }
+        } else if icmp.ty.is_neighbor_discovery() {
+            // NDisc packets use a TLV list of options in the body structure.
+            // If we spot any redirected packets, then attempt to fix them up.
+            while !body.is_empty() {
+                let Ok((mut option, _, left)) = NdiscOption::parse(body) else {
+                    break;
+                };
+                body = left;
+
+                if option.ty() != NdiscOptionType::REDIRECTED_HEADER {
+                    continue;
+                }
+
+                let mut option_data = option.data_mut();
+                let Ok((mut hdr, ..)) =
+                    ValidOptionRedirect::parse(option_data.as_mut())
+                else {
+                    break;
+                };
+
+                // At long last, data. We should be able to pull out v6.
+                if let Ok((mut v6, ..)) =
+                    ValidIpv6::parse(hdr.original_packet_mut().as_mut())
+                {
+                    self.apply(dir, &mut v6);
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for IcmpV6Nat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[nested]: {} <=> {}", self.priv_ip, self.external_ip)
     }
 }
 

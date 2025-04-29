@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! ICMPv6 headers and processing.
 
@@ -19,6 +19,7 @@ use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV6;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
+use ingot::icmp::IcmpV6Type;
 use ingot::icmp::ValidIcmpV6;
 use ingot::ip::IpProtocol as IngotIpProto;
 use ingot::types::Emit;
@@ -121,7 +122,7 @@ impl HairpinAction for Icmpv6EchoReply {
             )));
         };
 
-        let ty = MessageType::from(icmp6.ty());
+        let ty = MessageType::from(icmp6.ty().0);
 
         // We'll be recycling the sequence and identity.
         let rest_of_hdr = match (ty, icmp6.code()) {
@@ -156,14 +157,14 @@ impl HairpinAction for Icmpv6EchoReply {
             valid => {
                 let mut csum =
                     OpteCsum::from(HeaderChecksum::wrap(valid.to_be_bytes()));
-                csum.sub_bytes(&[icmp6.ty(), icmp6.code()]);
+                csum.sub_bytes(&[icmp6.ty().0, icmp6.code()]);
                 csum
             }
         };
 
-        let ty = Icmpv6Message::EchoReply.into();
+        let ty = IcmpV6Type::ECHO_REPLY;
         let code = 0;
-        csum.add_bytes(&[ty, code]);
+        csum.add_bytes(&[ty.0, code]);
 
         // Build the reply in place, and send it out.
         let body_len: usize = meta.body().len();
@@ -646,8 +647,8 @@ impl HairpinAction for NeighborAdvertisement {
 impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.ty().into(), self.code()) {
-            (Icmpv6Message::EchoRequest, 0) | (Icmpv6Message::EchoReply, 0) => {
+        match (self.ty(), self.code()) {
+            (IcmpV6Type::ECHO_REQUEST, 0) | (IcmpV6Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
                     .ok()
                     .map(|(v, ..)| v.id())
@@ -660,8 +661,8 @@ impl<B: ByteSlice> QueryEcho for IcmpV6Packet<B> {
 impl<B: ByteSlice> QueryEcho for ValidIcmpV6<B> {
     #[inline]
     fn echo_id(&self) -> Option<u16> {
-        match (self.ty().into(), self.code()) {
-            (Icmpv6Message::EchoRequest, 0) | (Icmpv6Message::EchoReply, 0) => {
+        match (self.ty(), self.code()) {
+            (IcmpV6Type::ECHO_REQUEST, 0) | (IcmpV6Type::ECHO_REPLY, 0) => {
                 ValidIcmpEcho::parse(&self.rest_of_hdr_ref()[..])
                     .ok()
                     .map(|(v, ..)| v.id())
