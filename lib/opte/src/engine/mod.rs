@@ -30,6 +30,7 @@ pub mod predicate;
 pub mod print;
 pub mod rule;
 pub mod snat;
+pub mod stat;
 #[macro_use]
 pub mod tcp;
 pub mod tcp_state;
