@@ -76,6 +76,8 @@ pub type mac_rx_fn = unsafe extern "C" fn(
     *mut mblk_t,
     boolean_t,
 );
+pub type mac_siphon_fn =
+    unsafe extern "C" fn(*mut c_void, *mut mblk_t, boolean_t) -> *mut mblk_t;
 
 unsafe extern "C" {
     pub type mac_handle;
@@ -133,6 +135,12 @@ unsafe extern "C" {
         arg: *mut c_void,
     );
     pub fn mac_rx_clear(mch: *const mac_client_handle);
+    pub fn mac_siphon_set(
+        mch: *const mac_client_handle,
+        rx_fn: mac_siphon_fn,
+        arg: *mut c_void,
+    ) -> c_int;
+    pub fn mac_siphon_clear(mch: *const mac_client_handle);
     pub fn mac_tx(
         mch: *const mac_client_handle,
         mp_chain: *mut mblk_t,
