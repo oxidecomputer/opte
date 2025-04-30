@@ -44,6 +44,7 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::TransformFlags;
+use super::stat::StatTree;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
@@ -360,6 +361,8 @@ impl PortBuilder {
             stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             net,
             data,
+
+            flow_stats: Default::default(),
         })
     }
 
@@ -755,6 +758,8 @@ pub struct Port<N: NetworkImpl> {
     stats: KStatNamed<PortStats>,
     net: N,
     data: KRwLock<PortData>,
+
+    flow_stats: StatTree,
 }
 
 // Convert:

@@ -28,6 +28,7 @@ pub mod port;
 pub mod predicate;
 pub mod rule;
 pub mod snat;
+pub mod stat;
 #[macro_use]
 pub mod tcp;
 pub mod tcp_state;
