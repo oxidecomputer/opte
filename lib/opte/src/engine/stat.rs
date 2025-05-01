@@ -25,9 +25,29 @@ use opte_api::PacketCounter as ApiPktCounter;
 use opte_api::TcpState;
 use uuid::Uuid;
 
+// TODO EXPIRY
+// TODO DELETION
+
 /// Opaque identifier for tracking unique stat objects.
-#[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Debug)]
 pub struct StatId(u64);
+
+impl StatId {
+    fn new(val: &mut u64) -> Self {
+        let out = *val;
+        *val += 1;
+        StatId(out)
+    }
+}
+
+/// Reduced form of an action for stats tracking purposes.
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
+pub enum Action {
+    #[default]
+    Allow,
+    Deny,
+    Hairpin,
+}
 
 pub struct FlowStat {
     /// The direction of this flow half.
@@ -44,6 +64,17 @@ pub struct FlowStat {
 
     /// When was this flow last updated?
     pub last_hit: AtomicU64,
+}
+
+impl FlowStat {
+    pub fn hit(&self, pkt_size: u64) {
+        self.hit_at(pkt_size, Moment::now());
+    }
+
+    pub fn hit_at(&self, pkt_size: u64, time: Moment) {
+        self.last_hit.store(time.raw(), Ordering::Relaxed);
+        self.shared.stats.hit(self.dir, pkt_size);
+    }
 }
 
 pub struct SharedFlowStat {
@@ -77,10 +108,49 @@ pub struct TableStat {
     pub children: KRwLock<Vec<Weak<dyn FoldStat>>>,
 
     /// The actual stats!
-    pub stats: Arc<FullCounter>,
+    pub stats: FullCounter,
 
     /// When was this flow last updated?
     pub last_hit: AtomicU64,
+}
+
+impl TableStat {
+    /// Allow a packet which will track local stats via a UFT entry.
+    pub fn allow(&self) {
+        self.allow_at(Moment::now());
+    }
+
+    /// Allow a packet (at a given timestamp) which will track local stats via
+    /// a UFT entry.
+    pub fn allow_at(&self, time: Moment) {
+        self.last_hit.store(time.raw(), Ordering::Relaxed);
+        self.stats.allow.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record an action for a packet which will ultimately be dropped or
+    /// hairpinned.
+    pub fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
+        self.act_at(action, pkt_size, direction, Moment::now());
+    }
+
+    /// Record an action for a packet (at a given time) which will ultimately
+    /// be dropped or hairpinned.
+    pub fn act_at(
+        &self,
+        action: Action,
+        pkt_size: u64,
+        direction: Direction,
+        time: Moment,
+    ) {
+        self.last_hit.store(time.raw(), Ordering::Relaxed);
+        self.stats.packets.hit(direction, pkt_size);
+        let stat = match action {
+            Action::Allow => &self.stats.allow,
+            Action::Deny => &self.stats.deny,
+            Action::Hairpin => &self.stats.hairpin,
+        };
+        stat.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub struct PacketCounter {
@@ -90,6 +160,45 @@ pub struct PacketCounter {
     pub bytes_in: AtomicU64,
     pub pkts_out: AtomicU64,
     pub bytes_out: AtomicU64,
+}
+
+impl PacketCounter {
+    fn from_next_id(id: &mut u64) -> PacketCounter {
+        PacketCounter {
+            id: StatId::new(id),
+            pkts_in: 0.into(),
+            bytes_in: 0.into(),
+            pkts_out: 0.into(),
+            bytes_out: 0.into(),
+        }
+    }
+
+    #[inline]
+    fn hit(&self, direction: Direction, pkt_size: u64) {
+        let (pkts, bytes) = match direction {
+            Direction::In => (&self.pkts_in, &self.bytes_in),
+            Direction::Out => (&self.pkts_out, &self.bytes_out),
+        };
+        pkts.fetch_add(1, Ordering::Relaxed);
+        bytes.fetch_add(pkt_size, Ordering::Relaxed);
+    }
+
+    fn combine(&self, into: &Self) {
+        into.pkts_in
+            .fetch_add(self.pkts_in.load(Ordering::Relaxed), Ordering::Relaxed);
+        into.bytes_in.fetch_add(
+            self.bytes_in.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        into.pkts_out.fetch_add(
+            self.pkts_out.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        into.bytes_out.fetch_add(
+            self.bytes_out.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+    }
 }
 
 impl From<&PacketCounter> for ApiPktCounter {
@@ -108,6 +217,32 @@ pub struct FullCounter {
     pub deny: AtomicU64,
     pub hairpin: AtomicU64,
     pub packets: PacketCounter,
+}
+
+impl FullCounter {
+    fn from_next_id(id: &mut u64) -> FullCounter {
+        FullCounter {
+            allow: 0.into(),
+            deny: 0.into(),
+            hairpin: 0.into(),
+            packets: PacketCounter::from_next_id(id),
+        }
+    }
+
+    fn combine(&self, into: &Self) {
+        into.packets.combine(&self.packets);
+        into.allow
+            .fetch_add(self.allow.load(Ordering::Relaxed), Ordering::Relaxed);
+        into.deny
+            .fetch_add(self.deny.load(Ordering::Relaxed), Ordering::Relaxed);
+        into.hairpin
+            .fetch_add(self.hairpin.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn id(&self) -> StatId {
+        self.packets.id
+    }
 }
 
 impl From<&FullCounter> for ApiFullCounter {
@@ -141,42 +276,6 @@ impl FoldStat for TableStat {
     }
 }
 
-impl PacketCounter {
-    fn combine(&self, into: &Self) {
-        into.pkts_in
-            .fetch_add(self.pkts_in.load(Ordering::Relaxed), Ordering::Relaxed);
-        into.bytes_in.fetch_add(
-            self.bytes_in.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        into.pkts_out.fetch_add(
-            self.pkts_out.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-        into.bytes_out.fetch_add(
-            self.bytes_out.load(Ordering::Relaxed),
-            Ordering::Relaxed,
-        );
-    }
-}
-
-impl FullCounter {
-    fn combine(&self, into: &Self) {
-        into.packets.combine(&self.packets);
-        into.allow
-            .fetch_add(self.allow.load(Ordering::Relaxed), Ordering::Relaxed);
-        into.deny
-            .fetch_add(self.deny.load(Ordering::Relaxed), Ordering::Relaxed);
-        into.hairpin
-            .fetch_add(self.hairpin.load(Ordering::Relaxed), Ordering::Relaxed);
-    }
-
-    #[inline]
-    fn id(&self) -> StatId {
-        self.packets.id
-    }
-}
-
 /// Tracking/handling of all stats.
 ///
 /// ?? Describe?
@@ -189,53 +288,31 @@ pub struct StatTree {
 }
 
 impl StatTree {
-    fn get_id(&mut self) -> StatId {
-        let out = self.next_id;
-        self.next_id += 1;
-        StatId(out)
-    }
-
-    fn pkt_counter(&mut self) -> PacketCounter {
-        PacketCounter {
-            id: self.get_id(),
-            pkts_in: 0.into(),
-            bytes_in: 0.into(),
-            pkts_out: 0.into(),
-            bytes_out: 0.into(),
-        }
-    }
-
-    fn full_counter(&mut self) -> FullCounter {
-        FullCounter {
-            allow: 0.into(),
-            deny: 0.into(),
-            hairpin: 0.into(),
-            packets: self.pkt_counter(),
-        }
-    }
-
     pub fn new_root(&mut self) -> Arc<TableStat> {
         // TODO: RNG in illumos kernel?
         let uuid = Uuid::from_u64_pair(0, self.next_id);
-        self.new_root_with_id(uuid)
+        self.root(uuid)
     }
 
-    pub fn new_root_with_id(&mut self, uuid: Uuid) -> Arc<TableStat> {
-        let mut children = KRwLock::new(vec![]);
-        children.init(KRwLockType::Driver);
+    /// Gets or creates the root stat for a given UUID.
+    pub fn root(&mut self, uuid: Uuid) -> Arc<TableStat> {
+        let ids = &mut self.next_id;
 
-        let out = Arc::new(TableStat {
-            id: Some(uuid),
-            parents: vec![],
-            children,
-            stats: self.full_counter().into(),
-            last_hit: Moment::now().raw().into(),
-        });
+        self.roots
+            .entry(uuid)
+            .or_insert_with_key(|id| {
+                let mut children = KRwLock::new(vec![]);
+                children.init(KRwLockType::Driver);
 
-        // TODO: what if already exists?!
-        let _ = self.roots.insert(uuid, out.clone());
-
-        out
+                Arc::new(TableStat {
+                    id: Some(*id),
+                    parents: vec![],
+                    children,
+                    stats: FullCounter::from_next_id(ids),
+                    last_hit: Moment::now().raw().into(),
+                })
+            })
+            .clone()
     }
 
     pub fn new_intermediate(
@@ -249,7 +326,7 @@ impl StatTree {
             id: None,
             parents,
             children,
-            stats: self.full_counter().into(),
+            stats: FullCounter::from_next_id(&mut self.next_id),
             last_hit: Moment::now().raw().into(),
         });
 
@@ -273,6 +350,8 @@ impl StatTree {
     ) -> Arc<FlowStat> {
         if let Entry::Occupied(e) = self.flows.entry(*flow_id) {
             // TODO: what to do with (maybe new) parents & bases?!
+            //       I *think* these should win out, insert, and preserve
+            //       the old stats. Need to think about it.
             return e.get().clone();
         }
 
@@ -296,7 +375,7 @@ impl StatTree {
                     parents,
                     bases,
                     shared: Arc::new(SharedFlowStat {
-                        stats: self.pkt_counter(),
+                        stats: PacketCounter::from_next_id(&mut self.next_id),
                         // TODO
                         tcp: None,
                         first_dir: dir,
@@ -310,6 +389,30 @@ impl StatTree {
             .insert(*flow_id, out)
             .expect("Proven a miss on flow_id already")
             .clone()
+    }
+
+    #[cfg(test)]
+    pub fn dump(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Roots\n");
+        for (id, root) in &self.roots {
+            let d = ApiFullCounter::from(root.stats.as_ref());
+            out.push_str(&format!("\t{:?}/{id} -> {d:?}\n", root.stats.id()));
+        }
+        out.push_str("Ints\n");
+        for root in &self.intermediate {
+            let d = ApiFullCounter::from(root.stats.as_ref());
+            out.push_str(&format!("\t{:?} -> {d:?}\n", root.stats.id()));
+        }
+        out.push_str("Flows\n");
+        for (id, stat) in &self.flows {
+            let d: ApiFlowStat<InnerFlowId> = stat.as_ref().into();
+            out.push_str(&format!(
+                "\t{}/{}/{:?} -> {d:?}\n",
+                id, stat.dir, stat.shared.stats.id
+            ));
+        }
+        out
     }
 }
 
@@ -325,4 +428,63 @@ fn get_base_ids(parents: &[Arc<TableStat>]) -> BTreeSet<Uuid> {
     }
 
     out
+}
+
+/// XXX holds stats as they arrive on a packet.
+pub struct FlowStatBuilder {
+    parents: Vec<Arc<TableStat>>,
+    layer_end: usize,
+}
+
+impl FlowStatBuilder {
+    pub fn new() -> Self {
+        Self {
+            // TODO: do we want this cfg'able?
+            parents: Vec::with_capacity(16),
+            layer_end: 0,
+        }
+    }
+
+    /// Push a parent onto this flow.
+    pub fn push(&mut self, parent: Arc<TableStat>) {
+        self.parents.push(parent);
+    }
+
+    /// Mark all current parents as [`Action::Allow`].
+    pub fn end_layer(&mut self) {
+        self.layer_end = self.parents.len();
+    }
+
+    /// Return a list of stat parents if this packet is bound for flow creation.
+    pub fn terminate(
+        self,
+        action: Action,
+        pkt_size: u64,
+        direction: Direction,
+    ) -> Option<Vec<Arc<TableStat>>> {
+        match action {
+            Action::Allow => {
+                self.parents.iter().for_each(|v| v.allow());
+                Some(self.parents)
+            }
+            Action::Deny | Action::Hairpin => {
+                let (accepted, last_layer) =
+                    self.parents.split_at(self.layer_end);
+                accepted
+                    .iter()
+                    .for_each(|v| v.act(Action::Allow, pkt_size, direction));
+                last_layer
+                    .iter()
+                    .for_each(|v| v.act(action, pkt_size, direction));
+
+                None
+            }
+        }
+    }
+}
+
+impl Default for FlowStatBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
