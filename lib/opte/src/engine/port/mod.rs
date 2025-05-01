@@ -44,6 +44,7 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::TransformFlags;
+use super::stat::Action as StatAction;
 use super::stat::StatTree;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
@@ -197,6 +198,16 @@ enum InternalProcessResult {
     Drop { reason: DropReason },
     Modified,
     Hairpin(MsgBlk),
+}
+
+impl InternalProcessResult {
+    fn stat_action(&self) -> StatAction {
+        match self {
+            Self::Modified => StatAction::Allow,
+            Self::Drop { .. } => StatAction::Deny,
+            Self::Hairpin(..) => StatAction::Hairpin,
+        }
+    }
 }
 
 impl From<HdlPktAction> for InternalProcessResult {
