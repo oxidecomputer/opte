@@ -30,6 +30,7 @@ extern crate self as opte;
 use alloc::boxed::Box;
 use core::fmt;
 use core::fmt::Display;
+#[cfg(any(feature = "engine", test))]
 use engine::stat::StatTree;
 
 pub use ingot;
@@ -255,6 +256,7 @@ pub struct ExecCtx {
     pub log: Box<dyn LogProvider>,
 }
 
+#[cfg(any(feature = "engine", test))]
 pub(crate) struct ExecCtx2<'a> {
     pub user_ctx: &'a ExecCtx,
     pub stats: &'a mut StatTree,
