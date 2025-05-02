@@ -10,6 +10,7 @@ use super::router::RouterTargetClass;
 use super::router::RouterTargetInternal;
 use crate::api::ExternalIpCfg;
 use crate::api::SetExternalIpsReq;
+use crate::api::stat::*;
 use crate::cfg::IpCfg;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
@@ -47,7 +48,6 @@ use opte::engine::rule::Rule;
 use opte::engine::snat::ConcreteIpAddr;
 use opte::engine::snat::SNat;
 use uuid::Uuid;
-use crate::api::stat::*;
 
 pub const NAT_LAYER_NAME: &str = "nat";
 const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
@@ -291,8 +291,11 @@ fn setup_ipv4_nat(
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
-            let mut rule =
-                Rule::new_with_id(SNAT_PRIORITY, Action::Stateful(snat.clone()), Some(NAT_SNAT_V4));
+            let mut rule = Rule::new_with_id(
+                SNAT_PRIORITY,
+                Action::Stateful(snat.clone()),
+                Some(NAT_SNAT_V4),
+            );
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
@@ -440,8 +443,11 @@ fn setup_ipv6_nat(
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
-            let mut rule =
-                Rule::new_with_id(SNAT_PRIORITY, Action::Stateful(snat.clone()), Some(NAT_SNAT_V6));
+            let mut rule = Rule::new_with_id(
+                SNAT_PRIORITY,
+                Action::Stateful(snat.clone()),
+                Some(NAT_SNAT_V6),
+            );
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV6),

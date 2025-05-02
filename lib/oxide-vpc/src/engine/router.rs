@@ -13,6 +13,7 @@ use super::firewall as fw;
 use crate::api::DelRouterEntryResp;
 use crate::api::RouterClass;
 use crate::api::RouterTarget;
+use crate::api::stat::*;
 use crate::cfg::VpcCfg;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -48,7 +49,6 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use uuid::Uuid;
-use crate::api::stat::*;
 
 pub const ROUTER_LAYER_NAME: &str = "router";
 

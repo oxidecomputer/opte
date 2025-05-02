@@ -42,6 +42,7 @@
 
 use crate::api::DhcpCfg;
 use crate::api::MacAddr;
+use crate::api::stat::*;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
@@ -77,7 +78,6 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
-use crate::api::stat::*;
 
 pub mod arp;
 pub mod dhcp;

@@ -371,7 +371,10 @@ impl OpteHdl {
     }
 
     /// TEMP METHOD
-    pub fn dump_flowstats(&self, port_name: &str) -> Result<DumpFlowStatsResp, Error> {
+    pub fn dump_flowstats(
+        &self,
+        port_name: &str,
+    ) -> Result<DumpFlowStatsResp, Error> {
         let cmd = OpteCmd::DumpFlowStats;
         run_cmd_ioctl(
             self.device.as_raw_fd(),

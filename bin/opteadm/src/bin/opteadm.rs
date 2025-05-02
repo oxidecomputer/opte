@@ -283,7 +283,7 @@ enum Command {
         /// The OPTE port to read...
         #[arg(short)]
         port: String,
-    }
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -870,7 +870,7 @@ fn main() -> anyhow::Result<()> {
 
         // XXX TEMP
         Command::DumpFlowStats { port } => {
-            let DumpFlowStatsResp{ data } =  hdl.dump_flowstats(&port)?;
+            let DumpFlowStatsResp { data } = hdl.dump_flowstats(&port)?;
             println!("{data}");
         }
     }
