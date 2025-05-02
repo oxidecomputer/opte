@@ -114,6 +114,12 @@ pub struct TableStat {
     pub last_hit: AtomicU64,
 }
 
+impl core::fmt::Debug for TableStat {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        todo!()
+    }
+}
+
 impl TableStat {
     /// Allow a packet which will track local stats via a UFT entry.
     pub fn allow(&self) {
@@ -288,14 +294,11 @@ pub struct StatTree {
 }
 
 impl StatTree {
-    pub fn new_root(&mut self) -> Arc<TableStat> {
-        // TODO: RNG in illumos kernel?
-        let uuid = Uuid::from_u64_pair(0, self.next_id);
-        self.root(uuid)
-    }
-
     /// Gets or creates the root stat for a given UUID.
-    pub fn root(&mut self, uuid: Uuid) -> Arc<TableStat> {
+    ///
+    /// Allocates a new UUID if none is provided.
+    pub fn root(&mut self, uuid: Option<Uuid>) -> Arc<TableStat> {
+        let uuid = uuid.unwrap_or_else(|| Uuid::from_u64_pair(0, self.next_id));
         let ids = &mut self.next_id;
 
         self.roots
@@ -385,10 +388,9 @@ impl StatTree {
             }
         };
 
-        self.flows
-            .insert(*flow_id, out)
-            .expect("Proven a miss on flow_id already")
-            .clone()
+        // Proven a miss on flow_id already
+        let _ = self.flows.insert(*flow_id, out.clone());
+        out
     }
 
     #[cfg(test)]
@@ -396,12 +398,12 @@ impl StatTree {
         let mut out = String::new();
         out.push_str("Roots\n");
         for (id, root) in &self.roots {
-            let d = ApiFullCounter::from(root.stats.as_ref());
+            let d = ApiFullCounter::from(&root.stats);
             out.push_str(&format!("\t{:?}/{id} -> {d:?}\n", root.stats.id()));
         }
         out.push_str("Ints\n");
         for root in &self.intermediate {
-            let d = ApiFullCounter::from(root.stats.as_ref());
+            let d = ApiFullCounter::from(&root.stats);
             out.push_str(&format!("\t{:?} -> {d:?}\n", root.stats.id()));
         }
         out.push_str("Flows\n");
@@ -451,21 +453,29 @@ impl FlowStatBuilder {
     }
 
     /// Mark all current parents as [`Action::Allow`].
-    pub fn end_layer(&mut self) {
+    pub fn new_layer(&mut self) {
         self.layer_end = self.parents.len();
     }
 
     /// Return a list of stat parents if this packet is bound for flow creation.
     pub fn terminate(
-        self,
+        &mut self,
         action: Action,
         pkt_size: u64,
         direction: Direction,
+        create_flow: bool,
     ) -> Option<Vec<Arc<TableStat>>> {
         match action {
-            Action::Allow => {
+            Action::Allow if create_flow => {
                 self.parents.iter().for_each(|v| v.allow());
-                Some(self.parents)
+                // TODO: should *take*?
+                Some(self.parents.clone())
+            }
+            Action::Allow => {
+                self.parents
+                    .iter()
+                    .for_each(|v| v.act(action, pkt_size, direction));
+                None
             }
             Action::Deny | Action::Hairpin => {
                 let (accepted, last_layer) =
