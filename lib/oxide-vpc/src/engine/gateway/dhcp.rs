@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The DHCP implementation of the Virtual Gateway.
 
@@ -21,12 +21,14 @@ use opte::engine::ip::v4::Ipv4Cidr;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use opte::engine::stat::StatTree;
 
 pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
     dhcp_cfg: DhcpCfg,
+    stats: &mut StatTree,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
@@ -91,9 +93,9 @@ pub fn setup(
     }));
 
     let discover_rule = Rule::new(1, offer);
-    layer.add_rule(Direction::Out, discover_rule.finalize());
+    layer.add_rule(Direction::Out, discover_rule.finalize(), stats);
 
     let request_rule = Rule::new(1, ack);
-    layer.add_rule(Direction::Out, request_rule.finalize());
+    layer.add_rule(Direction::Out, request_rule.finalize(), stats);
     Ok(())
 }

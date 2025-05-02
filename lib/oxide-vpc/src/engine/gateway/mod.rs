@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The Oxide VPC Virtual Gateway.
 //!
@@ -89,7 +89,7 @@ pub use transit::*;
 pub const NAME: &str = "gateway";
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
@@ -104,15 +104,16 @@ pub fn setup(
     // Since we are acting as a gateway we also rewrite the source MAC address
     // for inbound traffic to be that of the gateway.
     let actions = LayerActions {
-        actions: vec![],
         default_in: DefaultAction::Deny,
         default_out: DefaultAction::Deny,
+        ..Default::default()
     };
 
-    let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAME, pb, actions, ft_limit);
 
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
         setup_ipv4(
+            pb,
             &mut layer,
             cfg,
             ipv4_cfg,
@@ -122,7 +123,14 @@ pub fn setup(
     }
 
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6(&mut layer, cfg, ipv6_cfg, vpc_mappings, dhcp_cfg.clone())?;
+        setup_ipv6(
+            pb,
+            &mut layer,
+            cfg,
+            ipv6_cfg,
+            vpc_mappings,
+            dhcp_cfg.clone(),
+        )?;
     }
 
     pb.add_layer(layer, Pos::Before("firewall"))
@@ -161,15 +169,17 @@ impl StaticAction for RewriteSrcMac {
 }
 
 fn setup_ipv4(
+    pb: &mut PortBuilder,
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
     vpc_mappings: Arc<VpcMappings>,
     dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
-    arp::setup(layer, cfg)?;
-    dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg)?;
-    icmp::setup(layer, cfg, ip_cfg)?;
+    let stats = pb.stats_mut();
+    arp::setup(layer, cfg, stats)?;
+    dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg, stats)?;
+    icmp::setup(layer, cfg, ip_cfg, stats)?;
 
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
 
@@ -180,7 +190,7 @@ fn setup_ipv4(
     nospoof_out.add_predicate(Predicate::InnerEtherSrc(vec![
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::Out, nospoof_out.finalize());
+    layer.add_rule(Direction::Out, nospoof_out.finalize(), stats);
 
     let mut unicast_in = Rule::new(
         1000,
@@ -194,20 +204,22 @@ fn setup_ipv4(
     unicast_in.add_predicate(Predicate::InnerEtherDst(vec![
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::In, unicast_in.finalize());
+    layer.add_rule(Direction::In, unicast_in.finalize(), stats);
 
     Ok(())
 }
 
 fn setup_ipv6(
+    pb: &mut PortBuilder,
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv6Cfg,
     vpc_mappings: Arc<VpcMappings>,
     dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
-    icmpv6::setup(layer, cfg, ip_cfg)?;
-    dhcpv6::setup(layer, cfg, dhcp_cfg)?;
+    let stats = pb.stats_mut();
+    icmpv6::setup(layer, cfg, ip_cfg, stats)?;
+    dhcpv6::setup(layer, cfg, dhcp_cfg, stats)?;
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
@@ -216,7 +228,7 @@ fn setup_ipv6(
     nospoof_out.add_predicate(Predicate::InnerEtherSrc(vec![
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::Out, nospoof_out.finalize());
+    layer.add_rule(Direction::Out, nospoof_out.finalize(), stats);
 
     let mut unicast_in = Rule::new(
         1000,
@@ -230,7 +242,7 @@ fn setup_ipv6(
     unicast_in.add_predicate(Predicate::InnerEtherDst(vec![
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::In, unicast_in.finalize());
+    layer.add_rule(Direction::In, unicast_in.finalize(), stats);
 
     Ok(())
 }

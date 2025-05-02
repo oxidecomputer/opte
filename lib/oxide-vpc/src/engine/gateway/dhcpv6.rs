@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The DHCPv6 implementation of the Virtual Gateway.
 
@@ -17,11 +17,13 @@ use opte::engine::dhcpv6::LeasedAddress;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use opte::engine::stat::StatTree;
 
 pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     dhcp_cfg: DhcpCfg,
+    stats: &mut StatTree,
 ) -> Result<(), OpteError> {
     let ip_cfg = match cfg.ipv6_cfg() {
         None => return Ok(()),
@@ -44,6 +46,6 @@ pub fn setup(
 
     let server = Action::Hairpin(Arc::new(action));
     let rule = Rule::new(1, server);
-    layer.add_rule(Direction::Out, rule.finalize());
+    layer.add_rule(Direction::Out, rule.finalize(), stats);
     Ok(())
 }

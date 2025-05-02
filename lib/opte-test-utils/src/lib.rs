@@ -269,11 +269,11 @@ fn oxide_net_builder(
     let dhcp = base_dhcp_config();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
+    gateway::setup(&mut pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
-    router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
+    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, v2b, one_limit)
+    overlay::setup(&mut pb, cfg, v2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }

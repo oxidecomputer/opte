@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use super::VpcNetwork;
 use super::router::ROUTER_LAYER_NAME;
@@ -101,14 +101,14 @@ pub fn setup(
     // but no valid replacement source IP must be dropped, otherwise it will
     // be forwarded to boundary services.
     let actions = LayerActions {
-        actions: vec![],
         default_in: DefaultAction::Allow,
         default_out: DefaultAction::Allow,
+        ..Default::default()
     };
 
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb, actions, ft_limit);
     let (in_rules, out_rules) = create_nat_rules(cfg, None)?;
-    layer.set_rules(in_rules, out_rules);
+    layer.set_rules(in_rules, out_rules, pb.stats_mut());
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }
 
