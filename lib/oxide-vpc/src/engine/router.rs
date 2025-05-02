@@ -48,6 +48,7 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use uuid::Uuid;
+use crate::api::stat::*;
 
 pub const ROUTER_LAYER_NAME: &str = "router";
 
@@ -259,6 +260,7 @@ pub fn setup(
     let actions = LayerActions {
         default_in: DefaultAction::Allow,
         default_out: DefaultAction::Deny,
+        default_out_stat_id: Some(ROUTER_NOROUTE),
         ..Default::default()
     };
 
