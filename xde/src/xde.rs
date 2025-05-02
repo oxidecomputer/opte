@@ -690,6 +690,27 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = remove_cidr_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+
+        // TEMP
+        OpteCmd::DumpFlowStats => {
+            let resp = flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+fn flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<oxide_vpc::api::DumpFlowStatsResp, OpteError> {
+    let req: oxide_vpc::api::DumpUftReq = env.copy_in_req()?;
+    let devs = xde_devs().read();
+    match devs.get_by_name(&req.port_name) {
+        Some(dev) => dev
+            .port
+            .dump_flow_stats()
+            .map(|data| oxide_vpc::api::DumpFlowStatsResp { data }),
+        None => Err(OpteError::PortNotFound(req.port_name)),
     }
 }
 
@@ -2051,10 +2072,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
-    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&mut pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual

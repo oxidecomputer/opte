@@ -68,6 +68,7 @@ use opte_api::Direction;
 use opte_api::RuleDump;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 use zerocopy::ByteSliceMut;
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
@@ -987,6 +988,7 @@ pub struct Rule<S: RuleState> {
     state: S,
     action: Action,
     priority: u16,
+    stat_id: Option<Uuid>,
 }
 
 impl PartialEq for Rule<Finalized> {
@@ -1001,6 +1003,10 @@ impl<S: RuleState> Rule<S> {
     pub fn action(&self) -> &Action {
         &self.action
     }
+
+    pub fn stat_id(&self) -> Option<&Uuid> {
+        self.stat_id.as_ref()
+    }
 }
 
 impl Rule<Ready> {
@@ -1010,9 +1016,22 @@ impl Rule<Ready> {
     /// any implicit predicates dictated by the action. Additional
     /// predicates may be added along with the action's implicit ones.
     pub fn new(priority: u16, action: Action) -> Self {
+        Rule::new_with_id(priority, action, None)
+    }
+
+    pub fn new_with_id(
+        priority: u16,
+        action: Action,
+        stat_id: Option<Uuid>,
+    ) -> Self {
         let (hdr_preds, data_preds) = action.implicit_preds();
 
-        Rule { state: Ready { hdr_preds, data_preds }, action, priority }
+        Rule {
+            state: Ready { hdr_preds, data_preds },
+            action,
+            priority,
+            stat_id,
+        }
     }
 
     /// Create a new rule that matches anything.
@@ -1023,7 +1042,15 @@ impl Rule<Ready> {
     /// useful for making intentions clear that this rule is to match
     /// anything.
     pub fn match_any(priority: u16, action: Action) -> Rule<Finalized> {
-        Rule { state: Finalized { preds: None }, action, priority }
+        Rule::match_any_with_id(priority, action, None)
+    }
+
+    pub fn match_any_with_id(
+        priority: u16,
+        action: Action,
+        stat_id: Option<Uuid>,
+    ) -> Rule<Finalized> {
+        Rule { state: Finalized { preds: None }, action, priority, stat_id }
     }
 
     /// Add a single [`Predicate`] to the end of the list.
@@ -1069,6 +1096,7 @@ impl Rule<Ready> {
             state: Finalized { preds },
             priority: self.priority,
             action: self.action,
+            stat_id: self.stat_id,
         }
     }
 }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -18,6 +18,8 @@ pub use opte::api::*;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
+
+pub mod stat;
 
 /// This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =
@@ -649,6 +651,14 @@ pub struct FirewallRule {
     pub action: FirewallAction,
     pub priority: u16,
 }
+
+// TEMP
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpFlowStatsResp {
+    pub data: String,
+}
+
+impl CmdOk for DumpFlowStatsResp {}
 
 impl FromStr for FirewallRule {
     type Err = String;

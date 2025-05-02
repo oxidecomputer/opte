@@ -1313,6 +1313,7 @@ dependencies = [
  "smoltcp",
  "tabwriter",
  "usdt",
+ "uuid",
  "version_check",
  "zerocopy 0.8.25",
 ]
@@ -1327,6 +1328,7 @@ dependencies = [
  "postcard",
  "serde",
  "smoltcp",
+ "uuid",
 ]
 
 [[package]]
