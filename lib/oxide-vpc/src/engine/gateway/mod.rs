@@ -77,6 +77,7 @@ use opte::engine::rule::MetaAction;
 use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use crate::api::stat::*;
 
 pub mod arp;
 pub mod dhcp;
@@ -105,7 +106,9 @@ pub fn setup(
     // for inbound traffic to be that of the gateway.
     let actions = LayerActions {
         default_in: DefaultAction::Deny,
+        default_in_stat_id: Some(GATEWAY_NOSPOOF_IN),
         default_out: DefaultAction::Deny,
+        default_out_stat_id: Some(GATEWAY_NOSPOOF_IN),
         ..Default::default()
     };
 

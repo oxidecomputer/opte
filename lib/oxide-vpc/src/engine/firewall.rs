@@ -18,6 +18,7 @@ use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
+use crate::api::stat::*;
 use crate::engine::overlay::ACTION_META_VNI;
 use alloc::string::ToString;
 use core::num::NonZeroU32;
@@ -60,7 +61,9 @@ pub fn setup(
     // allow.
     let actions = LayerActions {
         default_in: DefaultAction::Deny,
+        default_in_stat_id: Some(FW_DEFAULT_IN),
         default_out: DefaultAction::StatefulAllow,
+        default_out_stat_id: Some(FW_DEFAULT_OUT),
         ..Default::default()
     };
 

@@ -47,6 +47,7 @@ use opte::engine::rule::Rule;
 use opte::engine::snat::ConcreteIpAddr;
 use opte::engine::snat::SNat;
 use uuid::Uuid;
+use crate::api::stat::*;
 
 pub const NAT_LAYER_NAME: &str = "nat";
 const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
@@ -102,7 +103,9 @@ pub fn setup(
     // be forwarded to boundary services.
     let actions = LayerActions {
         default_in: DefaultAction::Allow,
+        default_in_stat_id: Some(NAT_NONE),
         default_out: DefaultAction::Allow,
+        default_out_stat_id: Some(NAT_NONE),
         ..Default::default()
     };
 
@@ -289,7 +292,7 @@ fn setup_ipv4_nat(
 
         for igw_id in igw_matches {
             let mut rule =
-                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+                Rule::new_with_id(SNAT_PRIORITY, Action::Stateful(snat.clone()), Some(NAT_SNAT_V4));
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
@@ -438,7 +441,7 @@ fn setup_ipv6_nat(
 
         for igw_id in igw_matches {
             let mut rule =
-                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+                Rule::new_with_id(SNAT_PRIORITY, Action::Stateful(snat.clone()), Some(NAT_SNAT_V6));
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV6),
