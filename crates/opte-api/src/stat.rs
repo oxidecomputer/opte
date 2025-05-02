@@ -22,6 +22,7 @@ pub struct FlowStat<FlowId> {
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 pub struct PacketCounter {
+    pub created_at: u64,
     pub pkts_in: u64,
     pub bytes_in: u64,
     pub pkts_out: u64,

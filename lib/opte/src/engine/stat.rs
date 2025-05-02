@@ -10,6 +10,7 @@ use crate::api::InnerFlowId;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::sync::KRwLockType;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::Ttl;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
@@ -25,8 +26,7 @@ use opte_api::PacketCounter as ApiPktCounter;
 use opte_api::TcpState;
 use uuid::Uuid;
 
-// TODO EXPIRY
-// TODO DELETION
+// TODO DELETION ON FLOW CLOSE [and holding onto 'dead flows']
 
 /// Opaque identifier for tracking unique stat objects.
 #[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Debug)]
@@ -161,6 +161,7 @@ impl TableStat {
 
 pub struct PacketCounter {
     pub id: StatId,
+    pub created_at: Moment,
 
     pub pkts_in: AtomicU64,
     pub bytes_in: AtomicU64,
@@ -172,6 +173,8 @@ impl PacketCounter {
     fn from_next_id(id: &mut u64) -> PacketCounter {
         PacketCounter {
             id: StatId::new(id),
+            created_at: Moment::now(),
+
             pkts_in: 0.into(),
             bytes_in: 0.into(),
             pkts_out: 0.into(),
@@ -210,6 +213,7 @@ impl PacketCounter {
 impl From<&PacketCounter> for ApiPktCounter {
     fn from(val: &PacketCounter) -> Self {
         ApiPktCounter {
+            created_at: val.created_at.raw(),
             pkts_in: val.pkts_in.load(Ordering::Relaxed),
             bytes_in: val.bytes_in.load(Ordering::Relaxed),
             pkts_out: val.pkts_out.load(Ordering::Relaxed),
@@ -393,27 +397,139 @@ impl StatTree {
         out
     }
 
-    #[cfg(test)]
+    pub fn expire(&mut self, now: Moment) {
+        const EXPIRY_WINDOW: Ttl = Ttl::new_seconds(10);
+        // Root removal and re-entry? Don't want any gaps.
+        const ROOT_EXPIRY_WINDOW: Ttl = Ttl::new_seconds(100);
+
+        #[derive(Default, Eq, PartialEq)]
+        enum Hmm {
+            #[default]
+            NotSeen,
+            SeenKeep,
+            Seen(InnerFlowId),
+        }
+
+        #[derive(Default)]
+        struct Aa {
+            lhs: Hmm,
+            rhs: Hmm,
+        }
+
+        // Flows -- need to account for shared component between arc'd things.
+        let mut possibly_expired: BTreeMap<StatId, Aa> = BTreeMap::new();
+        for (k, v) in &self.flows {
+            let t_hit =
+                Moment::from_raw_nanos(v.last_hit.load(Ordering::Relaxed));
+            let can_remove = EXPIRY_WINDOW.is_expired(t_hit, now)
+                && Arc::strong_count(v) == 1;
+            let base_id = v.shared.stats.id;
+            let el = possibly_expired.entry(base_id).or_default();
+            match (v.dir, can_remove) {
+                (Direction::In, false) => {
+                    el.lhs = Hmm::SeenKeep;
+                }
+                (Direction::Out, false) => {
+                    el.rhs = Hmm::SeenKeep;
+                }
+                (Direction::In, true) => {
+                    el.lhs = Hmm::Seen(*k);
+                }
+                (Direction::Out, true) => {
+                    el.rhs = Hmm::Seen(*k);
+                }
+            }
+        }
+        for v in possibly_expired.values() {
+            let cannot_remove = v.lhs == Hmm::SeenKeep
+                || v.rhs == Hmm::SeenKeep
+                || (v.lhs == Hmm::NotSeen && v.rhs == Hmm::NotSeen);
+            if cannot_remove {
+                continue;
+            }
+
+            #[allow(clippy::mutable_key_type)]
+            let mut parents: BTreeSet<ById> = Default::default();
+            let mut base_stats = None;
+            if let Hmm::Seen(id) = v.lhs {
+                if let Some(flow) = self.flows.remove(&id) {
+                    let flow = Arc::into_inner(flow)
+                        .expect("strong count 1 is enforced above");
+                    for p_id in flow.parents {
+                        parents.insert(ById(p_id));
+                    }
+                    base_stats = Some(flow.shared);
+                }
+            }
+            if let Hmm::Seen(id) = v.rhs {
+                if let Some(flow) = self.flows.remove(&id) {
+                    let flow = Arc::into_inner(flow)
+                        .expect("strong count 1 is enforced above");
+                    for p_id in flow.parents {
+                        parents.insert(ById(p_id));
+                    }
+                    base_stats = Some(flow.shared);
+                }
+            }
+
+            // At long last, combine!
+            let base_stats =
+                base_stats.expect("should not have no parent here!!");
+            for parent in parents {
+                base_stats.stats.combine(&parent.0.stats.packets);
+            }
+        }
+
+        // Intermediates.
+        self.intermediate.retain(|v| {
+            // Time is... not relevant here. The LFTs are GONE.
+            if Arc::strong_count(v) == 1 {
+                for p in &v.parents {
+                    v.stats.combine(&p.stats);
+                }
+                false
+            } else {
+                true
+            }
+        });
+
+        // Roots may need to be held onto for some time in case rules with the
+        // same ID come and go in adjacent control plane operations...
+        self.roots.retain(|_, v| {
+            let t_hit =
+                Moment::from_raw_nanos(v.last_hit.load(Ordering::Relaxed));
+            Arc::strong_count(v) > 1
+                || !ROOT_EXPIRY_WINDOW.is_expired(t_hit, now)
+        });
+    }
+
+    #[cfg(any(feature = "std", test))]
     pub fn dump(&self) -> String {
         let mut out = String::new();
-        out.push_str("Roots\n");
+        out.push_str("--Roots--\n");
         for (id, root) in &self.roots {
             let d = ApiFullCounter::from(&root.stats);
             out.push_str(&format!("\t{:?}/{id} -> {d:?}\n", root.stats.id()));
         }
-        out.push_str("Ints\n");
+        out.push_str("----\n\n");
+        out.push_str("--Ints--\n");
         for root in &self.intermediate {
             let d = ApiFullCounter::from(&root.stats);
             out.push_str(&format!("\t{:?} -> {d:?}\n", root.stats.id()));
+            let parents: Vec<Option<Uuid>> =
+                root.parents.iter().map(|v| v.id).collect();
+            out.push_str(&format!("\t\tparents {parents:?}\n\n"));
         }
-        out.push_str("Flows\n");
+        out.push_str("----\n\n");
+        out.push_str("--Flows--\n");
         for (id, stat) in &self.flows {
-            let d: ApiFlowStat<InnerFlowId> = stat.as_ref().into();
-            out.push_str(&format!(
-                "\t{}/{}/{:?} -> {d:?}\n",
-                id, stat.dir, stat.shared.stats.id
-            ));
+            // let d: ApiFlowStat<InnerFlowId> = stat.as_ref().into();
+            let d: ApiPktCounter = (&stat.as_ref().shared.stats).into();
+            out.push_str(&format!("\t{id}/{} ->\n", stat.dir));
+            out.push_str(&format!("\t\t{:?} {d:?}\n", stat.shared.stats.id));
+            out.push_str(&format!("\t\tparents {:?}\n\n", stat.bases));
         }
+        out.push_str("----\n");
         out
     }
 }
@@ -498,3 +614,25 @@ impl Default for FlowStatBuilder {
         Self::new()
     }
 }
+
+struct ById(Arc<TableStat>);
+
+impl PartialOrd for ById {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ById {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.stats.id().cmp(&other.0.stats.id())
+    }
+}
+
+impl PartialEq for ById {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.stats.id() == other.0.stats.id()
+    }
+}
+
+impl Eq for ById {}

@@ -30,6 +30,7 @@ extern crate self as opte;
 use alloc::boxed::Box;
 use core::fmt;
 use core::fmt::Display;
+use engine::stat::StatTree;
 
 pub use ingot;
 
@@ -252,4 +253,9 @@ impl LogProvider for KernelLog {
 
 pub struct ExecCtx {
     pub log: Box<dyn LogProvider>,
+}
+
+pub(crate) struct ExecCtx2<'a> {
+    pub user_ctx: &'a ExecCtx,
+    pub stats: &'a mut StatTree,
 }
