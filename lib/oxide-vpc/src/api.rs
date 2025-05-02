@@ -650,6 +650,14 @@ pub struct FirewallRule {
     pub priority: u16,
 }
 
+// TEMP
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpFlowStatsResp {
+    pub data: String,
+}
+
+impl CmdOk for DumpFlowStatsResp {}
+
 impl FromStr for FirewallRule {
     type Err = String;
 

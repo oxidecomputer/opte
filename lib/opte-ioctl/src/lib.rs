@@ -35,6 +35,7 @@ use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpFlowStatsResp;
 use oxide_vpc::api::DumpVirt2BoundaryReq;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysReq;
@@ -377,6 +378,16 @@ impl OpteHdl {
         port_name: &str,
     ) -> Result<DumpUftResp<InnerFlowId>, Error> {
         let cmd = OpteCmd::DumpUft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&DumpUftReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// TEMP METHOD
+    pub fn dump_flowstats(&self, port_name: &str) -> Result<DumpFlowStatsResp, Error> {
+        let cmd = OpteCmd::DumpFlowStats;
         run_cmd_ioctl(
             self.device.as_raw_fd(),
             cmd,
