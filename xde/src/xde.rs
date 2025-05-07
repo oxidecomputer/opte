@@ -1792,8 +1792,9 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // ask to split a packet back into... 1 segment.
             // Hardware tends to handle this without issue.
             if meoi_len.saturating_sub(
-                u32::try_from(Ethernet::MINIMUM_LENGTH)
-                    .expect("14B < u32::MAX"),
+                non_eth_payl_bytes
+                    + u32::try_from(Ethernet::MINIMUM_LENGTH)
+                        .expect("14B < u32::MAX"),
             ) <= mss
             {
                 flags.remove(MblkOffloadFlags::HW_LSO);
