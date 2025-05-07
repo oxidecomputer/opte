@@ -123,6 +123,16 @@ impl<B: ByteSlice> ValidUlp<B> {
 
         csum != 0
     }
+
+    #[inline]
+    pub fn ip_protocol(&self) -> IpProtocol {
+        match self {
+            ValidUlp::Tcp(_) => IpProtocol::TCP,
+            ValidUlp::Udp(_) => IpProtocol::UDP,
+            ValidUlp::IcmpV4(_) => IpProtocol::ICMP,
+            ValidUlp::IcmpV6(_) => IpProtocol::ICMP_V6,
+        }
+    }
 }
 
 impl<B: ByteSliceMut> ValidUlp<B> {
