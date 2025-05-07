@@ -1505,29 +1505,14 @@ fn guest_loopback(
     };
 
     let meta = parsed_pkt.meta();
+    let old_len = parsed_pkt.len();
 
-    // If L3 headers are too long to represent in the MEOI API, then
-    // drop the packet (e.g., >u16::MAX on v6 extensions).
-    let Ok(meoi_l3hlen) = u16::try_from(meta.inner_l3.packet_length()) else {
-        opte::engine::dbg!("packet L3 exceeds u16::MAX");
-        return;
-    };
-
-    let mut ulp_meoi = mac_ether_offload_info_t {
-        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
-            | MacEtherOffloadFlags::L3INFO_SET
-            | MacEtherOffloadFlags::L4INFO_SET,
-        // filled in later.
-        meoi_len: 0,
-        meoi_l2hlen: u8::try_from(meta.inner_eth.packet_length())
-            .expect("L2 should never exceed ~22B (QinQ)"),
-        meoi_l3proto: meta.inner_eth.ethertype().0,
-        meoi_l3hlen,
-        meoi_l4proto: meta.inner_ulp.ip_protocol().0,
-        meoi_l4hlen: u8::try_from(meta.inner_ulp.packet_length())
-            .expect("L4 should never exceed 60B (max TCP options)"),
-
-        ..Default::default()
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return;
+        }
     };
 
     let flow = parsed_pkt.flow();
@@ -1545,12 +1530,6 @@ fn guest_loopback(
             match dest_dev.port.process(In, parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
                     let mut pkt = emit_spec.apply(pkt);
-                    let len = pkt.byte_len();
-                    let Ok(meoi_len) = u32::try_from(len) else {
-                        opte::engine::dbg!("packet exceeds u32::MAX");
-                        return;
-                    };
-                    ulp_meoi.meoi_len = meoi_len;
                     if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
                         opte::engine::err!("failed to set offload info: {}", e);
                     }
@@ -1703,42 +1682,12 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         return ptr::null_mut();
     };
 
-    let (l4_flag, l4_ty) = match &meta.inner_ulp {
-        Some(ValidUlp::Tcp(_)) => {
-            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::TCP)
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return ptr::null_mut();
         }
-        Some(ValidUlp::Udp(_)) => {
-            (MacEtherOffloadFlags::L4INFO_SET, IpProtocol::UDP)
-        }
-        _ => (MacEtherOffloadFlags::empty(), IpProtocol(0)),
-    };
-
-    // If L3 headers are too long to represent in the MEOI API, then
-    // drop the packet (e.g., >u16::MAX on v6 extensions).
-    let Ok(meoi_l3hlen) = u16::try_from(meta.inner_l3.packet_length()) else {
-        opte::engine::dbg!("packet L3 exceeds u16::MAX");
-        return ptr::null_mut();
-    };
-
-    let Ok(meoi_len) = u32::try_from(old_len) else {
-        opte::engine::dbg!("packet exceeds u32::MAX");
-        return ptr::null_mut();
-    };
-
-    let ulp_meoi = mac_ether_offload_info_t {
-        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
-            | MacEtherOffloadFlags::L3INFO_SET
-            | l4_flag,
-        meoi_len,
-        meoi_l2hlen: u8::try_from(meta.inner_eth.packet_length())
-            .expect("L2 should never exceed ~22B (QinQ)"),
-        meoi_l3proto: meta.inner_eth.ethertype().0,
-        meoi_l3hlen,
-        meoi_l4proto: l4_ty.0,
-        meoi_l4hlen: u8::try_from(meta.inner_ulp.packet_length())
-            .expect("L4 should never exceed 60B (max TCP options)"),
-
-        ..Default::default()
     };
 
     // Choose u1 as a starting point. This may be changed in the next_hop
@@ -1826,7 +1775,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // need to strip the flag to prevent a drop, in cases where we'd
             // ask to split a packet back into... 1 segment.
             // Hardware tends to handle this without issue.
-            if meoi_len.saturating_sub(
+            if ulp_meoi.meoi_len.saturating_sub(
                 u32::try_from(Ethernet::MINIMUM_LENGTH)
                     .expect("14B < u32::MAX"),
             ) <= inner_mtu
@@ -2165,29 +2114,14 @@ unsafe fn xde_rx_one(
 
     let meta = parsed_pkt.meta();
     let devs = xde_devs().read();
+    let old_len = parsed_pkt.len();
 
-    // If L3 headers are too long to represent in the MEOI API, then
-    // drop the packet (e.g., >u16::MAX on v6 extensions).
-    let Ok(meoi_l3hlen) = u16::try_from(meta.inner_l3.packet_length()) else {
-        opte::engine::dbg!("packet L3 exceeds u16::MAX");
-        return;
-    };
-
-    let mut ulp_meoi = mac_ether_offload_info_t {
-        meoi_flags: MacEtherOffloadFlags::L2INFO_SET
-            | MacEtherOffloadFlags::L3INFO_SET
-            | MacEtherOffloadFlags::L4INFO_SET,
-        // filled in later.
-        meoi_len: 0,
-        meoi_l2hlen: u8::try_from(meta.inner_eth.packet_length())
-            .expect("L2 should never exceed ~22B (QinQ)"),
-        meoi_l3proto: meta.inner_eth.ethertype().0,
-        meoi_l3hlen,
-        meoi_l4proto: meta.inner_ulp.ip_protocol().0,
-        meoi_l4hlen: u8::try_from(meta.inner_ulp.packet_length())
-            .expect("L4 should never exceed 60B (max TCP options)"),
-
-        ..Default::default()
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return;
+        }
     };
 
     // Determine where to send packet based on Geneve VNI and
@@ -2231,11 +2165,6 @@ unsafe fn xde_rx_one(
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
             let len = npkt.byte_len();
-            let Ok(meoi_len) = u32::try_from(len) else {
-                opte::engine::dbg!("packet exceeds u32::MAX");
-                return;
-            };
-            ulp_meoi.meoi_len = meoi_len;
 
             // Due to possible pseudo-GRO, we need to inform mac/viona on how
             // it can split up this packet, if the guest cannot receive it
