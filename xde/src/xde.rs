@@ -1525,6 +1525,7 @@ fn guest_loopback(
                     // if necessary.
                     let pkt = if pkt
                         .offload_flags()
+                        .flags
                         .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
                     {
                         mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
@@ -1639,7 +1640,7 @@ unsafe extern "C" fn xde_mc_tx(
 unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
-    let offload_flags = pkt.offload_flags();
+    let offload_req = pkt.offload_flags();
     let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
@@ -1779,13 +1780,12 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // Boost MSS to use full jumbo frames if we know our path
             // can be served purely on internal links.
             // Recall that SDU does not include L2 size, hence 'non_eth_payl'
-            let mut flags = offload_flags;
-            let inner_mtu = if mtu_unrestricted {
-                src_dev.underlay_capab.mtu - encap_len
+            let mut flags = offload_req.flags;
+            let mss = if mtu_unrestricted {
+                src_dev.underlay_capab.mtu - encap_len - non_eth_payl_bytes
             } else {
-                u32::from(ETHERNET_MTU)
+                offload_req.mss
             };
-            let mss = inner_mtu - non_eth_payl_bytes;
 
             // As underlay devices may need to emulate tunnelled LSO, then we
             // need to strip the flag to prevent a drop, in cases where we'd
@@ -1794,7 +1794,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             if meoi_len.saturating_sub(
                 u32::try_from(Ethernet::MINIMUM_LENGTH)
                     .expect("14B < u32::MAX"),
-            ) <= inner_mtu
+            ) <= mss
             {
                 flags.remove(MblkOffloadFlags::HW_LSO);
             }
