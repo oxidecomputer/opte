@@ -237,7 +237,7 @@ impl<Q: ByteSlice> ValidGeneveOverV6<Q> {
             )
             .ok_or(MeoiError::PacketTooShort)?;
         let meoi_len =
-            u32::try_from(adj_len).map_err(|_| MeoiError::PacketTooLong)?;
+            u32::try_from(adj_len).expect("packet length exceeds u32::MAX");
         let meoi_l3hlen = u16::try_from(self.inner_l3.packet_length())
             .map_err(|_| MeoiError::L3TooLong)?;
 
@@ -262,7 +262,6 @@ impl<Q: ByteSlice> ValidGeneveOverV6<Q> {
 #[derive(Copy, Clone, Debug)]
 pub enum MeoiError {
     L3TooLong,
-    PacketTooLong,
     PacketTooShort,
 }
 
@@ -271,9 +270,6 @@ impl fmt::Display for MeoiError {
         f.write_str("meoi construction failed: ")?;
         match self {
             MeoiError::L3TooLong => f.write_str("packet L3 exceeds u16::MAX"),
-            MeoiError::PacketTooLong => {
-                f.write_str("packet length exceeds u32::MAX")
-            }
             MeoiError::PacketTooShort => {
                 f.write_str("packet length reported as shorter than encap")
             }
@@ -344,15 +340,15 @@ impl<Q: ByteSlice> ValidNoEncap<Q> {
         &self,
         pkt_len: usize,
     ) -> Result<mac_ether_offload_info_t, MeoiError> {
-        let l4_flag = match self.inner_ulp {
-            Some(ValidUlp::Tcp(_)) | Some(ValidUlp::Udp(_)) => {
-                MacEtherOffloadFlags::L4INFO_SET
-            }
-            _ => MacEtherOffloadFlags::empty(),
+        // TCP, UDP, and the ICMPs are all understood by illumos's MEOI
+        // framework.
+        let l4_flag = if self.inner_ulp.is_some() {
+            MacEtherOffloadFlags::L4INFO_SET
+        } else {
+            MacEtherOffloadFlags::empty()
         };
-
         let meoi_len =
-            u32::try_from(pkt_len).map_err(|_| MeoiError::PacketTooLong)?;
+            u32::try_from(pkt_len).expect("packet length exceeds u32::MAX");
         let meoi_l3hlen = u16::try_from(self.inner_l3.packet_length())
             .map_err(|_| MeoiError::L3TooLong)?;
 
