@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::len_without_is_empty)]
@@ -34,9 +34,7 @@ use core::fmt::Display;
 pub use ingot;
 
 #[cfg(any(feature = "api", test))]
-pub mod api {
-    pub use opte_api::*;
-}
+pub mod api;
 #[cfg(any(feature = "engine", test))]
 pub mod d_error;
 #[cfg(any(feature = "engine", test))]

@@ -23,6 +23,7 @@ use opte::engine::print::print_tcp_flows;
 use opte::engine::print::print_uft;
 use opteadm::COMMIT_COUNT;
 use opteadm::OpteAdm;
+use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -48,6 +49,7 @@ use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetExternalIpsReq;
+use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::TunnelEndpoint;
@@ -565,7 +567,7 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
-    let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
+    let hdl = OpteAdm::open()?;
 
     match cmd {
         Command::ListPorts => {
@@ -595,7 +597,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpLayer { port, name } => {
-            let resp = &hdl.get_layer_by_name(&port, &name)?;
+            let resp = &hdl.dump_layer(&port, &name)?;
             print!("Port {port} - ");
             print_layer(resp)?;
         }
@@ -605,7 +607,6 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ClearLft { port, layer } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             hdl.clear_lft(&port, &layer)?;
         }
 
@@ -622,7 +623,6 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::DumpV2B => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             print_v2b(&hdl.dump_v2b()?)?;
         }
 
@@ -633,7 +633,7 @@ fn main() -> anyhow::Result<()> {
                 action,
                 priority,
             };
-            hdl.add_firewall_rule(&port, &rule)?;
+            hdl.add_firewall_rule(&AddFwRuleReq { port_name: port, rule })?;
         }
 
         Command::SetFwRules { port } => {
@@ -645,8 +645,7 @@ fn main() -> anyhow::Result<()> {
                 rules.push(r);
             }
 
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
-            hdl.set_firewall_rules(&port, rules)?;
+            hdl.set_firewall_rules(&SetFwRulesReq { port_name: port, rules })?;
         }
 
         Command::CreateXde {
@@ -742,7 +741,6 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::SetV2B { prefix, tunnel_endpoint } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let tep = tunnel_endpoint
                 .into_iter()
                 .map(|ip| TunnelEndpoint {
@@ -755,7 +753,6 @@ fn main() -> anyhow::Result<()> {
         }
 
         Command::ClearV2B { prefix, tunnel_endpoint } => {
-            let hdl = opteadm::OpteAdm::open(OpteAdm::XDE_CTL)?;
             let tep = tunnel_endpoint
                 .into_iter()
                 .map(|ip| TunnelEndpoint {
