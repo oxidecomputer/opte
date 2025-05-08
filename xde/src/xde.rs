@@ -1775,7 +1775,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // need to strip the flag to prevent a drop, in cases where we'd
             // ask to split a packet back into... 1 segment.
             // Hardware tends to handle this without issue.
-            if meoi_len.saturating_sub(
+            if ulp_meoi.meoi_len.saturating_sub(
                 non_eth_payl_bytes
                     + u32::try_from(Ethernet::MINIMUM_LENGTH)
                         .expect("14B < u32::MAX"),
