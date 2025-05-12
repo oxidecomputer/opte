@@ -409,7 +409,7 @@ impl fmt::Display for BuildTarget {
             Self::All => "all",
             Self::OpteAdm => "opteadm",
             Self::Xde => "xde",
-            Self::XdeLink => "xdelink",
+            Self::XdeLink => "xde-link",
         })
     }
 }

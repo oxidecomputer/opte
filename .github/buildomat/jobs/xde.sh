@@ -75,10 +75,10 @@ popd
 popd
 
 header "build xde (debug)"
-ptime -m cargo xtask build --profile debug xde
+ptime -m cargo xtask build --profile debug xde xde-link
 
 header "build xde (release)"
-ptime -m cargo xtask build --profile release xde
+ptime -m cargo xtask build --profile release xde xde-link
 
 #
 # Inspect the kernel module for bad relocations in case the old
