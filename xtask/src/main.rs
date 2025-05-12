@@ -422,7 +422,12 @@ impl BuildTarget {
         match self {
             Self::OpteAdm => {
                 println!("Building opteadm ({p_name}).");
-                build_cargo_bin(&["--bin", "opteadm"], p_name, None, true)
+                build_cargo_bin(
+                    &["--bin", "opteadm"],
+                    p_name,
+                    Some("bin/opteadm"),
+                    true,
+                )
             }
             Self::Xde => {
                 println!("Building xde ({p_name}).");

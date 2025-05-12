@@ -26,8 +26,6 @@ pub mod packet;
 pub mod parse;
 pub mod port;
 pub mod predicate;
-#[cfg(any(feature = "std", test))]
-pub mod print;
 pub mod rule;
 pub mod snat;
 #[macro_use]

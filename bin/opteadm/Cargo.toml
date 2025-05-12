@@ -12,7 +12,7 @@ repository.workspace = true
 # place this feature flag will be replaced/removed.
 opte = { workspace = true, features = ["api", "std"] }
 opte-ioctl.workspace = true
-oxide-vpc = { workspace = true, features = ["api", "engine", "std"] }
+oxide-vpc = { workspace = true, features = ["api", "std"] }
 
 anyhow.workspace = true
 cfg-if.workspace = true

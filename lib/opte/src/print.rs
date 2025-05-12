@@ -9,10 +9,10 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
-use super::packet::InnerFlowId;
 use crate::api::DumpLayerResp;
 use crate::api::DumpTcpFlowsResp;
 use crate::api::DumpUftResp;
+use crate::api::InnerFlowId;
 use crate::api::TcpFlowEntryDump;
 use opte_api::ActionDescEntryDump;
 use opte_api::ListLayersResp;

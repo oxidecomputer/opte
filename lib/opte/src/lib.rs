@@ -20,6 +20,7 @@
 #[cfg_attr(feature = "engine", macro_use)]
 extern crate alloc;
 
+#[cfg(any(feature = "engine", feature = "kernel"))]
 #[macro_use]
 extern crate cfg_if;
 
@@ -43,6 +44,8 @@ pub mod ddi;
 pub mod dynamic;
 #[cfg(any(feature = "engine", test))]
 pub mod engine;
+#[cfg(any(feature = "std", test))]
+pub mod print;
 
 /// Return value with `bit` set.
 ///
