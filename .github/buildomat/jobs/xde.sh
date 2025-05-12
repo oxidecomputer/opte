@@ -45,7 +45,7 @@ DBG_SRC=target/x86_64-unknown-unknown/debug
 DBG_LINK_SRC=target/i686-unknown-illumos/debug
 DBG_TGT=$TGT_BASE/debug
 
-REL_SRC=target/x86_64-unknown-unknown/release
+REL_SRC=target/x86_64-unknown-unknown/release-lto
 REL_LINK_SRC=target/i686-unknown-illumos/release
 REL_TGT=$TGT_BASE/release
 
@@ -72,13 +72,13 @@ ptime -m cargo clippy -- \
     --allow clippy::uninlined-format-args --allow clippy::bad_bit_mask
 popd
 
+popd
+
 header "build xde (debug)"
-ptime -m ./build-debug.sh
+ptime -m cargo xtask build --profile debug xde
 
 header "build xde (release)"
-ptime -m ./build.sh
-
-popd
+ptime -m cargo xtask build --profile release xde
 
 #
 # Inspect the kernel module for bad relocations in case the old
