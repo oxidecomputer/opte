@@ -2353,9 +2353,7 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[unsafe(no_mangle)]
-fn dump_uft_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<DumpUftResp<InnerFlowId>, OpteError> {
+fn dump_uft_hdlr(env: &mut IoctlEnvelope) -> Result<DumpUftResp, OpteError> {
     let req: DumpUftReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
@@ -2368,7 +2366,7 @@ fn dump_uft_hdlr(
 #[unsafe(no_mangle)]
 fn dump_layer_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<DumpLayerResp<InnerFlowId>, OpteError> {
+) -> Result<DumpLayerResp, OpteError> {
     let req: DumpLayerReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
@@ -2381,7 +2379,7 @@ fn dump_layer_hdlr(
 #[unsafe(no_mangle)]
 fn dump_tcp_flows_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<DumpTcpFlowsResp<InnerFlowId>, OpteError> {
+) -> Result<DumpTcpFlowsResp, OpteError> {
     let req: DumpTcpFlowsReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {

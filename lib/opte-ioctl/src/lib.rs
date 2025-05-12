@@ -171,7 +171,7 @@ impl OpteHdl {
         &self,
         port_name: &str,
         name: &str,
-    ) -> Result<DumpLayerResp<InnerFlowId>, Error> {
+    ) -> Result<DumpLayerResp, Error> {
         let cmd = OpteCmd::DumpLayer;
         let req = DumpLayerReq {
             port_name: port_name.to_string(),
@@ -335,7 +335,7 @@ impl OpteHdl {
     pub fn dump_tcp_flows(
         &self,
         port_name: &str,
-    ) -> Result<DumpTcpFlowsResp<InnerFlowId>, Error> {
+    ) -> Result<DumpTcpFlowsResp, Error> {
         let cmd = OpteCmd::DumpTcpFlows;
         run_cmd_ioctl(
             self.device.as_raw_fd(),
@@ -372,10 +372,7 @@ impl OpteHdl {
     }
 
     /// Return the Unified Flow Table (UFT).
-    pub fn dump_uft(
-        &self,
-        port_name: &str,
-    ) -> Result<DumpUftResp<InnerFlowId>, Error> {
+    pub fn dump_uft(&self, port_name: &str) -> Result<DumpUftResp, Error> {
         let cmd = OpteCmd::DumpUft;
         run_cmd_ioctl(
             self.device.as_raw_fd(),

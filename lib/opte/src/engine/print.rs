@@ -10,13 +10,13 @@
 //! can be used by both opteadm and integration tests.
 
 use super::packet::InnerFlowId;
+use crate::api::DumpLayerResp;
+use crate::api::DumpTcpFlowsResp;
+use crate::api::DumpUftResp;
+use crate::api::TcpFlowEntryDump;
 use opte_api::ActionDescEntryDump;
-use opte_api::DumpLayerResp;
-use opte_api::DumpTcpFlowsResp;
-use opte_api::DumpUftResp;
 use opte_api::ListLayersResp;
 use opte_api::RuleDump;
-use opte_api::TcpFlowEntryDump;
 use opte_api::UftEntryDump;
 use std::collections::VecDeque;
 use std::io::Write;
@@ -25,14 +25,14 @@ use std::string::ToString;
 use tabwriter::TabWriter;
 
 /// Print a [`DumpLayerResp`].
-pub fn print_layer(resp: &DumpLayerResp<InnerFlowId>) -> std::io::Result<()> {
+pub fn print_layer(resp: &DumpLayerResp) -> std::io::Result<()> {
     print_layer_into(&mut std::io::stdout(), resp)
 }
 
 /// Print a [`DumpLayerResp`].
 pub fn print_layer_into(
     writer: &mut impl Write,
-    resp: &DumpLayerResp<InnerFlowId>,
+    resp: &DumpLayerResp,
 ) -> std::io::Result<()> {
     let mut t = TabWriter::new(writer);
 
@@ -105,14 +105,14 @@ pub fn print_list_layers_into(
 }
 
 /// Print a [`DumpUftResp`].
-pub fn print_uft(uft: &DumpUftResp<InnerFlowId>) -> std::io::Result<()> {
+pub fn print_uft(uft: &DumpUftResp) -> std::io::Result<()> {
     print_uft_into(&mut std::io::stdout(), uft)
 }
 
 /// Print a [`DumpUftResp`] into a given writer.
 pub fn print_uft_into(
     writer: &mut impl Write,
-    uft: &DumpUftResp<InnerFlowId>,
+    uft: &DumpUftResp,
 ) -> std::io::Result<()> {
     let mut t = TabWriter::new(writer);
 
@@ -238,16 +238,14 @@ pub fn print_uft_flow(
 }
 
 /// Print a [`DumpTcpFlowsResp`].
-pub fn print_tcp_flows(
-    flows: &DumpTcpFlowsResp<InnerFlowId>,
-) -> std::io::Result<()> {
+pub fn print_tcp_flows(flows: &DumpTcpFlowsResp) -> std::io::Result<()> {
     print_tcp_flows_into(&mut std::io::stdout(), flows)
 }
 
 /// Print a [`DumpTcpFlowsResp`] into a given writer.
 pub fn print_tcp_flows_into(
     writer: &mut impl Write,
-    flows: &DumpTcpFlowsResp<InnerFlowId>,
+    flows: &DumpTcpFlowsResp,
 ) -> std::io::Result<()> {
     let mut t = TabWriter::new(writer);
 
@@ -262,7 +260,7 @@ pub fn print_tcp_flows_into(
 fn print_tcp_flow(
     t: &mut impl Write,
     id: &InnerFlowId,
-    entry: &TcpFlowEntryDump<InnerFlowId>,
+    entry: &TcpFlowEntryDump,
 ) -> std::io::Result<()> {
     writeln!(
         t,

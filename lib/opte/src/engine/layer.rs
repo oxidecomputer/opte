@@ -30,6 +30,7 @@ use super::rule::Rule;
 use super::rule::ht_probe;
 use crate::ExecCtx;
 use crate::LogLevel;
+use crate::api::DumpLayerResp;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -52,8 +53,8 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::ActionDescEntryDump;
 use opte_api::Direction;
-use opte_api::DumpLayerResp;
 use opte_api::RuleDump;
+use opte_api::RuleId;
 use opte_api::RuleTableEntryDump;
 
 #[derive(Debug)]
@@ -143,8 +144,6 @@ impl Display for LayerResult {
         }
     }
 }
-
-pub type RuleId = u64;
 
 pub enum Error {
     RuleNotFound { id: RuleId },
@@ -550,7 +549,7 @@ impl Layer {
 
     /// Dump the contents of this layer. This is used for presenting
     /// the layer state in a human-friendly manner.
-    pub(crate) fn dump(&self) -> DumpLayerResp<InnerFlowId> {
+    pub(crate) fn dump(&self) -> DumpLayerResp {
         let rules_in = self.rules_in.dump();
         let rules_out = self.rules_out.dump();
         let ftd = self.ft.dump();

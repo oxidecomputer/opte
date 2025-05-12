@@ -85,6 +85,9 @@ impl Display for Direction {
     }
 }
 
+/// Opaque identifier for a rule within a layer.
+pub type RuleId = u64;
+
 /// Set the underlay devices used by the xde kernel module
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetXdeUnderlayReq {

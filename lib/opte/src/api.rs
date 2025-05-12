@@ -4,13 +4,14 @@
 
 // Copyright 2025 Oxide Computer Company
 
+pub use opte_api::*;
+
 use core::fmt::Display;
 use core::fmt::{self};
 #[cfg(feature = "engine")]
 use core::hash::Hash;
 #[cfg(feature = "engine")]
 use crc32fast::Hasher;
-pub use opte_api::*;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -147,3 +148,9 @@ impl Display for InnerFlowId {
         )
     }
 }
+
+// Convenience `Dump` types while `InnerFlowId` is the only flowkey allowed.
+pub type DumpLayerResp = opte_api::DumpLayerResp<InnerFlowId>;
+pub type DumpUftResp = opte_api::DumpUftResp<InnerFlowId>;
+pub type DumpTcpFlowsResp = opte_api::DumpTcpFlowsResp<InnerFlowId>;
+pub type TcpFlowEntryDump = opte_api::TcpFlowEntryDump<InnerFlowId>;

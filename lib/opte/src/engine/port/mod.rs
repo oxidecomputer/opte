@@ -27,7 +27,6 @@ use super::layer::Layer;
 use super::layer::LayerError;
 use super::layer::LayerResult;
 use super::layer::LayerStatsSnap;
-use super::layer::RuleId;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::FLOW_ID_DEFAULT;
@@ -50,6 +49,10 @@ use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use crate::ExecCtx;
+use crate::api::DumpLayerResp;
+use crate::api::DumpTcpFlowsResp;
+use crate::api::DumpUftResp;
+use crate::api::TcpFlowEntryDump;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
@@ -92,14 +95,11 @@ use ingot::types::Read;
 use ingot::udp::Udp;
 use meta::ActionMeta;
 use opte_api::Direction;
-use opte_api::DumpLayerResp;
-use opte_api::DumpTcpFlowsResp;
-use opte_api::DumpUftResp;
 use opte_api::LayerDesc;
 use opte_api::ListLayersResp;
 use opte_api::MacAddr;
 use opte_api::OpteError;
-use opte_api::TcpFlowEntryDump;
+use opte_api::RuleId;
 use opte_api::TcpFlowStateDump;
 use opte_api::TcpState;
 use opte_api::UftEntryDump;
@@ -967,7 +967,7 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid for any [`PortState`].
-    pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp<InnerFlowId>> {
+    pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp> {
         let data = self.data.read();
 
         for l in &data.layers {
@@ -988,7 +988,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
-    pub fn dump_tcp_flows(&self) -> Result<DumpTcpFlowsResp<InnerFlowId>> {
+    pub fn dump_tcp_flows(&self) -> Result<DumpTcpFlowsResp> {
         let data = self.data.read();
         check_state!(
             data.state,
@@ -1041,7 +1041,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
-    pub fn dump_uft(&self) -> Result<DumpUftResp<InnerFlowId>> {
+    pub fn dump_uft(&self) -> Result<DumpUftResp> {
         let data = self.data.read();
 
         check_state!(
@@ -2992,7 +2992,7 @@ impl Display for TcpFlowEntryState {
 }
 
 impl Dump for TcpFlowEntryStateInner {
-    type DumpVal = TcpFlowEntryDump<InnerFlowId>;
+    type DumpVal = TcpFlowEntryDump;
 
     fn dump(&self, hits: u64) -> Self::DumpVal {
         TcpFlowEntryDump {
@@ -3008,7 +3008,7 @@ impl Dump for TcpFlowEntryStateInner {
 }
 
 impl Dump for TcpFlowEntryState {
-    type DumpVal = TcpFlowEntryDump<InnerFlowId>;
+    type DumpVal = TcpFlowEntryDump;
 
     fn dump(&self, hits: u64) -> Self::DumpVal {
         let inner = self.inner.lock();
