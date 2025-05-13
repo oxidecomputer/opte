@@ -593,14 +593,13 @@ dependencies = [
 [[package]]
 name = "dlpi"
 version = "0.2.0"
-source = "git+https://github.com/oxidecomputer/dlpi-sys#7d1aa141836c9d1ae7729b3037c5d1dbcb41decc"
+source = "git+https://github.com/oxidecomputer/dlpi-sys#065d2c64e4ba9450b14fceb917a573db19ddf632"
 dependencies = [
  "libc",
  "libdlpi-sys",
  "num_enum",
  "pretty-hex",
  "thiserror 2.0.12",
- "tokio",
 ]
 
 [[package]]
@@ -1078,7 +1077,7 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 [[package]]
 name = "libdlpi-sys"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/dlpi-sys#7d1aa141836c9d1ae7729b3037c5d1dbcb41decc"
+source = "git+https://github.com/oxidecomputer/dlpi-sys#065d2c64e4ba9450b14fceb917a573db19ddf632"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -1093,7 +1092,7 @@ dependencies = [
 [[package]]
 name = "libnet"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#7f01a5e52526e50fa889f665442c7a6a4ffac1b4"
+source = "git+https://github.com/oxidecomputer/netadm-sys?branch=main#a1d64b04293b186d50dbe4a1cfecaa81529b0e18"
 dependencies = [
  "anyhow",
  "cfg-if",
