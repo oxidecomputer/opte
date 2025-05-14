@@ -2128,7 +2128,7 @@ unsafe extern "C" fn xde_rx_2(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
     out_mp_tail: *mut *mut mblk_t,
-    out_count: *mut c_int,
+    out_count: *mut c_uint,
     out_len: *mut usize,
 ) -> *mut mblk_t {
     __dtrace_probe_rx(mp_chain as uintptr_t);
@@ -2180,15 +2180,21 @@ unsafe extern "C" fn xde_rx_2(
         .unwrap_or((ptr::null_mut(), ptr::null_mut()));
 
     if let Some(len_ptr) = NonNull::new(out_len) {
-        *len_ptr.as_ptr() = len;
+        unsafe {
+            *len_ptr.as_ptr() = len;
+        }
     }
 
     if let Some(count_ptr) = NonNull::new(out_count) {
-        *count_ptr.as_ptr() = count;
+        unsafe {
+            *count_ptr.as_ptr() = count;
+        }
     }
 
     if let Some(tail_ptr) = NonNull::new(out_mp_tail) {
-        *tail_ptr.as_ptr() = tail;
+        unsafe {
+            *tail_ptr.as_ptr() = tail;
+        }
     }
 
     head

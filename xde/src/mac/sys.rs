@@ -80,7 +80,7 @@ pub type mac_siphon_fn = unsafe extern "C" fn(
     *mut c_void,
     *mut mblk_t,
     *mut *mut mblk_t,
-    *mut c_int,
+    *mut c_uint,
     *mut usize,
 ) -> *mut mblk_t;
 
