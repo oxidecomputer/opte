@@ -158,6 +158,13 @@ impl MsgBlkChain {
             self.0 = Some(MsgBlkChainInner { head: pkt, tail: pkt });
         }
     }
+
+    /// TODO: cleanup.
+    pub fn unwrap_mblk_and_tail(
+        mut self,
+    ) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)> {
+        self.0.take().map(|v| (v.head, v.tail))
+    }
 }
 
 impl AsMblk for MsgBlkChain {

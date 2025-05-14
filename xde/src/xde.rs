@@ -50,6 +50,7 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
+use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
@@ -2126,7 +2127,9 @@ unsafe extern "C" fn xde_rx(
 unsafe extern "C" fn xde_rx_2(
     arg: *mut c_void,
     mp_chain: *mut mblk_t,
-    _is_loopback: boolean_t,
+    out_mp_tail: *mut *mut mblk_t,
+    out_count: *mut c_int,
+    out_len: *mut usize,
 ) -> *mut mblk_t {
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
@@ -2150,7 +2153,10 @@ unsafe extern "C" fn xde_rx_2(
         return ptr::null_mut();
     };
 
+    let do_len = !out_len.is_null();
     let mut out_chain = MsgBlkChain::empty();
+    let mut count = 0;
+    let mut len = 0;
 
     // TODO: In future we may want to batch packets for further tx
     // by the mch they're being targeted to. E.g., either build a list
@@ -2159,12 +2165,33 @@ unsafe extern "C" fn xde_rx_2(
     while let Some(pkt) = chain.pop_front() {
         unsafe {
             if let Some(pkt) = xde_rx_one(&stream, ptr::null_mut(), pkt) {
+                count += 1;
+                if do_len {
+                    len += pkt.byte_len();
+                }
                 out_chain.append(pkt);
             }
         }
     }
 
-    out_chain.unwrap_mblk().map(|v| v.as_ptr()).unwrap_or(ptr::null_mut())
+    let (head, tail) = out_chain
+        .unwrap_mblk_and_tail()
+        .map(|v| (v.0.as_ptr(), v.1.as_ptr()))
+        .unwrap_or((ptr::null_mut(), ptr::null_mut()));
+
+    if let Some(len_ptr) = NonNull::new(out_len) {
+        *len_ptr.as_ptr() = len;
+    }
+
+    if let Some(count_ptr) = NonNull::new(out_count) {
+        *count_ptr.as_ptr() = count;
+    }
+
+    if let Some(tail_ptr) = NonNull::new(out_mp_tail) {
+        *tail_ptr.as_ptr() = tail;
+    }
+
+    head
 }
 
 #[inline]

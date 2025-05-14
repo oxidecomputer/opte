@@ -76,8 +76,13 @@ pub type mac_rx_fn = unsafe extern "C" fn(
     *mut mblk_t,
     boolean_t,
 );
-pub type mac_siphon_fn =
-    unsafe extern "C" fn(*mut c_void, *mut mblk_t, boolean_t) -> *mut mblk_t;
+pub type mac_siphon_fn = unsafe extern "C" fn(
+    *mut c_void,
+    *mut mblk_t,
+    *mut *mut mblk_t,
+    *mut c_int,
+    *mut usize,
+) -> *mut mblk_t;
 
 unsafe extern "C" {
     pub type mac_handle;
