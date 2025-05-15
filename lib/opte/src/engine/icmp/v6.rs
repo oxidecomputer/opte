@@ -101,11 +101,12 @@ impl HairpinAction for Icmpv6EchoReply {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::EchoRequest).into(),
+            ]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmpv6MsgType(
-            MessageType::from(Icmpv6Message::EchoRequest).into(),
-        )];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -228,14 +229,13 @@ impl HairpinAction for RouterAdvertisement {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            // This must be a Router Solicitation message.
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::RouterSolicit).into(),
+            ]),
         ];
 
-        let data_preds = vec![
-            // This must be a Router Solicitation message.
-            DataPredicate::Icmpv6MsgType(
-                MessageType::from(Icmpv6Message::RouterSolicit).into(),
-            ),
-        ];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -551,14 +551,13 @@ impl HairpinAction for NeighborAdvertisement {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            // This must be an actual Neighbor Solicitation message
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
+            ]),
         ];
 
-        let data_preds = vec![
-            // This must be an actual Neighbor Solicitation message
-            DataPredicate::Icmpv6MsgType(
-                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
-            ),
-        ];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
