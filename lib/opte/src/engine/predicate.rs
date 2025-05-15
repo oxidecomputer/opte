@@ -206,29 +206,6 @@ impl MatchExact<u16> for u16 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum PortMatch {
-    Exact(u16),
-}
-
-impl PortMatch {
-    fn matches(&self, flow_port: u16) -> bool {
-        match self {
-            Self::Exact(port) => flow_port.match_exact(port),
-        }
-    }
-}
-
-impl Display for PortMatch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use PortMatch::*;
-
-        match self {
-            Exact(port) => write!(f, "{}", port),
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Predicate {
     InnerEtherType(Vec<EtherTypeMatch>),
@@ -239,8 +216,12 @@ pub enum Predicate {
     InnerSrcIp6(Vec<Ipv6AddrMatch>),
     InnerDstIp6(Vec<Ipv6AddrMatch>),
     InnerIpProto(Vec<IpProtoMatch>),
-    InnerSrcPort(Vec<PortMatch>),
-    InnerDstPort(Vec<PortMatch>),
+    InnerSrcPort(Vec<Match<u16>>),
+    InnerDstPort(Vec<Match<u16>>),
+    IcmpMsgType(Vec<Match<IcmpMessageType>>),
+    IcmpMsgCode(Vec<Match<u8>>),
+    Icmpv6MsgType(Vec<Match<Icmpv6MessageType>>),
+    Icmpv6MsgCode(Vec<Match<u8>>),
     Not(Box<Predicate>),
     Meta(String, String),
 }
@@ -338,6 +319,42 @@ impl Display for Predicate {
                     .collect::<Vec<String>>()
                     .join(",");
                 write!(f, "inner.ulp.dst={}", s)
+            }
+
+            IcmpMsgType(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.icmp.type={}", s)
+            }
+
+            IcmpMsgCode(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.icmp.code={}", s)
+            }
+
+            Icmpv6MsgType(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.icmp.type={}", s)
+            }
+
+            Icmpv6MsgCode(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "inner.icmp.code={}", s)
             }
 
             Meta(key, val) => {
@@ -484,7 +501,7 @@ impl Predicate {
 
                     Some(port) => {
                         for m in list {
-                            if m.matches(port) {
+                            if m.is_match(&port) {
                                 return true;
                             }
                         }
@@ -499,10 +516,62 @@ impl Predicate {
 
                     Some(port) => {
                         for m in list {
-                            if m.matches(port) {
+                            if m.is_match(&port) {
                                 return true;
                             }
                         }
+                    }
+                }
+            }
+
+            Self::IcmpMsgType(list) => {
+                let Some(icmp) = meta.inner_icmp() else {
+                    // This isn't an ICMPv4 packet at all
+                    return false;
+                };
+
+                for mt in list {
+                    if mt.is_match(&IcmpMessageType::from(icmp.ty().0)) {
+                        return true;
+                    }
+                }
+            }
+
+            Self::IcmpMsgCode(list) => {
+                let Some(icmp) = meta.inner_icmp() else {
+                    // This isn't an ICMPv4 packet at all
+                    return false;
+                };
+
+                for mt in list {
+                    if mt.is_match(&icmp.code()) {
+                        return true;
+                    }
+                }
+            }
+
+            Self::Icmpv6MsgType(list) => {
+                let Some(icmp6) = meta.inner_icmp6() else {
+                    // This isn't an ICMPv6 packet at all
+                    return false;
+                };
+
+                for mt in list {
+                    if mt.is_match(&Icmpv6MessageType::from(icmp6.ty().0)) {
+                        return true;
+                    }
+                }
+            }
+
+            Self::Icmpv6MsgCode(list) => {
+                let Some(icmp6) = meta.inner_icmp6() else {
+                    // This isn't an ICMPv6 packet at all
+                    return false;
+                };
+
+                for mt in list {
+                    if mt.is_match(&icmp6.code()) {
+                        return true;
                     }
                 }
             }
@@ -547,17 +616,19 @@ impl<T> From<T> for Match<T> {
     }
 }
 
-impl<T> From<RangeInclusive<T>> for Match<T> {
+impl<T: PartialEq + Clone> From<RangeInclusive<T>> for Match<T> {
     fn from(value: RangeInclusive<T>) -> Self {
-        Match::Range(value)
+        match (value.start(), value.end()) {
+            (a, b) if a == b => Match::Exact(a.clone()),
+            _ => Match::Range(value),
+        }
     }
 }
 
+// XXX The Icmp types/codes should be Normal Predicates!!
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
     DhcpMsgType(Match<DhcpMessageType>),
-    IcmpMsgType(Match<IcmpMessageType>),
-    Icmpv6MsgType(Match<Icmpv6MessageType>),
     Dhcpv6MsgType(Match<Dhcpv6MessageType>),
     Not(Box<DataPredicate>),
 }
@@ -569,14 +640,6 @@ impl Display for DataPredicate {
         match self {
             DhcpMsgType(mt) => {
                 write!(f, "dhcp.msg_type{mt}")
-            }
-
-            IcmpMsgType(mt) => {
-                write!(f, "icmp.msg_type{mt}")
-            }
-
-            Icmpv6MsgType(mt) => {
-                write!(f, "icmpv6.msg_type{mt}")
             }
 
             Dhcpv6MsgType(mt) => {
@@ -624,24 +687,6 @@ impl DataPredicate {
                 };
 
                 mt.is_match(&DhcpMessageType::from(dhcp.message_type))
-            }
-
-            Self::IcmpMsgType(mt) => {
-                let Some(icmp) = meta.inner_icmp() else {
-                    // This isn't an ICMPv4 packet at all
-                    return false;
-                };
-
-                mt.is_match(&IcmpMessageType::from(icmp.ty().0))
-            }
-
-            Self::Icmpv6MsgType(mt) => {
-                let Some(icmp6) = meta.inner_icmp6() else {
-                    // This isn't an ICMPv6 packet at all
-                    return false;
-                };
-
-                mt.is_match(&Icmpv6MessageType::from(icmp6.ty().0))
             }
 
             Self::Dhcpv6MsgType(mt) => {

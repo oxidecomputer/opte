@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The Oxide VPC firewall.
 //!
@@ -36,11 +36,11 @@ use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::IpProtoMatch;
 use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::Ipv6AddrMatch;
-use opte::engine::predicate::PortMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
+use std::collections::BTreeSet;
 
 pub const FW_LAYER_NAME: &str = "firewall";
 
@@ -215,8 +215,31 @@ impl Ports {
             Ports::Any => None,
 
             Ports::PortList(ports) => {
-                let mlist =
-                    ports.iter().map(|p| PortMatch::Exact(*p)).collect();
+                // TODO: We may want to reshape the controlplane API to make
+                // this more direct. We'd probably still want to optimise what
+                // they tell us at this stage, though.
+                let ports: BTreeSet<_> = ports.iter().copied().collect();
+
+                let mut mlist = vec![];
+                let mut curr_range = None;
+                for port in ports {
+                    let range = curr_range.get_or_insert_with(|| port..=port);
+                    let end = *range.end();
+                    if port <= end {
+                        // Created new.
+                    } else if port == end + 1 {
+                        // Extend range
+                        *range = *range.start()..=port;
+                    } else {
+                        // Finalise.
+                        let mut temp = port..=port;
+                        core::mem::swap(&mut temp, range);
+                        mlist.push(temp.into());
+                    }
+                }
+                if let Some(range) = curr_range.take() {
+                    mlist.push(range.into());
+                }
                 Some(Predicate::InnerDstPort(mlist))
             }
         }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
@@ -30,7 +30,7 @@ use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
 use crate::engine::predicate::Ipv6AddrMatch;
-use crate::engine::predicate::PortMatch;
+use crate::engine::predicate::Match;
 use crate::engine::predicate::Predicate;
 use crate::engine::rule::AllowOrDeny;
 use crate::engine::rule::GenPacketResult;
@@ -288,9 +288,9 @@ fn dhcpv6_server_predicates(client_mac: &MacAddr) -> Vec<Predicate> {
         // DHCPv6 runs over UDP
         Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
         // Request must be from the client port
-        Predicate::InnerSrcPort(vec![PortMatch::Exact(CLIENT_PORT)]),
+        Predicate::InnerSrcPort(vec![Match::Exact(CLIENT_PORT)]),
         // and destined to the server port
-        Predicate::InnerDstPort(vec![PortMatch::Exact(SERVER_PORT)]),
+        Predicate::InnerDstPort(vec![Match::Exact(SERVER_PORT)]),
     ]
 }
 
