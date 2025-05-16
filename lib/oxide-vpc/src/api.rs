@@ -22,6 +22,9 @@ use uuid::Uuid;
 /// This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =
     MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
+/// The default VNI ID which OPTE uses for outbound packets directed at a
+/// tunnel endpoint.
+pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
 
 /// Description of Boundary Services, the endpoint used to route traffic
 /// to external networks.

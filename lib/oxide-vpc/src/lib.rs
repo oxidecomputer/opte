@@ -38,3 +38,6 @@ pub mod engine;
 
 #[cfg(any(feature = "engine", test))]
 pub mod cfg;
+
+#[cfg(any(feature = "std", test))]
+pub mod print;
