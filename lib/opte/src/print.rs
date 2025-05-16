@@ -205,9 +205,9 @@ pub fn print_lft_flow(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.protocol(),
         flow_id.src_ip(),
-        flow_id.src_port,
+        flow_id.proto_info[0],
         flow_id.dst_ip(),
-        flow_id.dst_port,
+        flow_id.proto_info[1],
         flow_entry.hits,
         flow_entry.summary,
     )
@@ -229,9 +229,9 @@ pub fn print_uft_flow(
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.protocol(),
         flow_id.src_ip(),
-        flow_id.src_port,
+        flow_id.proto_info[0],
         flow_id.dst_ip(),
-        flow_id.dst_port,
+        flow_id.proto_info[1],
         flow_entry.hits,
         flow_entry.summary,
     )

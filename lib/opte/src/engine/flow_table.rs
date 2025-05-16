@@ -390,6 +390,7 @@ impl Dump for () {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::api::PortInfo;
     use crate::engine::ip::v4::Protocol;
     use crate::engine::packet::AddrPair;
     use crate::engine::packet::FLOW_ID_DEFAULT;
@@ -405,8 +406,7 @@ mod test {
                 src: "192.168.2.10".parse().unwrap(),
                 dst: "76.76.21.21".parse().unwrap(),
             },
-            src_port: 37890,
-            dst_port: 443,
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
         let mut ft =
@@ -431,8 +431,7 @@ mod test {
                 src: "192.168.2.10".parse().unwrap(),
                 dst: "76.76.21.21".parse().unwrap(),
             },
-            src_port: 37890,
-            dst_port: 443,
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
         let mut ft =
