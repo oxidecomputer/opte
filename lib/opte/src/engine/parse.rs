@@ -7,6 +7,10 @@
 //! Constructs used in packet parsing, such as choices over protocol
 //! and complete packet definitions.
 
+use crate::api::Icmpv4Info;
+use crate::api::Icmpv6Info;
+use crate::api::PortInfo;
+
 use super::LightweightMeta;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
@@ -313,16 +317,29 @@ fn flow_id<V: ByteSlice>(
         None => (255, FLOW_ID_DEFAULT.addrs),
     };
 
-    let (src_port, dst_port) = ulp
-        .map(|ulp| {
-            (
-                ulp.true_src_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
-                ulp.true_dst_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
-            )
-        })
-        .unwrap_or((0, 0));
+    let proto_info = match ulp {
+        Some(ValidUlp::Tcp(t)) => {
+            PortInfo { src_port: t.source(), dst_port: t.destination() }.into()
+        }
+        Some(ValidUlp::Udp(u)) => {
+            PortInfo { src_port: u.source(), dst_port: u.destination() }.into()
+        }
+        Some(ValidUlp::IcmpV4(v4)) => Icmpv4Info {
+            ty: v4.ty().0,
+            code: v4.code(),
+            id: v4.echo_id().unwrap_or_default(),
+        }
+        .into(),
+        Some(ValidUlp::IcmpV6(v6)) => Icmpv6Info {
+            ty: v6.ty().0,
+            code: v6.code(),
+            id: v6.echo_id().unwrap_or_default(),
+        }
+        .into(),
+        _ => Default::default(),
+    };
 
-    InnerFlowId { proto, addrs, src_port, dst_port }
+    InnerFlowId { proto, addrs, proto_info }
 }
 
 #[derive(Parse)]

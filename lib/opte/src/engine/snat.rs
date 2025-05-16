@@ -28,6 +28,9 @@ use super::rule::Resource;
 use super::rule::ResourceEntry;
 use super::rule::ResourceError;
 use super::rule::StatefulAction;
+use crate::api::IcmpInfo;
+use crate::api::L4Info;
+use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
 use crate::engine::icmp::QueryEcho;
 use alloc::collections::btree_map::BTreeMap;
@@ -306,8 +309,15 @@ where
         pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
-        let priv_port = flow_id.src_port;
         let proto = flow_id.protocol();
+        let priv_port = match flow_id.l4_info() {
+            Some(L4Info::Ports(PortInfo { src_port, .. })) => Ok(*src_port),
+            Some(L4Info::Icmpv4(IcmpInfo { id, .. })) => Ok(*id),
+            Some(L4Info::Icmpv6(IcmpInfo { id, .. })) => Ok(*id),
+            _ => Err(GenDescError::Unexpected {
+                msg: format!("SNAT pool (unexpected ULP: {})", proto),
+            }),
+        }?;
         let is_icmp = proto == T::MESSAGE_PROTOCOL;
         let pool = match proto {
             Protocol::TCP => &self.tcp_pool,
