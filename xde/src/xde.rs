@@ -63,9 +63,19 @@ use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use ingot::udp::Udp;
 use opte::ExecCtx;
+use opte::api::ClearLftReq;
+use opte::api::ClearUftReq;
 use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::DumpLayerReq;
+use opte::api::DumpLayerResp;
+use opte::api::DumpTcpFlowsReq;
+use opte::api::DumpTcpFlowsResp;
+use opte::api::DumpUftReq;
+use opte::api::DumpUftResp;
+use opte::api::ListLayersReq;
+use opte::api::ListLayersResp;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -89,7 +99,6 @@ use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
-use opte::engine::ioctl::{self as api};
 use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
@@ -2309,8 +2318,8 @@ fn dump_v2b_hdlr(
 #[unsafe(no_mangle)]
 fn list_layers_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<api::ListLayersResp, OpteError> {
-    let req: api::ListLayersReq = env.copy_in_req()?;
+) -> Result<ListLayersResp, OpteError> {
+    let req: ListLayersReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
@@ -2321,7 +2330,7 @@ fn list_layers_hdlr(
 
 #[unsafe(no_mangle)]
 fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: api::ClearUftReq = env.copy_in_req()?;
+    let req: ClearUftReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
@@ -2333,7 +2342,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 
 #[unsafe(no_mangle)]
 fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
-    let req: api::ClearLftReq = env.copy_in_req()?;
+    let req: ClearLftReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
@@ -2344,10 +2353,8 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[unsafe(no_mangle)]
-fn dump_uft_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<api::DumpUftResp, OpteError> {
-    let req: api::DumpUftReq = env.copy_in_req()?;
+fn dump_uft_hdlr(env: &mut IoctlEnvelope) -> Result<DumpUftResp, OpteError> {
+    let req: DumpUftReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
@@ -2359,27 +2366,27 @@ fn dump_uft_hdlr(
 #[unsafe(no_mangle)]
 fn dump_layer_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<api::DumpLayerResp, OpteError> {
-    let req: api::DumpLayerReq = env.copy_in_req()?;
+) -> Result<DumpLayerResp, OpteError> {
+    let req: DumpLayerReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
 
-    api::dump_layer(&dev.port, &req)
+    dev.port.dump_layer(&req.name)
 }
 
 #[unsafe(no_mangle)]
 fn dump_tcp_flows_hdlr(
     env: &mut IoctlEnvelope,
-) -> Result<api::DumpTcpFlowsResp, OpteError> {
-    let req: api::DumpTcpFlowsReq = env.copy_in_req()?;
+) -> Result<DumpTcpFlowsResp, OpteError> {
+    let req: DumpTcpFlowsReq = env.copy_in_req()?;
     let devs = xde_devs().read();
     let Some(dev) = devs.get_by_name(&req.port_name) else {
         return Err(OpteError::PortNotFound(req.port_name));
     };
 
-    api::dump_tcp_flows(&dev.port, &req)
+    dev.port.dump_tcp_flows()
 }
 
 #[unsafe(no_mangle)]

@@ -18,7 +18,6 @@ pub mod geneve;
 #[macro_use]
 pub mod headers;
 pub mod icmp;
-pub mod ioctl;
 pub mod ip;
 pub mod layer;
 pub mod nat;
@@ -27,8 +26,6 @@ pub mod packet;
 pub mod parse;
 pub mod port;
 pub mod predicate;
-#[cfg(any(feature = "std", test))]
-pub mod print;
 pub mod rule;
 pub mod snat;
 #[macro_use]

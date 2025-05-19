@@ -34,7 +34,7 @@ source .github/buildomat/common.sh
 #
 TGT_BASE=${TGT_BASE:=/work}
 
-REL_SRC=target/x86_64-unknown-unknown/release
+REL_SRC=target/x86_64-unknown-unknown/release-lto
 REL_TGT=$TGT_BASE/release
 
 mkdir -p $REL_TGT
@@ -43,7 +43,7 @@ cargo --version
 rustc --version
 
 header "build xde and opteadm (release+debug)"
-ptime -m cargo xtask build
+ptime -m cargo xtask build --profile all
 
 #
 # Inspect the kernel module for bad relocations in case the old
@@ -55,7 +55,7 @@ if elfdump $REL_SRC/xde | grep GOTPCREL; then
 fi
 
 header "package opte"
-cargo xtask package --skip-build
+cargo xtask package --skip-build --profile all
 
 banner copy
 pfexec mkdir -p /out

@@ -8,10 +8,10 @@
 
 use super::*;
 use opte::engine::port::*;
-use opte::engine::print::*;
+use opte::print::*;
 use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::overlay::VpcMappings;
-use oxide_vpc::engine::print::*;
+use oxide_vpc::print::*;
 use std::collections::BTreeMap;
 use std::io::Write;
 

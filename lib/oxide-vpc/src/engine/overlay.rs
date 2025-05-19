@@ -555,7 +555,6 @@ pub struct Virt2Boundary {
     pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
 }
 
-pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
 pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
 
 impl Virt2Boundary {

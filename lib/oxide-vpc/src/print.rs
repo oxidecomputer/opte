@@ -15,8 +15,8 @@ use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
 use opte::api::IpCidr;
-use opte::engine::geneve::Vni;
-use opte::engine::print::*;
+use opte::api::Vni;
+use opte::print::*;
 use std::io::Write;
 use tabwriter::TabWriter;
 

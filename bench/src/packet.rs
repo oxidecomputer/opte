@@ -25,7 +25,6 @@ use opte_test_utils::icmp::RawHardwareAddress;
 use opte_test_utils::icmp::gen_icmp_echo;
 use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
-use opte_test_utils::overlay::BOUNDARY_SERVICES_VNI;
 use opte_test_utils::*;
 
 pub type TestCase = (MsgBlk, Direction);

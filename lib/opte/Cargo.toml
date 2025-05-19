@@ -9,8 +9,17 @@ repository.workspace = true
 [features]
 default = ["api", "std"]
 api = []
-engine = ["api", "dep:crc32fast", "dep:derror-macro", "dep:heapless", "dep:itertools", "dep:zerocopy"]
-kernel = ["illumos-sys-hdrs/kernel"]
+engine = [
+	"api",
+	"dep:cfg-if",
+	"dep:crc32fast",
+	"dep:derror-macro",
+	"dep:heapless",
+	"dep:itertools",
+	"dep:smoltcp",
+	"dep:zerocopy"
+]
+kernel = ["illumos-sys-hdrs/kernel", "dep:cfg-if"]
 # This feature indicates that OPTE is being built with std. This is
 # mostly useful to consumers of the API, providing convenient methods
 # for working with the API types in a std context.
@@ -30,7 +39,7 @@ opte-api.workspace = true
 ingot.workspace = true
 
 bitflags = { workspace = true , features = ["serde"] }
-cfg-if.workspace = true
+cfg-if = { workspace = true, optional = true }
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true
 heapless = { workspace = true, optional = true }
@@ -43,6 +52,7 @@ zerocopy = { workspace = true, optional = true }
 
 [dependencies.smoltcp]
 workspace = true
+optional = true
 default-features = false
 #
 # TODO Would defmt be of any use?

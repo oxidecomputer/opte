@@ -2,22 +2,22 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Print comannd responses in human-friendly manner.
 //!
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
-use super::ioctl::ActionDescEntryDump;
-use super::ioctl::DumpLayerResp;
-use super::ioctl::DumpTcpFlowsResp;
-use super::ioctl::DumpUftResp;
-use super::ioctl::ListLayersResp;
-use super::ioctl::RuleDump;
-use super::ioctl::TcpFlowEntryDump;
-use super::ioctl::UftEntryDump;
-use super::packet::InnerFlowId;
+use crate::api::DumpLayerResp;
+use crate::api::DumpTcpFlowsResp;
+use crate::api::DumpUftResp;
+use crate::api::InnerFlowId;
+use crate::api::TcpFlowEntryDump;
+use opte_api::ActionDescEntryDump;
+use opte_api::ListLayersResp;
+use opte_api::RuleDump;
+use opte_api::UftEntryDump;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::string::String;
