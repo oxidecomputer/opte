@@ -50,7 +50,7 @@ pub trait AsMblk {
     ///
     /// If the chain contains a single element, then the tail will be equal to the
     /// head.
-    fn unwrap_mblk_and_tail(self) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)>
+    fn unwrap_head_and_tail(self) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)>
     where
         Self: Sized,
     {
@@ -188,7 +188,7 @@ impl AsMblk for MsgBlkChain {
         self.0.take().map(|v| v.head)
     }
 
-    fn unwrap_mblk_and_tail(
+    fn unwrap_head_and_tail(
         mut self,
     ) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)> {
         self.0.take().map(|v| (v.head, v.tail))
@@ -860,7 +860,7 @@ impl AsMblk for MsgBlk {
         Some(ptr_out)
     }
 
-    fn unwrap_mblk_and_tail(
+    fn unwrap_head_and_tail(
         self,
     ) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)> {
         // MsgBlk represents a single `mblk_t` with NULL `b_next`.

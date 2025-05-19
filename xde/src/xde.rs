@@ -233,7 +233,7 @@ fn bad_packet_probe(
 
 /// Underlay port state.
 #[derive(Debug)]
-pub struct xde_underlay_port {
+pub struct XdeUnderlayPort {
     /// Name of the link being used for this underlay port.
     pub name: String,
 
@@ -264,8 +264,8 @@ struct XdeState {
 struct UnderlayState {
     // each xde driver has a handle to two underlay ports that are used for I/O
     // onto the underlay network
-    u1: Arc<xde_underlay_port>,
-    u2: Arc<xde_underlay_port>,
+    u1: Arc<XdeUnderlayPort>,
+    u2: Arc<XdeUnderlayPort>,
     shared_props: OffloadInfo,
 }
 
@@ -332,8 +332,8 @@ pub struct XdeDev {
 
     // These are clones of the underlay ports initialized by the
     // driver.
-    pub u1: Arc<xde_underlay_port>,
-    pub u2: Arc<xde_underlay_port>,
+    pub u1: Arc<XdeUnderlayPort>,
+    pub u2: Arc<XdeUnderlayPort>,
     underlay_capab: OffloadInfo,
 
     // We make this a per-port cache rather than sharing between all
@@ -1100,7 +1100,7 @@ fn create_underlay_port(
     link_name: String,
     // This parameter is likely to be used as part of the flows work.
     _mc_name: &str,
-) -> Result<(xde_underlay_port, OffloadInfo), OpteError> {
+) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
     let link_cstr = CString::new(link_name.as_str()).unwrap();
 
     let link_id =
@@ -1136,7 +1136,7 @@ fn create_underlay_port(
     let lso_state = mh.get_lso_capabs();
 
     Ok((
-        xde_underlay_port {
+        XdeUnderlayPort {
             name: link_name,
             mac: mh.get_mac_addr(),
             mtu,
@@ -2054,10 +2054,10 @@ unsafe extern "C" fn xde_rx(
     // corresponding to the underlay port we're receiving on (derived from
     // `DlsStream`). Being here in the callback means the `MacSiphon` hasn't
     // been dropped yet, and thus our `MacClientHandle` is also still valid.
-    let stream: Arc<DlsStream> = unsafe {
-        let mch_ptr = arg as *const DlsStream;
-        Arc::increment_strong_count(mch_ptr);
-        Arc::from_raw(mch_ptr)
+    let stream = unsafe {
+        (arg as *const DlsStream)
+            .as_ref()
+            .expect("packet was received from siphon with a NULL argument")
     };
 
     let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
@@ -2080,7 +2080,7 @@ unsafe extern "C" fn xde_rx(
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
         unsafe {
-            if let Some(pkt) = xde_rx_one(&stream, ptr::null_mut(), pkt) {
+            if let Some(pkt) = xde_rx_one(&stream, pkt) {
                 count += 1;
                 len += pkt.byte_len();
                 out_chain.append(pkt);
@@ -2089,7 +2089,7 @@ unsafe extern "C" fn xde_rx(
     }
 
     let (head, tail) = out_chain
-        .unwrap_mblk_and_tail()
+        .unwrap_head_and_tail()
         .map(|v| (v.0.as_ptr(), v.1.as_ptr()))
         .unwrap_or((ptr::null_mut(), ptr::null_mut()));
 
@@ -2114,12 +2114,12 @@ unsafe extern "C" fn xde_rx(
     head
 }
 
+/// Processes an individual packet receiver on the underlay device `stream`.
+///
+/// This function returns any input `pkt` which is not of interest to XDE (e.g.,
+/// the packet is not Geneve over v6, or no matching OPTE port could be found).
 #[inline]
-unsafe fn xde_rx_one(
-    stream: &DlsStream,
-    mrh: *mut mac::mac_resource_handle,
-    mut pkt: MsgBlk,
-) -> Option<MsgBlk> {
+unsafe fn xde_rx_one(stream: &DlsStream, mut pkt: MsgBlk) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
     // We must first parse the packet in order to determine where it
@@ -2179,7 +2179,7 @@ unsafe fn xde_rx_one(
     if dev.passthrough {
         drop(parsed_pkt);
         unsafe {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
         }
         return None;
     }
@@ -2190,7 +2190,7 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => unsafe {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
         },
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
@@ -2215,7 +2215,11 @@ unsafe fn xde_rx_one(
             }
 
             unsafe {
-                mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
+                mac::mac_rx(
+                    dev.mh,
+                    ptr::null_mut(),
+                    npkt.unwrap_mblk().as_ptr(),
+                );
             }
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
