@@ -797,9 +797,10 @@ impl MsgBlk {
 
     /// Return the offloads currently requested by a packet.
     #[cfg_attr(any(feature = "std", test), allow(unused))]
-    pub fn offload_flags(&self) -> MblkOffloadFlags {
+    pub fn offload_flags(&self) -> MblkOffloadInfo {
         let mut cso_out = 0u32;
         let mut lso_out = 0u32;
+        let mut mss = 0u32;
 
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
@@ -813,13 +814,21 @@ impl MsgBlk {
             );
             illumos_sys_hdrs::mac::mac_lso_get(
                 self.0.as_ptr(),
-                ptr::null_mut(),
+                &raw mut mss,
                 &raw mut lso_out,
             );
         };
 
-        MblkOffloadFlags::from_bits_retain(cso_out | lso_out)
+        MblkOffloadInfo {
+            flags: MblkOffloadFlags::from_bits_retain(cso_out | lso_out),
+            mss,
+        }
     }
+}
+
+pub struct MblkOffloadInfo {
+    pub flags: MblkOffloadFlags,
+    pub mss: u32,
 }
 
 impl AsMblk for MsgBlk {

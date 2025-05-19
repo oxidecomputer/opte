@@ -35,6 +35,9 @@ use super::packet::MismatchError;
 use super::packet::OpteMeta;
 use super::packet::ParseError;
 use super::rule::CompiledTransform;
+use core::fmt;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use ingot::Parse;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
@@ -123,6 +126,16 @@ impl<B: ByteSlice> ValidUlp<B> {
 
         csum != 0
     }
+
+    #[inline]
+    pub fn ip_protocol(&self) -> IpProtocol {
+        match self {
+            ValidUlp::Tcp(_) => IpProtocol::TCP,
+            ValidUlp::Udp(_) => IpProtocol::UDP,
+            ValidUlp::IcmpV4(_) => IpProtocol::ICMP,
+            ValidUlp::IcmpV6(_) => IpProtocol::ICMP_V6,
+        }
+    }
 }
 
 impl<B: ByteSliceMut> ValidUlp<B> {
@@ -205,6 +218,65 @@ pub struct GeneveOverV6<Q: ByteSlice> {
     pub inner_ulp: Ulp<Q>,
 }
 
+impl<Q: ByteSlice> ValidGeneveOverV6<Q> {
+    /// Return packet info about the inner frame.
+    #[inline]
+    pub fn ulp_meoi(
+        &self,
+        pkt_len: usize,
+    ) -> Result<mac_ether_offload_info_t, MeoiError> {
+        let adj_len = pkt_len
+            .checked_sub(
+                (
+                    &self.outer_eth,
+                    &self.outer_v6,
+                    &self.outer_udp,
+                    &self.outer_encap,
+                )
+                    .packet_length(),
+            )
+            .ok_or(MeoiError::PacketTooShort)?;
+        let meoi_len =
+            u32::try_from(adj_len).expect("packet length exceeds u32::MAX");
+        let meoi_l3hlen = u16::try_from(self.inner_l3.packet_length())
+            .map_err(|_| MeoiError::L3TooLong)?;
+
+        Ok(mac_ether_offload_info_t {
+            meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+                | MacEtherOffloadFlags::L3INFO_SET
+                | MacEtherOffloadFlags::L4INFO_SET,
+            meoi_l2hlen: u8::try_from(self.inner_eth.packet_length())
+                .expect("L2 should never exceed ~22B (QinQ)"),
+            meoi_l3proto: self.inner_eth.ethertype().0,
+            meoi_l3hlen,
+            meoi_l4proto: self.inner_ulp.ip_protocol().0,
+            meoi_l4hlen: u8::try_from(self.inner_ulp.packet_length())
+                .expect("L4 should never exceed 60B (max TCP options)"),
+            meoi_len,
+            ..Default::default()
+        })
+    }
+}
+
+/// Errors encountered when constructing a [`mac_ether_offload_info_t`].
+#[derive(Copy, Clone, Debug)]
+pub enum MeoiError {
+    L3TooLong,
+    PacketTooShort,
+}
+
+impl fmt::Display for MeoiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("meoi construction failed: ")?;
+        match self {
+            MeoiError::L3TooLong => f.write_str("packet L3 exceeds u16::MAX"),
+            MeoiError::PacketTooShort => {
+                f.write_str("packet length reported as shorter than encap")
+            }
+        }
+    }
+}
+
 #[inline]
 fn geneve_dst_port<V: ByteSlice>(l4: &ValidL4<V>) -> ParseControl {
     match l4 {
@@ -259,6 +331,46 @@ pub struct NoEncap<Q: ByteSlice> {
     pub inner_eth: EthernetPacket<Q>,
     pub inner_l3: Option<L3<Q>>,
     pub inner_ulp: Option<Ulp<Q>>,
+}
+
+impl<Q: ByteSlice> ValidNoEncap<Q> {
+    /// Return packet info about the inner frame.
+    #[inline]
+    pub fn ulp_meoi(
+        &self,
+        pkt_len: usize,
+    ) -> Result<mac_ether_offload_info_t, MeoiError> {
+        // TCP, UDP, and the ICMPs are all understood by illumos's MEOI
+        // framework.
+        let l4_flag = if self.inner_ulp.is_some() {
+            MacEtherOffloadFlags::L4INFO_SET
+        } else {
+            MacEtherOffloadFlags::empty()
+        };
+        let meoi_len =
+            u32::try_from(pkt_len).expect("packet length exceeds u32::MAX");
+        let meoi_l3hlen = u16::try_from(self.inner_l3.packet_length())
+            .map_err(|_| MeoiError::L3TooLong)?;
+
+        Ok(mac_ether_offload_info_t {
+            meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+                | MacEtherOffloadFlags::L3INFO_SET
+                | l4_flag,
+            meoi_l2hlen: u8::try_from(self.inner_eth.packet_length())
+                .expect("L2 should never exceed ~22B (QinQ)"),
+            meoi_l3proto: self.inner_eth.ethertype().0,
+            meoi_l3hlen,
+            meoi_l4proto: self
+                .inner_ulp
+                .as_ref()
+                .map(|v| v.ip_protocol().0)
+                .unwrap_or_default(),
+            meoi_l4hlen: u8::try_from(self.inner_ulp.packet_length())
+                .expect("L4 should never exceed 60B (max TCP options)"),
+            meoi_len,
+            ..Default::default()
+        })
+    }
 }
 
 impl<T: ByteSlice> From<ValidNoEncap<T>> for OpteMeta<T> {

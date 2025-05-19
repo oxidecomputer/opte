@@ -235,9 +235,8 @@ impl StaticAction for EncapAction {
             }
         };
 
-        let phys_target = match target {
+        let (is_internal, phys_target) = match target {
             RouterTargetInternal::InternetGateway(_) => {
-                action_meta.set_internal_target(false);
                 match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
@@ -248,21 +247,24 @@ impl StaticAction for EncapAction {
                             Some(target) => target,
                             None => return Ok(AllowOrDeny::Deny),
                         };
-                        PhysNet {
-                            ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
-                            ip: target.ip,
-                            vni: target.vni,
-                        }
+                        (
+                            false,
+                            PhysNet {
+                                ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
+                                ip: target.ip,
+                                vni: target.vni,
+                            },
+                        )
                     }
                     None => return Ok(AllowOrDeny::Deny),
                 }
             }
 
             RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
-                Some(phys) => {
-                    action_meta.set_internal_target(true);
-                    PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni }
-                }
+                Some(phys) => (
+                    true,
+                    PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni },
+                ),
 
                 // The router target has specified a VPC IP we do not
                 // currently know about; this could be for two
@@ -283,11 +285,14 @@ impl StaticAction for EncapAction {
 
             RouterTargetInternal::VpcSubnet(_) => {
                 match self.v2p.get(&flow_id.dst_ip()) {
-                    Some(phys) => PhysNet {
-                        ether: phys.ether,
-                        ip: phys.ip,
-                        vni: self.vni,
-                    },
+                    Some(phys) => (
+                        true,
+                        PhysNet {
+                            ether: phys.ether,
+                            ip: phys.ip,
+                            vni: self.vni,
+                        },
+                    ),
 
                     // The guest is attempting to contact a VPC IP we
                     // do not currently know about; this could be for
@@ -309,6 +314,7 @@ impl StaticAction for EncapAction {
                 }
             }
         };
+        action_meta.set_internal_target(is_internal);
 
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
