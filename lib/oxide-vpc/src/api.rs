@@ -11,6 +11,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
+use core::ops::RangeInclusive;
 use core::result;
 use core::str::FromStr;
 use illumos_sys_hdrs::datalink_id_t;
@@ -743,6 +744,7 @@ pub struct Filters {
     hosts: Address,
     protocol: ProtoFilter,
     ports: Ports,
+    icmp: IcmpFilters,
 }
 
 impl Display for Filters {
@@ -761,6 +763,7 @@ impl Filters {
             hosts: Address::Any,
             protocol: ProtoFilter::Any,
             ports: Ports::Any,
+            icmp: IcmpFilters::Any,
         }
     }
 
@@ -769,7 +772,12 @@ impl Filters {
     }
 
     pub fn new_hosts(hosts: Address) -> Self {
-        Filters { hosts, protocol: ProtoFilter::Any, ports: Ports::Any }
+        Filters {
+            hosts,
+            protocol: ProtoFilter::Any,
+            ports: Ports::Any,
+            icmp: IcmpFilters::Any,
+        }
     }
 
     pub fn ports(&self) -> &Ports {
@@ -778,6 +786,10 @@ impl Filters {
 
     pub fn protocol(&self) -> ProtoFilter {
         self.protocol
+    }
+
+    pub fn icmp_filters(&self) -> &IcmpFilters {
+        &self.icmp
     }
 
     pub fn set_hosts<H: Into<Address>>(&mut self, hosts: H) -> &mut Self {
@@ -800,6 +812,11 @@ impl Filters {
 
     pub fn set_port(&mut self, port: u16) -> &mut Self {
         self.ports = Ports::PortList(vec![port]);
+        self
+    }
+
+    pub fn set_icmp_filters(&mut self, icmp: IcmpFilters) -> &mut Self {
+        self.icmp = icmp;
         self
     }
 }
@@ -940,6 +957,58 @@ impl Display for Ports {
         }
     }
 }
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum IcmpFilters {
+    #[default]
+    Any,
+    FilterList(Vec<IcmpFilter>),
+}
+
+// impl FromStr for IcmpFilters {
+//     type Err = String;
+
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         match s.to_ascii_lowercase().as_str() {
+//             "any" => Ok(Ports::Any),
+//             "any," => Ok(Ports::Any),
+
+//             _ => {
+//                 let ports: Vec<u16> = s
+//                     .split(',')
+//                     .map(|ps| ps.parse::<u16>().map_err(|e| e.to_string()))
+//                     .collect::<result::Result<Vec<u16>, _>>()?;
+
+//                 if ports.is_empty() {
+//                     return Err(format!("malformed ports spec: {}", s));
+//                 }
+
+//                 for p in ports.iter() {
+//                     if *p == DYNAMIC_PORT {
+//                         return Err(format!("invalid port: {}", p));
+//                     }
+//                 }
+//                 Ok(Ports::PortList(ports))
+//             }
+//         }
+//     }
+// }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum IcmpFilter {
+    Type(RangeInclusive<u8>),             // "ty()"
+    TypeAndCodes(u8, RangeInclusive<u8>), // "ty(, )"
+}
+
+// impl FromStr for IcmpFilter {
+//     type Err = String;
+
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         match s.to_ascii_lowercase().as_str() {
+//             // TODO
+//         }
+//     }
+// }
 
 /// Add an entry to the gateway allowing a port to send or receive
 /// traffic on a CIDR other than its private IP.
