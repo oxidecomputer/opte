@@ -223,6 +223,8 @@ pub enum Predicate {
     Icmpv6MsgType(Vec<Match<Icmpv6MessageType>>),
     Icmpv6MsgCode(Vec<Match<u8>>),
     Not(Box<Predicate>),
+    Any(Vec<Predicate>),
+    All(Vec<Predicate>),
     Meta(String, String),
 }
 
@@ -237,7 +239,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.ether_type={}", s)
+                write!(f, "inner.ether.ether_type={s}")
             }
 
             InnerEtherDst(list) => {
@@ -246,7 +248,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.dst={}", s)
+                write!(f, "inner.ether.dst={s}")
             }
 
             InnerEtherSrc(list) => {
@@ -255,7 +257,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.src={}", s)
+                write!(f, "inner.ether.src={s}")
             }
 
             InnerIpProto(list) => {
@@ -264,7 +266,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.proto={}", s)
+                write!(f, "inner.ip.proto={s}")
             }
 
             InnerSrcIp4(list) => {
@@ -273,7 +275,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.src={}", s)
+                write!(f, "inner.ip.src={s}")
             }
 
             InnerDstIp4(list) => {
@@ -282,7 +284,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.dst={}", s)
+                write!(f, "inner.ip.dst={s}")
             }
 
             InnerSrcIp6(list) => {
@@ -291,7 +293,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip6.src={}", s)
+                write!(f, "inner.ip6.src={s}")
             }
 
             InnerDstIp6(list) => {
@@ -300,7 +302,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip6.dst={}", s)
+                write!(f, "inner.ip6.dst={s}")
             }
 
             InnerSrcPort(list) => {
@@ -309,7 +311,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ulp.src={}", s)
+                write!(f, "inner.ulp.src{s}")
             }
 
             InnerDstPort(list) => {
@@ -318,7 +320,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ulp.dst={}", s)
+                write!(f, "inner.ulp.dst{s}")
             }
 
             IcmpMsgType(list) => {
@@ -327,7 +329,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.icmp.type={}", s)
+                write!(f, "inner.icmp.type={s}")
             }
 
             IcmpMsgCode(list) => {
@@ -336,7 +338,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.icmp.code={}", s)
+                write!(f, "inner.icmp.code{s}")
             }
 
             Icmpv6MsgType(list) => {
@@ -345,7 +347,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.icmp.type={}", s)
+                write!(f, "inner.icmp.type{s}")
             }
 
             Icmpv6MsgCode(list) => {
@@ -354,16 +356,33 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.icmp.code={}", s)
+                write!(f, "inner.icmp.code{s}")
             }
 
             Meta(key, val) => {
-                write!(f, "meta: {}={}", key, val)
+                write!(f, "meta: {key}={val}")
             }
 
             Not(pred) => {
-                write!(f, "!")?;
-                Display::fmt(&pred, f)
+                write!(f, "!{pred}")
+            }
+
+            Any(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "any({s})")
+            }
+
+            All(list) => {
+                let s = list
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "all({s})")
             }
         }
     }
@@ -385,6 +404,14 @@ impl Predicate {
             }
 
             Self::Not(pred) => return !pred.is_match(meta, action_meta),
+
+            Self::Any(list) => {
+                return list.iter().any(|v| v.is_match(meta, action_meta));
+            }
+
+            Self::All(list) => {
+                return list.iter().all(|v| v.is_match(meta, action_meta));
+            }
 
             Self::InnerEtherType(list) => {
                 for m in list {
