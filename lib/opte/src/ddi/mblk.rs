@@ -49,7 +49,7 @@ pub trait AsMblk {
     /// element. The caller of this function now owns the underlying segment chain.
     ///
     /// If the chain contains a single element, then the tail will be equal to the
-    /// head;
+    /// head.
     fn unwrap_mblk_and_tail(self) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)>
     where
         Self: Sized,
