@@ -21,6 +21,7 @@ pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
 use crate::engine::overlay::ACTION_META_VNI;
+use alloc::collections::BTreeSet;
 use alloc::string::ToString;
 use core::num::NonZeroU32;
 use opte::api::Direction;
@@ -43,7 +44,6 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
-use std::collections::BTreeSet;
 
 pub const FW_LAYER_NAME: &str = "firewall";
 
