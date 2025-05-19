@@ -144,7 +144,7 @@ unsafe extern "C" {
         mch: *const mac_client_handle,
         rx_fn: mac_siphon_fn,
         arg: *mut c_void,
-    ) -> c_int;
+    );
     pub fn mac_siphon_clear(mch: *const mac_client_handle);
     pub fn mac_tx(
         mch: *const mac_client_handle,

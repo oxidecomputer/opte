@@ -377,6 +377,49 @@ impl<P> Drop for MacPromiscHandle<P> {
     }
 }
 
+/// Safe wrapper around `mac_siphon_set`/`mac_siphon_clear`.
+#[derive(Debug)]
+pub struct MacSiphon<P: MacClient> {
+    /// The MAC client this siphon callback is attached to.
+    parent: *const P,
+}
+
+impl<P: MacClient> MacSiphon<P> {
+    /// Register a promiscuous callback to receive packets on the underlying MAC.
+    pub fn new(
+        parent: Arc<P>,
+        siphon_fn: mac_siphon_fn,
+    ) -> Result<Self, c_int> {
+        let mch = parent.mac_client_handle()?;
+        let parent = Arc::into_raw(parent);
+        let arg = parent as *mut c_void;
+
+        // SAFETY: `MacSiphon` keeps a reference to this `P` until it is removed,
+        // and so we can safely access it from the callback via the `arg`
+        // pointer.
+        unsafe {
+            mac_siphon_set(mch, siphon_fn, arg);
+        }
+
+        Ok(Self { parent })
+    }
+}
+
+impl<P: MacClient> Drop for MacSiphon<P> {
+    fn drop(&mut self) {
+        // Safety: the parent MAC we've attached this siphon to is guaranteed
+        // to live long enough to access again, since we have a refcount hold
+        // on it.
+        unsafe {
+            let parent = Arc::from_raw(self.parent);
+            let mac_client = parent
+                .mac_client_handle()
+                .expect("FATAL: cannot remove mac siphon from client");
+            mac_siphon_clear(mac_client);
+        };
+    }
+}
+
 /// Safe wrapper around a `mac_unicast_handle_t`.
 #[derive(Debug)]
 pub struct MacUnicastHandle {
