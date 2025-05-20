@@ -744,7 +744,6 @@ pub struct Filters {
     hosts: Address,
     protocol: ProtoFilter,
     ports: Ports,
-    icmp: IcmpFilters,
 }
 
 impl Display for Filters {
@@ -763,7 +762,6 @@ impl Filters {
             hosts: Address::Any,
             protocol: ProtoFilter::Any,
             ports: Ports::Any,
-            icmp: IcmpFilters::Any,
         }
     }
 
@@ -772,12 +770,7 @@ impl Filters {
     }
 
     pub fn new_hosts(hosts: Address) -> Self {
-        Filters {
-            hosts,
-            protocol: ProtoFilter::Any,
-            ports: Ports::Any,
-            icmp: IcmpFilters::Any,
-        }
+        Filters { hosts, protocol: ProtoFilter::Any, ports: Ports::Any }
     }
 
     pub fn ports(&self) -> &Ports {
@@ -785,11 +778,7 @@ impl Filters {
     }
 
     pub fn protocol(&self) -> ProtoFilter {
-        self.protocol
-    }
-
-    pub fn icmp_filters(&self) -> &IcmpFilters {
-        &self.icmp
+        self.protocol.clone()
     }
 
     pub fn set_hosts<H: Into<Address>>(&mut self, hosts: H) -> &mut Self {
@@ -812,11 +801,6 @@ impl Filters {
 
     pub fn set_port(&mut self, port: u16) -> &mut Self {
         self.ports = Ports::PortList(vec![port]);
-        self
-    }
-
-    pub fn set_icmp_filters(&mut self, icmp: IcmpFilters) -> &mut Self {
-        self.icmp = icmp;
         self
     }
 }
@@ -874,28 +858,55 @@ impl Display for Address {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize,
-)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProtoFilter {
     #[default]
     Any,
     Arp,
-    Proto(Protocol),
+    Tcp,
+    Udp,
+    Icmp(Option<IcmpFilter>),
+    Icmpv6(Option<IcmpFilter>),
+    Other(Protocol),
+}
+
+impl ProtoFilter {
+    pub fn l4_protocol(&self) -> Option<Protocol> {
+        match self {
+            ProtoFilter::Other(protocol) => Some(*protocol),
+            ProtoFilter::Tcp => Some(Protocol::TCP),
+            ProtoFilter::Udp => Some(Protocol::UDP),
+            ProtoFilter::Icmp(_) => Some(Protocol::ICMP),
+            ProtoFilter::Icmpv6(_) => Some(Protocol::ICMPv6),
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for ProtoFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "any" => Ok(ProtoFilter::Any),
-            "arp" => Ok(ProtoFilter::Arp),
-            "icmp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
-            "icmp6" => Ok(ProtoFilter::Proto(Protocol::ICMPv6)),
-            "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
-            "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
-            _ => Err(format!("unknown protocol: {}", s)),
+        let (ty_str, content_str) = match s.split_once(':') {
+            None => (s, None),
+            Some((lhs, rhs)) => (lhs, Some(rhs)),
+        };
+
+        match (ty_str.to_ascii_lowercase().as_str(), content_str) {
+            ("any", None) => Ok(ProtoFilter::Any),
+            ("arp", None) => Ok(ProtoFilter::Arp),
+            ("icmp", None) => Ok(ProtoFilter::Icmp(None)),
+            ("icmp", Some(spec)) => Ok(ProtoFilter::Icmp(Some(spec.parse()?))),
+            ("icmp6", None) => Ok(ProtoFilter::Icmpv6(None)),
+            ("icmp6", Some(spec)) => {
+                Ok(ProtoFilter::Icmpv6(Some(spec.parse()?)))
+            }
+            ("tcp", None) => Ok(ProtoFilter::Tcp),
+            ("udp", None) => Ok(ProtoFilter::Udp),
+            (lhs, None) => Err(format!("unknown protocol: {lhs}")),
+            (lhs, Some(_)) => {
+                Err(format!("cannot specify filter for protocol: {lhs}"))
+            }
         }
     }
 }
@@ -905,7 +916,23 @@ impl Display for ProtoFilter {
         match self {
             ProtoFilter::Any => write!(f, "ANY"),
             ProtoFilter::Arp => write!(f, "ARP"),
-            ProtoFilter::Proto(proto) => write!(f, "{},", proto),
+            ProtoFilter::Tcp => write!(f, "TCP"),
+            ProtoFilter::Udp => write!(f, "UDP"),
+            ProtoFilter::Icmp(filter) => {
+                write!(f, "ICMP")?;
+                if let Some(filter) = filter {
+                    write!(f, ":{filter}")?;
+                }
+                Ok(())
+            }
+            ProtoFilter::Icmpv6(filter) => {
+                write!(f, "ICMPv6")?;
+                if let Some(filter) = filter {
+                    write!(f, ":{filter}")?;
+                }
+                Ok(())
+            }
+            ProtoFilter::Other(proto) => write!(f, "{proto}"),
         }
     }
 }
@@ -958,57 +985,25 @@ impl Display for Ports {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub enum IcmpFilters {
-    #[default]
-    Any,
-    FilterList(Vec<IcmpFilter>),
-}
-
-// impl FromStr for IcmpFilters {
-//     type Err = String;
-
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         match s.to_ascii_lowercase().as_str() {
-//             "any" => Ok(Ports::Any),
-//             "any," => Ok(Ports::Any),
-
-//             _ => {
-//                 let ports: Vec<u16> = s
-//                     .split(',')
-//                     .map(|ps| ps.parse::<u16>().map_err(|e| e.to_string()))
-//                     .collect::<result::Result<Vec<u16>, _>>()?;
-
-//                 if ports.is_empty() {
-//                     return Err(format!("malformed ports spec: {}", s));
-//                 }
-
-//                 for p in ports.iter() {
-//                     if *p == DYNAMIC_PORT {
-//                         return Err(format!("invalid port: {}", p));
-//                     }
-//                 }
-//                 Ok(Ports::PortList(ports))
-//             }
-//         }
-//     }
-// }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum IcmpFilter {
     Type(RangeInclusive<u8>),             // "ty()"
     TypeAndCodes(u8, RangeInclusive<u8>), // "ty(, )"
 }
 
-// impl FromStr for IcmpFilter {
-//     type Err = String;
+impl FromStr for IcmpFilter {
+    type Err = String;
 
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         match s.to_ascii_lowercase().as_str() {
-//             // TODO
-//         }
-//     }
-// }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!()
+    }
+}
+
+impl Display for IcmpFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
+    }
+}
 
 /// Add an entry to the gateway allowing a port to send or receive
 /// traffic on a CIDR other than its private IP.
@@ -1094,10 +1089,7 @@ pub mod tests {
     #[test]
     fn parse_good_proto_filter() {
         assert_eq!("aNy".parse::<ProtoFilter>().unwrap(), ProtoFilter::Any);
-        assert_eq!(
-            "TCp".parse::<ProtoFilter>().unwrap(),
-            ProtoFilter::Proto(Protocol::TCP)
-        );
+        assert_eq!("TCp".parse::<ProtoFilter>().unwrap(), ProtoFilter::Tcp);
     }
 
     #[test]

@@ -15,7 +15,6 @@ use crate::api::Address;
 use crate::api::FirewallAction;
 use crate::api::FirewallRule;
 use crate::api::IcmpFilter;
-use crate::api::IcmpFilters;
 use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
@@ -23,6 +22,7 @@ use crate::api::SetFwRulesReq;
 use crate::engine::overlay::ACTION_META_VNI;
 use alloc::collections::BTreeSet;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::IpAddr;
@@ -103,19 +103,16 @@ pub struct Firewall {}
 
 pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
-    let proto_pred = fw_rule.filters.protocol().into_predicate();
+    let proto_preds = fw_rule.filters.protocol().into_predicates();
     let port_pred = fw_rule.filters.ports().into_predicate();
-    let icmp_pred = fw_rule.filters.icmp_filters().into_predicate();
 
-    if addr_pred.is_none() && proto_pred.is_none() && port_pred.is_none() {
+    if addr_pred.is_none() && proto_preds.is_empty() && port_pred.is_none() {
         return Rule::match_any(fw_rule.priority, action);
     }
 
     let mut rule = Rule::new(fw_rule.priority, action);
 
-    if let Some(proto_pred) = proto_pred {
-        rule.add_predicate(proto_pred);
-    }
+    rule.add_predicates(proto_preds);
 
     if let Some(port_pred) = port_pred {
         rule.add_predicate(port_pred);
@@ -123,10 +120,6 @@ pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
 
     if let Some(addr_pred) = addr_pred {
         rule.add_predicate(addr_pred);
-    }
-
-    if let Some(icmp_pred) = icmp_pred {
-        rule.add_predicate(icmp_pred);
     }
 
     rule.finalize()
@@ -155,18 +148,71 @@ impl Firewall {
 }
 
 impl ProtoFilter {
-    pub fn into_predicate(self) -> Option<Predicate> {
+    pub fn into_predicates(self) -> Vec<Predicate> {
         match self {
-            ProtoFilter::Any => None,
+            ProtoFilter::Any => vec![],
 
             ProtoFilter::Arp => {
-                Some(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+                vec![Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
                     ETHER_TYPE_ARP,
-                )]))
+                )])]
             }
 
-            ProtoFilter::Proto(p) => {
-                Some(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(p)]))
+            ProtoFilter::Icmp(Some(filter)) => {
+                vec![
+                    Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+                        opte::api::Protocol::ICMP,
+                    )]),
+                    match filter {
+                        IcmpFilter::Type(ty) => {
+                            Predicate::IcmpMsgType(vec![Match::Range(
+                                (*ty.start()).into()..=(*ty.end()).into(),
+                            )])
+                        }
+                        IcmpFilter::TypeAndCodes(ty, code) => {
+                            Predicate::All(vec![
+                                Predicate::IcmpMsgType(vec![Match::Exact(
+                                    ty.into(),
+                                )]),
+                                Predicate::IcmpMsgCode(vec![
+                                    code.clone().into(),
+                                ]),
+                            ])
+                        }
+                    },
+                ]
+            }
+
+            ProtoFilter::Icmpv6(Some(filter)) => {
+                vec![
+                    Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
+                        opte::api::Protocol::ICMPv6,
+                    )]),
+                    match filter {
+                        IcmpFilter::Type(ty) => {
+                            Predicate::Icmpv6MsgType(vec![Match::Range(
+                                (*ty.start()).into()..=(*ty.end()).into(),
+                            )])
+                        }
+                        IcmpFilter::TypeAndCodes(ty, code) => {
+                            Predicate::All(vec![
+                                Predicate::Icmpv6MsgType(vec![Match::Exact(
+                                    ty.into(),
+                                )]),
+                                Predicate::Icmpv6MsgCode(vec![
+                                    code.clone().into(),
+                                ]),
+                            ])
+                        }
+                    },
+                ]
+            }
+
+            other => {
+                let proto = other
+                    .l4_protocol()
+                    .expect("handled all non-l4 cases above");
+                vec![Predicate::InnerIpProto(vec![IpProtoMatch::Exact(proto)])]
             }
         }
     }
@@ -250,37 +296,6 @@ impl Ports {
                 }
                 Some(Predicate::InnerDstPort(mlist))
             }
-        }
-    }
-}
-
-// XXX: should this be its own thing, or is this technically a restriction
-//      which should be expressed as part of the above ICMP Proto filter?
-//      Our proto filter design is not a good fit here for this...
-impl IcmpFilters {
-    pub fn into_predicate(&self) -> Option<Predicate> {
-        match self {
-            IcmpFilters::Any => None,
-
-            IcmpFilters::FilterList(list) => Some(Predicate::Any(
-                list.iter().map(IcmpFilter::into_predicate).collect(),
-            )),
-        }
-    }
-}
-
-// XXX: Urgh, need to know whether its v4 or v6 here to select IcmpMsgType or
-//      Icmpv6MsgType and/or Code...
-impl IcmpFilter {
-    pub fn into_predicate(&self) -> Predicate {
-        match self {
-            IcmpFilter::Type(ty) => Predicate::IcmpMsgType(vec![Match::Range(
-                (*ty.start()).into()..=(*ty.end()).into(),
-            )]),
-            IcmpFilter::TypeAndCodes(ty, code) => Predicate::All(vec![
-                Predicate::IcmpMsgType(vec![Match::Exact((*ty).into())]),
-                Predicate::IcmpMsgCode(vec![code.clone().into()]),
-            ]),
         }
     }
 }
