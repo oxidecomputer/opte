@@ -2060,14 +2060,19 @@ unsafe extern "C" fn xde_rx(
             .expect("packet was received from siphon with a NULL argument")
     };
 
-    let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
+    let mut chain = if let Ok(chain) = unsafe { MsgBlkChain::new(mp_chain) } {
+        chain
+    } else {
         bad_packet_probe(
             None,
-            Direction::Out,
+            Direction::In,
             mp_chain as uintptr_t,
             c"rx'd packet chain was null",
         );
-        return ptr::null_mut();
+
+        // Continue processing on an empty chain to uphold the contract with
+        // MAC for the three `out_` pointer values.
+        MsgBlkChain::empty()
     };
 
     let mut out_chain = MsgBlkChain::empty();
