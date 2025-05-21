@@ -17,6 +17,7 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
 use serde::Serialize;
+use std::string::ToString;
 
 pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
@@ -130,7 +131,7 @@ impl OpteCmdIoctl {
             match postcard::from_bytes(resp) {
                 Ok(cmd_err) => Some(cmd_err),
                 Err(deser_err) => {
-                    Some(OpteError::DeserCmdErr(format!("{}", deser_err)))
+                    Some(OpteError::DeserCmdErr(deser_err.to_string()))
                 }
             }
         } else {

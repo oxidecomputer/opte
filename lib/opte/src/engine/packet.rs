@@ -131,7 +131,7 @@ pub enum BodyTransformError {
 
 impl From<smoltcp::wire::Error> for BodyTransformError {
     fn from(e: smoltcp::wire::Error) -> Self {
-        Self::ParseFailure(format!("{}", e))
+        Self::ParseFailure(format!("{e}"))
     }
 }
 
