@@ -75,6 +75,7 @@ pub mod protocol;
 pub use protocol::MessageType;
 
 use alloc::borrow::Cow;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;

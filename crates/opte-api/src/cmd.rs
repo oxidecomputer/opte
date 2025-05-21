@@ -11,13 +11,13 @@ use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
 use serde::Serialize;
-use std::string::ToString;
 
 pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
