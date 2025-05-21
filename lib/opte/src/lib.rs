@@ -219,7 +219,7 @@ impl Display for LogLevel {
             Self::Warn => "[WARN]",
             Self::Error => "[ERROR]",
         };
-        write!(f, "{}", level_s)
+        write!(f, "{level_s}")
     }
 }
 
@@ -230,7 +230,7 @@ pub struct PrintlnLog {}
 #[cfg(any(feature = "std", test))]
 impl LogProvider for PrintlnLog {
     fn log(&self, level: LogLevel, msg: &str) {
-        println!("{} {}", level, msg);
+        println!("{level} {msg}");
     }
 }
 
