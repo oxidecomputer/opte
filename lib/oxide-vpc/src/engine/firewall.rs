@@ -150,6 +150,7 @@ impl Firewall {
 impl ProtoFilter {
     pub fn into_predicates(self) -> Vec<Predicate> {
         match self {
+            // Non-L4 cases.
             ProtoFilter::Any => vec![],
 
             ProtoFilter::Arp => {
@@ -158,54 +159,35 @@ impl ProtoFilter {
                 )])]
             }
 
+            // L4 cases.
             ProtoFilter::Icmp(Some(filter)) => {
-                vec![
-                    Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-                        opte::api::Protocol::ICMP,
+                let mut out = vec![
+                    // Match::Exact(Protocol::ICMP) is validated in msg type/code.
+                    Predicate::IcmpMsgType(vec![Match::Exact(
+                        filter.ty.into(),
                     )]),
-                    match filter {
-                        IcmpFilter::Type(ty) => {
-                            Predicate::IcmpMsgType(vec![Match::Range(
-                                (*ty.start()).into()..=(*ty.end()).into(),
-                            )])
-                        }
-                        IcmpFilter::TypeAndCodes(ty, code) => {
-                            Predicate::All(vec![
-                                Predicate::IcmpMsgType(vec![Match::Exact(
-                                    ty.into(),
-                                )]),
-                                Predicate::IcmpMsgCode(vec![
-                                    code.clone().into(),
-                                ]),
-                            ])
-                        }
-                    },
-                ]
+                ];
+
+                if let Some(codes) = filter.codes {
+                    out.push(Predicate::IcmpMsgCode(vec![codes.into()]));
+                }
+
+                out
             }
 
             ProtoFilter::Icmpv6(Some(filter)) => {
-                vec![
-                    Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
-                        opte::api::Protocol::ICMPv6,
+                let mut out = vec![
+                    // Match::Exact(Protocol::ICMP) is validated in msg type/code.
+                    Predicate::Icmpv6MsgType(vec![Match::Exact(
+                        filter.ty.into(),
                     )]),
-                    match filter {
-                        IcmpFilter::Type(ty) => {
-                            Predicate::Icmpv6MsgType(vec![Match::Range(
-                                (*ty.start()).into()..=(*ty.end()).into(),
-                            )])
-                        }
-                        IcmpFilter::TypeAndCodes(ty, code) => {
-                            Predicate::All(vec![
-                                Predicate::Icmpv6MsgType(vec![Match::Exact(
-                                    ty.into(),
-                                )]),
-                                Predicate::Icmpv6MsgCode(vec![
-                                    code.clone().into(),
-                                ]),
-                            ])
-                        }
-                    },
-                ]
+                ];
+
+                if let Some(codes) = filter.codes {
+                    out.push(Predicate::Icmpv6MsgCode(vec![codes.into()]));
+                }
+
+                out
             }
 
             other => {

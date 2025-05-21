@@ -986,9 +986,9 @@ impl Display for Ports {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum IcmpFilter {
-    Type(RangeInclusive<u8>),             // "ty()"
-    TypeAndCodes(u8, RangeInclusive<u8>), // "ty(, )"
+pub struct IcmpFilter {
+    pub ty: u8,
+    pub codes: Option<RangeInclusive<u8>>,
 }
 
 impl FromStr for IcmpFilter {
