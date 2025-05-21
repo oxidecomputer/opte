@@ -2,13 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! TCP headers.
 
 use super::flow_table::Ttl;
-use core::fmt;
-use core::fmt::Display;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -35,41 +33,6 @@ pub const TIME_WAIT_EXPIRE_SECS: u64 = 120;
 pub const KEEPALIVE_EXPIRE_SECS: u64 = 8_000;
 pub const TIME_WAIT_EXPIRE_TTL: Ttl = Ttl::new_seconds(TIME_WAIT_EXPIRE_SECS);
 pub const KEEPALIVE_EXPIRE_TTL: Ttl = Ttl::new_seconds(KEEPALIVE_EXPIRE_SECS);
-
-// The standard TCP states.
-//
-// See Figure 13-8 of TCP/IP Illustrated Vol. 1 Ed. 2
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum TcpState {
-    Closed,
-    Listen,
-    SynSent,
-    SynRcvd,
-    Established,
-    CloseWait,
-    LastAck,
-    FinWait1,
-    FinWait2,
-    TimeWait,
-}
-
-impl Display for TcpState {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = match self {
-            TcpState::Closed => "CLOSED",
-            TcpState::Listen => "LISTEN",
-            TcpState::SynSent => "SYN_SENT",
-            TcpState::SynRcvd => "SYN_RCVD",
-            TcpState::Established => "ESTABLISHED",
-            TcpState::CloseWait => "CLOSE_WAIT",
-            TcpState::LastAck => "LAST_ACK",
-            TcpState::FinWait1 => "FIN_WAIT_1",
-            TcpState::FinWait2 => "FIN_WAIT_2",
-            TcpState::TimeWait => "TIME_WAIT",
-        };
-        write!(f, "{}", s)
-    }
-}
 
 #[derive(
     Clone,
