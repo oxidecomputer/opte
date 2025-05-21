@@ -103,9 +103,9 @@ pub struct PortInfo {
     pub dst_port: u16,
 }
 
-impl Into<[u16; 2]> for PortInfo {
-    fn into(self) -> [u16; 2] {
-        zerocopy::transmute!(self)
+impl From<PortInfo> for [u16; 2] {
+    fn from(val: PortInfo) -> [u16; 2] {
+        zerocopy::transmute!(val)
     }
 }
 
@@ -145,9 +145,9 @@ pub type Icmpv6Info = IcmpInfo; //<IcmpV6Type>;
 //     }
 // }
 
-impl Into<[u16; 2]> for Icmpv4Info {
-    fn into(self) -> [u16; 2] {
-        zerocopy::transmute!(self)
+impl From<Icmpv4Info> for [u16; 2] {
+    fn from(val: Icmpv4Info) -> [u16; 2] {
+        zerocopy::transmute!(val)
     }
 }
 

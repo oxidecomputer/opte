@@ -386,7 +386,7 @@ impl FromStr for RouterTarget {
                 Some(("ip4", ip4s)) => {
                     let ip4 = ip4s
                         .parse::<std::net::Ipv4Addr>()
-                        .map_err(|e| format!("bad IP: {}", e))?;
+                        .map_err(|e| format!("bad IP: {e}"))?;
                     Ok(Self::Ip(IpAddr::Ip4(ip4.into())))
                 }
 
@@ -407,7 +407,7 @@ impl FromStr for RouterTarget {
                     uuid.parse::<Uuid>().map_err(|e| e.to_string())?,
                 ))),
 
-                _ => Err(format!("malformed router target: {}", lower)),
+                _ => Err(format!("malformed router target: {lower}")),
             },
         }
     }
@@ -418,11 +418,11 @@ impl Display for RouterTarget {
         match self {
             Self::Drop => write!(f, "Drop"),
             Self::InternetGateway(None) => write!(f, "ig"),
-            Self::InternetGateway(Some(id)) => write!(f, "ig={}", id),
-            Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={}", ip4),
-            Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={}", ip6),
-            Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={}", sub4),
-            Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={}", sub6),
+            Self::InternetGateway(Some(id)) => write!(f, "ig={id}"),
+            Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={ip4}"),
+            Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={ip6}"),
+            Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={sub4}"),
+            Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={sub6}"),
         }
     }
 }
@@ -656,7 +656,7 @@ impl FromStr for FirewallRule {
         for token in s.to_ascii_lowercase().split(' ') {
             match token.split_once('=') {
                 None => {
-                    return Err(format!("bad token: {}", token));
+                    return Err(format!("bad token: {token}"));
                 }
 
                 Some(("dir", val)) => {
@@ -668,9 +668,10 @@ impl FromStr for FirewallRule {
                 }
 
                 Some(("priority", val)) => {
-                    priority = Some(val.parse::<u16>().map_err(|e| {
-                        format!("bad priroity: '{}' {}", val, e)
-                    })?);
+                    priority =
+                        Some(val.parse::<u16>().map_err(|e| {
+                            format!("bad priroity: '{val}' {e}")
+                        })?);
                 }
 
                 // Parse the filters.
@@ -688,7 +689,7 @@ impl FromStr for FirewallRule {
                 }
 
                 Some((_, _)) => {
-                    return Err(format!("invalid key: {}", token));
+                    return Err(format!("invalid key: {token}"));
                 }
             }
         }
@@ -734,7 +735,7 @@ impl FromStr for FirewallAction {
         match s.to_ascii_lowercase().as_str() {
             "allow" => Ok(FirewallAction::Allow),
             "deny" => Ok(FirewallAction::Deny),
-            _ => Err(format!("invalid action: {} ('allow' or 'deny')", s)),
+            _ => Err(format!("invalid action: {s} ('allow' or 'deny')")),
         }
     }
 }
@@ -832,16 +833,15 @@ impl FromStr for Address {
             "any" => Ok(Address::Any),
 
             addrstr => match addrstr.split_once('=') {
-                None => Err(format!(
-                    "malformed address specification: {}",
-                    addrstr,
-                )),
+                None => {
+                    Err(format!("malformed address specification: {addrstr}",))
+                }
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),
                 Some(("vni", val)) => {
                     Ok(Address::Vni(val.parse().map_err(|e| format!("{e:?}"))?))
                 }
-                Some((key, _)) => Err(format!("invalid address type: {}", key)),
+                Some((key, _)) => Err(format!("invalid address type: {key}")),
             },
         }
     }
@@ -851,9 +851,9 @@ impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Address::Any => write!(f, "ANY"),
-            Address::Ip(val) => write!(f, "{},", val),
-            Address::Subnet(val) => write!(f, "{},", val),
-            Address::Vni(val) => write!(f, "{}", val),
+            Address::Ip(val) => write!(f, "{val},"),
+            Address::Subnet(val) => write!(f, "{val},"),
+            Address::Vni(val) => write!(f, "{val}"),
         }
     }
 }
@@ -959,12 +959,12 @@ impl FromStr for Ports {
                     .collect::<result::Result<Vec<u16>, _>>()?;
 
                 if ports.is_empty() {
-                    return Err(format!("malformed ports spec: {}", s));
+                    return Err(format!("malformed ports spec: {s}"));
                 }
 
                 for p in ports.iter() {
                     if *p == DYNAMIC_PORT {
-                        return Err(format!("invalid port: {}", p));
+                        return Err(format!("invalid port: {p}"));
                     }
                 }
                 Ok(Ports::PortList(ports))

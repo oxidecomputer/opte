@@ -14,7 +14,6 @@ use crate::api::AddFwRuleReq;
 use crate::api::Address;
 use crate::api::FirewallAction;
 use crate::api::FirewallRule;
-use crate::api::IcmpFilter;
 use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
@@ -259,7 +258,7 @@ impl Ports {
                 let mut mlist = vec![];
                 let mut curr_range = None;
                 for port in ports {
-                    let range = curr_range.get_or_insert_with(|| port..=port);
+                    let range = curr_range.get_or_insert(port..=port);
                     let end = *range.end();
                     if port <= end {
                         // Created new.
