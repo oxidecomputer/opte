@@ -167,9 +167,9 @@ impl Display for MessageType {
             Nak => "Nak".to_string(),
             Release => "Release".to_string(),
             Inform => "Inform".to_string(),
-            Unknown(val) => format!("Unknown: {}", val),
+            Unknown(val) => format!("Unknown: {val}"),
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 

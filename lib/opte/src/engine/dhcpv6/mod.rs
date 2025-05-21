@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Core implementation of DHCPv6 protocol.
 //!
@@ -161,10 +161,10 @@ impl Display for Dhcpv6Action {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let addr_list = self
             .addresses()
-            .map(|addr| format!("{}", addr))
+            .map(|addr| addr.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        write!(f, "DHCPv6 IA Addrs: [{}]", addr_list)
+        write!(f, "DHCPv6 IA Addrs: [{addr_list}]")
     }
 }
 

@@ -181,7 +181,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
             }
 
             None => {
-                panic!("cannot release port to unknown mapping: {}", priv_ip);
+                panic!("cannot release port to unknown mapping: {priv_ip}");
             }
         }
     }
