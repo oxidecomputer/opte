@@ -19,7 +19,7 @@ use std::io::Write;
 fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
     match pcap::parse_pcap_header(offset) {
         Ok((new_offset, header)) => (new_offset, header),
-        Err(e) => panic!("failed to get header: {:?}", e),
+        Err(e) => panic!("failed to get header: {e:?}"),
     }
 }
 
@@ -32,7 +32,7 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
             (new_offset, block)
         }
 
-        Err(e) => panic!("failed to get next block: {:?}", e),
+        Err(e) => panic!("failed to get next block: {e:?}"),
     }
 }
 
