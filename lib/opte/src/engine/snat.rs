@@ -288,14 +288,14 @@ impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Here and below: all ULP-specific pools have the same SNAT mappings.
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "{pub_ip}:{}-{}", ports.start(), ports.end())
     }
 }
 
 impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
     }
 }
 
@@ -315,7 +315,7 @@ where
             Some(L4Info::Icmpv4(IcmpInfo { id, .. })) => Ok(*id),
             Some(L4Info::Icmpv6(IcmpInfo { id, .. })) => Ok(*id),
             _ => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (unexpected ULP: {})", proto),
+                msg: format!("SNAT pool (unexpected ULP: {proto})"),
             }),
         }?;
         let is_icmp = proto == T::MESSAGE_PROTOCOL;
@@ -325,7 +325,7 @@ where
             _ if is_icmp => &self.icmp_pool,
             proto => {
                 return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (unexpected ULP: {})", proto),
+                    msg: format!("SNAT pool (unexpected ULP: {proto})"),
                 });
             }
         };
@@ -347,7 +347,7 @@ where
             }
 
             Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (no match: {})", ip),
+                msg: format!("SNAT pool (no match: {ip})"),
             }),
         }
     }
