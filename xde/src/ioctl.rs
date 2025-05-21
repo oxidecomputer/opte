@@ -25,7 +25,7 @@ unsafe extern "C" {
 }
 
 fn dtrace_probe_copy_out_resp<T: Debug + Serialize>(resp: &T) {
-    let cstr = CString::new(format!("{:?}", resp)).unwrap();
+    let cstr = CString::new(format!("{resp:?}")).unwrap();
     unsafe {
         __dtrace_probe_copy__out__resp(cstr.as_ptr() as ddi::uintptr_t);
     }
@@ -107,7 +107,7 @@ impl<'a> IoctlEnvelope<'a> {
         match postcard::from_bytes(&bytes) {
             Ok(val) => Ok(val),
             Err(deser_error) => {
-                Err(OpteError::DeserCmdReq(format!("{}", deser_error)))
+                Err(OpteError::DeserCmdReq(format!("{deser_error}")))
             }
         }
     }
@@ -123,10 +123,10 @@ impl<'a> IoctlEnvelope<'a> {
         dtrace_probe_copy_out_resp(resp);
         let ser_result = match resp {
             Ok(v) => postcard::to_allocvec(v)
-                .map_err(|e| OpteError::SerCmdResp(format!("{}", e))),
+                .map_err(|e| OpteError::SerCmdResp(format!("{e}"))),
 
             Err(e) => postcard::to_allocvec(e)
-                .map_err(|e| OpteError::SerCmdErr(format!("{}", e))),
+                .map_err(|e| OpteError::SerCmdErr(format!("{e}"))),
         };
 
         // We failed to serialize the response, communicate this with ENOMSG.
