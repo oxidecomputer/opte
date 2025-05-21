@@ -89,7 +89,7 @@ impl Display for EtherTypeMatch {
             Exact(et) if *et == ETHER_TYPE_IPV4 => write!(f, "IPv4"),
             Exact(et) if *et == ETHER_TYPE_IPV6 => write!(f, "IPv6"),
 
-            Exact(et) => write!(f, "0x{:X}", et),
+            Exact(et) => write!(f, "0x{et:X}"),
         }
     }
 }
@@ -112,7 +112,7 @@ impl Display for EtherAddrMatch {
         use EtherAddrMatch::*;
 
         match self {
-            Exact(addr) => write!(f, "{}", addr),
+            Exact(addr) => write!(f, "{addr}"),
         }
     }
 }
@@ -140,8 +140,8 @@ impl Display for Ipv4AddrMatch {
         use Ipv4AddrMatch::*;
 
         match self {
-            Exact(ip) => write!(f, "{}", ip),
-            Prefix(cidr) => write!(f, "{}", cidr),
+            Exact(ip) => write!(f, "{ip}"),
+            Prefix(cidr) => write!(f, "{cidr}"),
         }
     }
 }
@@ -169,8 +169,8 @@ impl Display for Ipv6AddrMatch {
         use Ipv6AddrMatch::*;
 
         match self {
-            Exact(ip) => write!(f, "{}", ip),
-            Prefix(cidr) => write!(f, "{}", cidr),
+            Exact(ip) => write!(f, "{ip}"),
+            Prefix(cidr) => write!(f, "{cidr}"),
         }
     }
 }
@@ -193,7 +193,7 @@ impl Display for IpProtoMatch {
         use IpProtoMatch::*;
 
         match self {
-            Exact(proto) => write!(f, "{}", proto),
+            Exact(proto) => write!(f, "{proto}"),
         }
     }
 }
@@ -584,8 +584,7 @@ impl Display for DataPredicate {
             }
 
             Not(pred) => {
-                write!(f, "!")?;
-                Display::fmt(&pred, f)
+                write!(f, "!{pred}")
             }
         }
     }
