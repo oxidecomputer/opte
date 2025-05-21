@@ -84,7 +84,7 @@ unsafe impl GlobalAlloc for KmemAlloc {
 
 #[panic_handler]
 fn panic_hdlr(info: &PanicInfo) -> ! {
-    let msg = CString::new(format!("{}", info)).expect("cstring new");
+    let msg = CString::new(format!("{info}")).expect("cstring new");
     unsafe {
         cmn_err(CE_WARN, msg.as_ptr());
         panic(msg.as_ptr());
