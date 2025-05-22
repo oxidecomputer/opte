@@ -11,6 +11,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
+use core::ops::RangeInclusive;
 use core::result;
 use core::str::FromStr;
 use illumos_sys_hdrs::datalink_id_t;
@@ -385,7 +386,7 @@ impl FromStr for RouterTarget {
                 Some(("ip4", ip4s)) => {
                     let ip4 = ip4s
                         .parse::<std::net::Ipv4Addr>()
-                        .map_err(|e| format!("bad IP: {}", e))?;
+                        .map_err(|e| format!("bad IP: {e}"))?;
                     Ok(Self::Ip(IpAddr::Ip4(ip4.into())))
                 }
 
@@ -406,7 +407,7 @@ impl FromStr for RouterTarget {
                     uuid.parse::<Uuid>().map_err(|e| e.to_string())?,
                 ))),
 
-                _ => Err(format!("malformed router target: {}", lower)),
+                _ => Err(format!("malformed router target: {lower}")),
             },
         }
     }
@@ -417,11 +418,11 @@ impl Display for RouterTarget {
         match self {
             Self::Drop => write!(f, "Drop"),
             Self::InternetGateway(None) => write!(f, "ig"),
-            Self::InternetGateway(Some(id)) => write!(f, "ig={}", id),
-            Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={}", ip4),
-            Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={}", ip6),
-            Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={}", sub4),
-            Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={}", sub6),
+            Self::InternetGateway(Some(id)) => write!(f, "ig={id}"),
+            Self::Ip(IpAddr::Ip4(ip4)) => write!(f, "ip4={ip4}"),
+            Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={ip6}"),
+            Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={sub4}"),
+            Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={sub6}"),
         }
     }
 }
@@ -667,7 +668,7 @@ impl FromStr for FirewallRule {
         for token in s.to_ascii_lowercase().split(' ') {
             match token.split_once('=') {
                 None => {
-                    return Err(format!("bad token: {}", token));
+                    return Err(format!("bad token: {token}"));
                 }
 
                 Some(("dir", val)) => {
@@ -679,9 +680,10 @@ impl FromStr for FirewallRule {
                 }
 
                 Some(("priority", val)) => {
-                    priority = Some(val.parse::<u16>().map_err(|e| {
-                        format!("bad priroity: '{}' {}", val, e)
-                    })?);
+                    priority =
+                        Some(val.parse::<u16>().map_err(|e| {
+                            format!("bad priroity: '{val}' {e}")
+                        })?);
                 }
 
                 // Parse the filters.
@@ -699,7 +701,7 @@ impl FromStr for FirewallRule {
                 }
 
                 Some((_, _)) => {
-                    return Err(format!("invalid key: {}", token));
+                    return Err(format!("invalid key: {token}"));
                 }
             }
         }
@@ -745,7 +747,7 @@ impl FromStr for FirewallAction {
         match s.to_ascii_lowercase().as_str() {
             "allow" => Ok(FirewallAction::Allow),
             "deny" => Ok(FirewallAction::Deny),
-            _ => Err(format!("invalid action: {} ('allow' or 'deny')", s)),
+            _ => Err(format!("invalid action: {s} ('allow' or 'deny')")),
         }
     }
 }
@@ -789,7 +791,7 @@ impl Filters {
     }
 
     pub fn protocol(&self) -> ProtoFilter {
-        self.protocol
+        self.protocol.clone()
     }
 
     pub fn set_hosts<H: Into<Address>>(&mut self, hosts: H) -> &mut Self {
@@ -843,16 +845,15 @@ impl FromStr for Address {
             "any" => Ok(Address::Any),
 
             addrstr => match addrstr.split_once('=') {
-                None => Err(format!(
-                    "malformed address specification: {}",
-                    addrstr,
-                )),
+                None => {
+                    Err(format!("malformed address specification: {addrstr}",))
+                }
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),
                 Some(("vni", val)) => {
                     Ok(Address::Vni(val.parse().map_err(|e| format!("{e:?}"))?))
                 }
-                Some((key, _)) => Err(format!("invalid address type: {}", key)),
+                Some((key, _)) => Err(format!("invalid address type: {key}")),
             },
         }
     }
@@ -862,35 +863,62 @@ impl Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Address::Any => write!(f, "ANY"),
-            Address::Ip(val) => write!(f, "{},", val),
-            Address::Subnet(val) => write!(f, "{},", val),
-            Address::Vni(val) => write!(f, "{}", val),
+            Address::Ip(val) => write!(f, "{val},"),
+            Address::Subnet(val) => write!(f, "{val},"),
+            Address::Vni(val) => write!(f, "{val}"),
         }
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize,
-)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ProtoFilter {
     #[default]
     Any,
     Arp,
-    Proto(Protocol),
+    Tcp,
+    Udp,
+    Icmp(Option<IcmpFilter>),
+    Icmpv6(Option<IcmpFilter>),
+    Other(Protocol),
+}
+
+impl ProtoFilter {
+    pub fn l4_protocol(&self) -> Option<Protocol> {
+        match self {
+            ProtoFilter::Other(protocol) => Some(*protocol),
+            ProtoFilter::Tcp => Some(Protocol::TCP),
+            ProtoFilter::Udp => Some(Protocol::UDP),
+            ProtoFilter::Icmp(_) => Some(Protocol::ICMP),
+            ProtoFilter::Icmpv6(_) => Some(Protocol::ICMPv6),
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for ProtoFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
-            "any" => Ok(ProtoFilter::Any),
-            "arp" => Ok(ProtoFilter::Arp),
-            "icmp" => Ok(ProtoFilter::Proto(Protocol::ICMP)),
-            "icmp6" => Ok(ProtoFilter::Proto(Protocol::ICMPv6)),
-            "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
-            "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
-            _ => Err(format!("unknown protocol: {}", s)),
+        let (ty_str, content_str) = match s.split_once(':') {
+            None => (s, None),
+            Some((lhs, rhs)) => (lhs, Some(rhs)),
+        };
+
+        match (ty_str.to_ascii_lowercase().as_str(), content_str) {
+            ("any", None) => Ok(ProtoFilter::Any),
+            ("arp", None) => Ok(ProtoFilter::Arp),
+            ("icmp", None) => Ok(ProtoFilter::Icmp(None)),
+            ("icmp", Some(spec)) => Ok(ProtoFilter::Icmp(Some(spec.parse()?))),
+            ("icmp6", None) => Ok(ProtoFilter::Icmpv6(None)),
+            ("icmp6", Some(spec)) => {
+                Ok(ProtoFilter::Icmpv6(Some(spec.parse()?)))
+            }
+            ("tcp", None) => Ok(ProtoFilter::Tcp),
+            ("udp", None) => Ok(ProtoFilter::Udp),
+            (lhs, None) => Err(format!("unknown protocol: {lhs}")),
+            (lhs, Some(_)) => {
+                Err(format!("cannot specify filter for protocol: {lhs}"))
+            }
         }
     }
 }
@@ -900,7 +928,23 @@ impl Display for ProtoFilter {
         match self {
             ProtoFilter::Any => write!(f, "ANY"),
             ProtoFilter::Arp => write!(f, "ARP"),
-            ProtoFilter::Proto(proto) => write!(f, "{},", proto),
+            ProtoFilter::Tcp => write!(f, "TCP"),
+            ProtoFilter::Udp => write!(f, "UDP"),
+            ProtoFilter::Icmp(filter) => {
+                write!(f, "ICMP")?;
+                if let Some(filter) = filter {
+                    write!(f, ":{filter}")?;
+                }
+                Ok(())
+            }
+            ProtoFilter::Icmpv6(filter) => {
+                write!(f, "ICMPv6")?;
+                if let Some(filter) = filter {
+                    write!(f, ":{filter}")?;
+                }
+                Ok(())
+            }
+            ProtoFilter::Other(proto) => write!(f, "{proto}"),
         }
     }
 }
@@ -927,12 +971,12 @@ impl FromStr for Ports {
                     .collect::<result::Result<Vec<u16>, _>>()?;
 
                 if ports.is_empty() {
-                    return Err(format!("malformed ports spec: {}", s));
+                    return Err(format!("malformed ports spec: {s}"));
                 }
 
                 for p in ports.iter() {
                     if *p == DYNAMIC_PORT {
-                        return Err(format!("invalid port: {}", p));
+                        return Err(format!("invalid port: {p}"));
                     }
                 }
                 Ok(Ports::PortList(ports))
@@ -950,6 +994,26 @@ impl Display for Ports {
                 write!(f, "{}", plist[0])
             }
         }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct IcmpFilter {
+    pub ty: u8,
+    pub codes: Option<RangeInclusive<u8>>,
+}
+
+impl FromStr for IcmpFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        todo!()
+    }
+}
+
+impl Display for IcmpFilter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        todo!()
     }
 }
 
@@ -1037,10 +1101,7 @@ pub mod tests {
     #[test]
     fn parse_good_proto_filter() {
         assert_eq!("aNy".parse::<ProtoFilter>().unwrap(), ProtoFilter::Any);
-        assert_eq!(
-            "TCp".parse::<ProtoFilter>().unwrap(),
-            ProtoFilter::Proto(Protocol::TCP)
-        );
+        assert_eq!("TCp".parse::<ProtoFilter>().unwrap(), ProtoFilter::Tcp);
     }
 
     #[test]

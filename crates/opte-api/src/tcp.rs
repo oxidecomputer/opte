@@ -40,6 +40,6 @@ impl Display for TcpState {
             TcpState::FinWait2 => "FIN_WAIT_2",
             TcpState::TimeWait => "TIME_WAIT",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }

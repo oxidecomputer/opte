@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Ethernet frames.
 
@@ -101,7 +101,7 @@ impl Display for EtherType {
 /// [`EtherType`].
 impl Debug for EtherType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
@@ -149,8 +149,7 @@ impl FromStr for EtherAddr {
         let octets: Vec<u8> = val
             .split(':')
             .map(|s| {
-                u8::from_str_radix(s, 16)
-                    .map_err(|_| format!("bad octet: {}", s))
+                u8::from_str_radix(s, 16).map_err(|_| format!("bad octet: {s}"))
             })
             .collect::<result::Result<Vec<u8>, _>>()?;
 
@@ -193,7 +192,7 @@ impl Display for EtherAddr {
 /// EtherAddr.
 impl Debug for EtherAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 

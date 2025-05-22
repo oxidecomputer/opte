@@ -58,18 +58,16 @@ impl fmt::Display for TcpFlowStateError {
                 write!(
                     f,
                     "Unexpected TCP segment, \
-                    direction: {}, flow: {}, state: {}, \
-                    flags: 0x{:x}",
-                    direction, flow_id, state, flags,
+                    direction: {direction}, flow: {flow_id}, \
+                    state: {state}, flags: 0x{flags:x}",
                 )
             }
             TcpFlowStateError::NewFlow { direction, flow_id, state, flags } => {
                 write!(
                     f,
                     "Flow was reopened early by endpoint, \
-                    direction: {}, flow: {}, state: {}, \
-                    flags: 0x{:x}",
-                    direction, flow_id, state, flags,
+                    direction: {direction}, flow: {flow_id}, \
+                    state: {state}, flags: 0x{flags:x}",
                 )
             }
         }

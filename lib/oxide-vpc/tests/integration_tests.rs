@@ -603,7 +603,7 @@ fn guest_to_guest() {
     assert_eq!(meta.outer_v6.destination(), g2_cfg.phys_ip);
 
     // Geneve entropy.
-    assert_eq!(meta.outer_udp.source(), 12700);
+    assert_eq!(meta.outer_udp.source(), 9655);
     assert_eq!(meta.outer_encap.vni(), g1_cfg.vni);
 
     let eth = &meta.inner_eth;
@@ -814,7 +814,8 @@ fn guest_to_internet_ipv4() {
         pkt1.len() - (&meta.outer_eth, &meta.outer_v6).packet_length();
     assert_eq!(meta.outer_v6.payload_len() as usize, len_post_v6);
 
-    assert_eq!(meta.outer_udp.source(), 24329);
+    // Geneve entropy.
+    assert_eq!(meta.outer_udp.source(), 1428);
     assert_eq!(meta.outer_udp.length() as usize, len_post_v6);
 
     assert_eq!(meta.inner_eth.source(), g1_cfg.guest_mac);
@@ -918,7 +919,8 @@ fn guest_to_internet_ipv6() {
         pkt1.len() - (&meta.outer_eth, &meta.outer_v6).packet_length();
     assert_eq!(meta.outer_v6.payload_len() as usize, len_post_v6);
 
-    assert_eq!(meta.outer_udp.source(), 63246);
+    // Geneve entropy.
+    assert_eq!(meta.outer_udp.source(), 22425);
     assert_eq!(meta.outer_udp.length() as usize, len_post_v6);
 
     assert_eq!(meta.inner_eth.source(), g1_cfg.guest_mac);

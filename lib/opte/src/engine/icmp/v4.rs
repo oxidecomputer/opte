@@ -42,11 +42,12 @@ impl HairpinAction for IcmpEchoReply {
                 self.echo_dst_ip,
             )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
+            Predicate::IcmpMsgType(vec![
+                MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
+            ]),
         ];
 
-        let data_preds = vec![DataPredicate::IcmpMsgType(
-            MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
-        )];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -58,8 +59,7 @@ impl HairpinAction for IcmpEchoReply {
             // should be impossible, but we avoid panicking given the kernel
             // context.
             return Err(GenErr::Unexpected(format!(
-                "Expected ICMP packet metadata, but found: {:?}",
-                meta
+                "Expected ICMP packet metadata, but found: {meta:?}",
             )));
         };
 
@@ -76,8 +76,7 @@ impl HairpinAction for IcmpEchoReply {
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
-                    "expected an ICMPv4 Echo Request, got {} {}",
-                    ty, code,
+                    "expected an ICMPv4 Echo Request, got {ty} {code}",
                 )));
             }
         };

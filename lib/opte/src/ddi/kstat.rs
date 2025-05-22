@@ -292,7 +292,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::NameTooLong(name) => {
-                write!(f, "kstat name too long: {}", name)
+                write!(f, "kstat name too long: {name}")
             }
 
             Self::NulChar => write!(f, "kstat name contains NUL char"),

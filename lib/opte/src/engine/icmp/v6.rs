@@ -101,11 +101,12 @@ impl HairpinAction for Icmpv6EchoReply {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::EchoRequest).into(),
+            ]),
         ];
 
-        let data_preds = vec![DataPredicate::Icmpv6MsgType(
-            MessageType::from(Icmpv6Message::EchoRequest).into(),
-        )];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -117,8 +118,7 @@ impl HairpinAction for Icmpv6EchoReply {
             // should be impossible, but we avoid panicking given the kernel
             // context.
             return Err(GenErr::Unexpected(format!(
-                "Expected ICMPv6 packet metadata, but found: {:?}",
-                meta
+                "Expected ICMPv6 packet metadata, but found: {meta:?}",
             )));
         };
 
@@ -135,8 +135,7 @@ impl HairpinAction for Icmpv6EchoReply {
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
-                    "expected an ICMPv6 Echo Request, got {} {}",
-                    ty, code,
+                    "expected an ICMPv6 Echo Request, got {ty} {code}",
                 )));
             }
         };
@@ -228,14 +227,13 @@ impl HairpinAction for RouterAdvertisement {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            // This must be a Router Solicitation message.
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::RouterSolicit).into(),
+            ]),
         ];
 
-        let data_preds = vec![
-            // This must be a Router Solicitation message.
-            DataPredicate::Icmpv6MsgType(
-                MessageType::from(Icmpv6Message::RouterSolicit).into(),
-            ),
-        ];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -250,8 +248,7 @@ impl HairpinAction for RouterAdvertisement {
             // should be impossible, but we avoid panicking given the kernel
             // context.
             return Err(GenErr::Unexpected(format!(
-                "Expected ICMPv6 packet metadata, but found: {:?}",
-                meta
+                "Expected ICMPv6 packet metadata, but found: {meta:?}",
             )));
         };
 
@@ -260,8 +257,7 @@ impl HairpinAction for RouterAdvertisement {
         let Some(ip6) = meta.inner_ip6() else {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
-                "Expected IPv6 packet metadata, but found: {:?}",
-                meta
+                "Expected IPv6 packet metadata, but found: {meta:?}",
             )));
         };
         let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.source().bytes()));
@@ -551,14 +547,13 @@ impl HairpinAction for NeighborAdvertisement {
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(
                 Protocol::ICMPv6,
             )]),
+            // This must be an actual Neighbor Solicitation message
+            Predicate::Icmpv6MsgType(vec![
+                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
+            ]),
         ];
 
-        let data_preds = vec![
-            // This must be an actual Neighbor Solicitation message
-            DataPredicate::Icmpv6MsgType(
-                MessageType::from(Icmpv6Message::NeighborSolicit).into(),
-            ),
-        ];
+        let data_preds = vec![];
 
         (hdr_preds, data_preds)
     }
@@ -570,8 +565,7 @@ impl HairpinAction for NeighborAdvertisement {
             // should be impossible, but we avoid panicking given the kernel
             // context.
             return Err(GenErr::Unexpected(format!(
-                "Expected ICMPv6 packet metadata, but found: {:?}",
-                meta
+                "Expected ICMPv6 packet metadata, but found: {meta:?}",
             )));
         };
 
@@ -579,8 +573,7 @@ impl HairpinAction for NeighborAdvertisement {
         let metadata = meta.inner_ip6().ok_or_else(|| {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
             GenErr::Unexpected(format!(
-                "Expected IPv6 packet metadata, but found: {:?}",
-                meta
+                "Expected IPv6 packet metadata, but found: {meta:?}",
             ))
         })?;
 
