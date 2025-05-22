@@ -329,7 +329,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.icmp.type={s}")
+                write!(f, "inner.icmp.type{s}")
             }
 
             IcmpMsgCode(list) => {
