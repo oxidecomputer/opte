@@ -946,21 +946,26 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
+    // Given we're the only management thread allowed by the RwLock, the below
+    // ownership checks cannot be violated.
     if let Some(underlay) = underlay.take() {
-        // There shouldn't be anymore refs to the underlay given we checked for
-        // 0 ports above.
-        let Some(u1) = Arc::into_inner(underlay.u1) else {
-            return Err(OpteError::System {
-                errno: EBUSY,
-                msg: "underlay u1 has outstanding refs".into(),
-            });
-        };
-        let Some(u2) = Arc::into_inner(underlay.u2) else {
-            return Err(OpteError::System {
-                errno: EBUSY,
-                msg: "underlay u2 has outstanding refs".into(),
-            });
-        };
+        // If the underlay references have leaked/spread beyond `XdeDev`s and not
+        // been cleaned up, we committed have a fatal programming error.
+        // We aren't using `Weak` references to these types either, so no strong
+        // references could be created.
+        //
+        // We know these must succeed given that the only holders of an
+        // `Arc<XdeUnderlayPort>` are `XdeState` (whose ref we have exclusively locked)
+        // and `XdeDev` (of which none remain).
+        let name = underlay.u1.name.clone();
+        let u1 = Arc::into_inner(underlay.u1).expect(&format!(
+            "underlay u1 ({name}) must have one ref during teardown",
+        ));
+
+        let name = underlay.u2.name.clone();
+        let u2 = Arc::into_inner(underlay.u2).expect(&format!(
+            "underlay u2 ({name}) must have one ref during teardown",
+        ));
 
         for u in [u1, u2] {
             // We have a chain of refs here: `MacSiphon` holds a ref to
@@ -979,15 +984,13 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // one else will have or try to clone the Stream handle.
 
             // 2. Close the open stream handle.
-            if Arc::into_inner(u.stream).is_none() {
-                return Err(OpteError::System {
-                    errno: EBUSY,
-                    msg: format!(
-                        "underlay {} has outstanding dls_stream refs",
-                        u.name
-                    ),
-                });
-            }
+            // The only other hold on this `DlsStream` is via `u.siphon`, which
+            // we just dropped. The `expect` asserts that we have consumed them
+            // in the correct order.
+            Arc::into_inner(u.stream).expect(&format!(
+                "underlay ({}) must have no external refs to its DlsStream",
+                u.name
+            ));
         }
     }
 
