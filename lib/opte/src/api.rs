@@ -287,16 +287,28 @@ impl InnerFlowId {
 
 impl Display for InnerFlowId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // TODO: different presentation for different kinds?
-        write!(
-            f,
-            "{}:{}:{}:{}:{}",
-            self.protocol(),
-            self.src_ip(),
-            self.proto_info[0],
-            self.dst_ip(),
-            self.proto_info[1],
-        )
+        let proto = self.protocol();
+        let sip = self.src_ip();
+        let dip = self.dst_ip();
+
+        match self.l4_info() {
+            Some(L4Info::Ports(info)) => write!(
+                f,
+                "{proto}:{sip}:{}:{dip}:{}",
+                info.src_port, info.dst_port
+            ),
+            Some(L4Info::Icmpv4(info)) => write!(
+                f,
+                "{proto}/{}/{}:{sip}:{dip}:{}",
+                info.ty, info.code, info.id
+            ),
+            Some(L4Info::Icmpv6(info)) => write!(
+                f,
+                "{proto}/{}/{}:{sip}:{dip}:{}",
+                info.ty, info.code, info.id
+            ),
+            None => write!(f, "{proto}:{sip}:{dip}"),
+        }
     }
 }
 

@@ -87,7 +87,7 @@ pub fn print_list_layers_into(
     resp: &ListLayersResp,
 ) -> std::io::Result<()> {
     let mut t = TabWriter::new(writer);
-    writeln!(t, "NAME\tRULES IN\tRULES OUT\tDEF IN\tDEF OUT\tFLOWS",)?;
+    writeln!(t, "NAME\tRULES IN\tRULES OUT\tDEF IN\tDEF OUT\tFLOWS")?;
 
     for desc in &resp.layers {
         writeln!(

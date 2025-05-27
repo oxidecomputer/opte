@@ -280,3 +280,49 @@ impl Ports {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_predicate_simplification() {
+        // Verify that we can correctly convert a control-plane given
+        // Vec<u16> port list into something a little less `O(n)`.
+        let simple = Ports::PortList(vec![1000, 1001, 1002, 1003, 1004]);
+        assert_eq!(
+            simple.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1000..=1004).into()]))
+        );
+
+        let gappy = Ports::PortList(vec![
+            80, 443, 1000, 1001, 1002, 1003, 1004, 60_000,
+        ]);
+        assert_eq!(
+            gappy.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![
+                80.into(),
+                443.into(),
+                (1000..=1004).into(),
+                60_000.into()
+            ]))
+        );
+
+        let dupes_order = Ports::PortList(vec![1, 2, 2, 3, 6, 5, 5, 7]);
+        assert_eq!(
+            dupes_order.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1..=3).into(), (5..=7).into()]))
+        );
+
+        let reversed = Ports::PortList(vec![
+            60_000, 1004, 1003, 1002, 1001, 1000, 443, 80,
+        ]);
+        assert_eq!(reversed.into_predicate(), gappy.into_predicate());
+
+        let large_list: Vec<u16> = (1024..=65535).collect();
+        assert_eq!(
+            Ports::PortList(large_list).into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1024..=65535).into()]))
+        );
+    }
+}

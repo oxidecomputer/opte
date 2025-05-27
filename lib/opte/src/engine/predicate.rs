@@ -643,16 +643,17 @@ impl<T> From<T> for Match<T> {
     }
 }
 
-impl<T: PartialEq + Clone> From<RangeInclusive<T>> for Match<T> {
+impl<T: PartialEq> From<RangeInclusive<T>> for Match<T> {
     fn from(value: RangeInclusive<T>) -> Self {
-        match (value.start(), value.end()) {
-            (a, b) if a == b => Match::Exact(a.clone()),
-            _ => Match::Range(value),
+        let (start, end) = value.into_inner();
+        if start == end {
+            Match::Exact(start)
+        } else {
+            Match::Range(start..=end)
         }
     }
 }
 
-// XXX The Icmp types/codes should be Normal Predicates!!
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum DataPredicate {
     DhcpMsgType(Match<DhcpMessageType>),

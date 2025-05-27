@@ -834,7 +834,7 @@ impl FromStr for Address {
 
             addrstr => match addrstr.split_once('=') {
                 None => {
-                    Err(format!("malformed address specification: {addrstr}",))
+                    Err(format!("malformed address specification: {addrstr}"))
                 }
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),

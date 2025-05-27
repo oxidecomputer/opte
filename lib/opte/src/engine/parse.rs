@@ -7,10 +7,6 @@
 //! Constructs used in packet parsing, such as choices over protocol
 //! and complete packet definitions.
 
-use crate::api::Icmpv4Info;
-use crate::api::Icmpv6Info;
-use crate::api::PortInfo;
-
 use super::LightweightMeta;
 use super::checksum::Checksum;
 use super::checksum::HeaderChecksum;
@@ -39,6 +35,9 @@ use super::packet::MismatchError;
 use super::packet::OpteMeta;
 use super::packet::ParseError;
 use super::rule::CompiledTransform;
+use crate::api::Icmpv4Info;
+use crate::api::Icmpv6Info;
+use crate::api::PortInfo;
 use core::fmt;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
@@ -691,64 +690,6 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             csum.sub_bytes(&b[0..6]);
 
             Some(csum)
-        }
-    }
-}
-
-impl<V: ByteSlice> Ulp<V> {
-    #[inline]
-    pub fn true_src_port(&self) -> Option<u16> {
-        match self {
-            Ulp::Tcp(pkt) => Some(pkt.source()),
-            Ulp::Udp(pkt) => Some(pkt.source()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn true_dst_port(&self) -> Option<u16> {
-        match self {
-            Ulp::Tcp(pkt) => Some(pkt.destination()),
-            Ulp::Udp(pkt) => Some(pkt.destination()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn pseudo_port(&self) -> Option<u16> {
-        match self {
-            Ulp::IcmpV4(pkt) => pkt.echo_id(),
-            Ulp::IcmpV6(pkt) => pkt.echo_id(),
-            _ => None,
-        }
-    }
-}
-
-impl<V: ByteSlice> ValidUlp<V> {
-    #[inline]
-    pub fn true_src_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::Tcp(pkt) => Some(pkt.source()),
-            ValidUlp::Udp(pkt) => Some(pkt.source()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn true_dst_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::Tcp(pkt) => Some(pkt.destination()),
-            ValidUlp::Udp(pkt) => Some(pkt.destination()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn pseudo_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::IcmpV4(pkt) => pkt.echo_id(),
-            ValidUlp::IcmpV6(pkt) => pkt.echo_id(),
-            _ => None,
         }
     }
 }
