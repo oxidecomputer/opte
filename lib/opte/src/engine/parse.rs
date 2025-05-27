@@ -35,8 +35,7 @@ use super::packet::MismatchError;
 use super::packet::OpteMeta;
 use super::packet::ParseError;
 use super::rule::CompiledTransform;
-use crate::api::Icmpv4Info;
-use crate::api::Icmpv6Info;
+use crate::api::IcmpInfo;
 use crate::api::PortInfo;
 use core::fmt;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
@@ -323,13 +322,13 @@ fn flow_id<V: ByteSlice>(
         Some(ValidUlp::Udp(u)) => {
             PortInfo { src_port: u.source(), dst_port: u.destination() }.into()
         }
-        Some(ValidUlp::IcmpV4(v4)) => Icmpv4Info {
+        Some(ValidUlp::IcmpV4(v4)) => IcmpInfo {
             ty: v4.ty().0,
             code: v4.code(),
             id: v4.echo_id().unwrap_or_default(),
         }
         .into(),
-        Some(ValidUlp::IcmpV6(v6)) => Icmpv6Info {
+        Some(ValidUlp::IcmpV6(v6)) => IcmpInfo {
             ty: v6.ty().0,
             code: v6.code(),
             id: v6.echo_id().unwrap_or_default(),

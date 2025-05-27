@@ -36,8 +36,7 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 pub use crate::api::AddrPair;
 pub use crate::api::FLOW_ID_DEFAULT;
-use crate::api::Icmpv4Info;
-use crate::api::Icmpv6Info;
+use crate::api::IcmpInfo;
 pub use crate::api::InnerFlowId;
 use crate::api::PortInfo;
 use crate::d_error::DError;
@@ -661,13 +660,13 @@ impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
                 PortInfo { src_port: u.source(), dst_port: u.destination() }
                     .into()
             }
-            Some(Ulp::IcmpV4(v4)) => Icmpv4Info {
+            Some(Ulp::IcmpV4(v4)) => IcmpInfo {
                 ty: v4.ty().0,
                 code: v4.code(),
                 id: v4.echo_id().unwrap_or_default(),
             }
             .into(),
-            Some(Ulp::IcmpV6(v6)) => Icmpv6Info {
+            Some(Ulp::IcmpV6(v6)) => IcmpInfo {
                 ty: v6.ty().0,
                 code: v6.code(),
                 id: v6.echo_id().unwrap_or_default(),

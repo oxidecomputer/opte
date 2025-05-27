@@ -210,7 +210,7 @@ pub fn print_lft_flow(
             (sport_o.as_str(), dport_o.as_str())
         }
         Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
-            sport_o = format!("{:#02x}/{:#02x}", p.ty, p.code);
+            sport_o = format!("{:#04x}/{:#04x}", p.ty, p.code);
             dport_o = p.id.to_string();
             (sport_o.as_str(), dport_o.as_str())
         }
@@ -250,7 +250,7 @@ pub fn print_uft_flow(
             (sport_o.as_str(), dport_o.as_str())
         }
         Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
-            sport_o = format!("{:#02x}/{:#02x}", p.ty, p.code);
+            sport_o = format!("{:#04x}/{:#04x}", p.ty, p.code);
             dport_o = p.id.to_string();
             (sport_o.as_str(), dport_o.as_str())
         }

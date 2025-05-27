@@ -73,14 +73,8 @@ impl Default for InnerFlowId {
 
 pub enum L4Info<'a> {
     Ports(&'a PortInfo),
-    Icmpv4(&'a Icmpv4Info),
-    Icmpv6(&'a Icmpv6Info),
-}
-
-pub enum L4InfoMut<'a> {
-    Ports(&'a mut PortInfo),
-    Icmpv4(&'a mut Icmpv4Info),
-    Icmpv6(&'a mut Icmpv6Info),
+    Icmpv4(&'a IcmpInfo),
+    Icmpv6(&'a IcmpInfo),
 }
 
 #[derive(
@@ -125,46 +119,22 @@ impl From<PortInfo> for [u16; 2] {
 )]
 #[repr(C)]
 pub struct IcmpInfo {
-    // TODO: it seems *very* hard to convince the zerocopy derives
-    // that this can safely be anrbitrary `Type`, when we know that is
-    // either IcmpV4Type or IcmpV6Type without making this `packed`.
+    // This is an untyped `u8`, because it seems *very* hard to convince the
+    // zerocopy derives that this can safely be an arbitrary `Type`, when we know
+    // that is fundamentally a `u8` (either IcmpV4Type or IcmpV6Type) without
+    // making the struct `packed`. That then makes us unable to pull `id` out
+    // from a `&IcmpInfo`. `PhantomData<Ty>` fails similarly.
+    // Expressing this would make it easier to constrain the validity of echo_id.
     pub ty: u8,
     pub code: u8,
     pub id: u16,
 }
 
-pub type Icmpv4Info = IcmpInfo; //<IcmpV4Type>;
-pub type Icmpv6Info = IcmpInfo; //<IcmpV6Type>;
-
-// impl Icmpv4Info {
-//     pub fn echo_id(&self) -> Option<u16> {
-//         match self.ty {
-//             IcmpV4Type::ECHO_REQUEST | IcmpV4Type::ECHO_REPLY => Some(self.id),
-//             _ => None,
-//         }
-//     }
-// }
-
-impl From<Icmpv4Info> for [u16; 2] {
-    fn from(val: Icmpv4Info) -> [u16; 2] {
+impl From<IcmpInfo> for [u16; 2] {
+    fn from(val: IcmpInfo) -> [u16; 2] {
         zerocopy::transmute!(val)
     }
 }
-
-// impl Icmpv6Info {
-//     pub fn echo_id(&self) -> Option<u16> {
-//         match self.ty {
-//             IcmpV6Type::ECHO_REQUEST | IcmpV6Type::ECHO_REPLY => Some(self.id),
-//             _ => None,
-//         }
-//     }
-// }
-
-// impl Into<[u16; 2]> for Icmpv6Info {
-//     fn into(self) -> [u16; 2] {
-//         zerocopy::transmute!(self)
-//     }
-// }
 
 /// Tagged union of a source-dest IP address pair, used to avoid
 /// duplicating the discriminator.
@@ -203,7 +173,7 @@ impl InnerFlowId {
             Some(L4Info::Ports(p)) => {
                 PortInfo { src_port: p.dst_port, dst_port: p.src_port }.into()
             }
-            Some(L4Info::Icmpv4(v4)) if v4.code == 0 => Icmpv4Info {
+            Some(L4Info::Icmpv4(v4)) if v4.code == 0 => IcmpInfo {
                 ty: match IcmpV4Type(v4.ty) {
                     IcmpV4Type::ECHO_REQUEST => IcmpV4Type::ECHO_REPLY,
                     IcmpV4Type::ECHO_REPLY => IcmpV4Type::ECHO_REQUEST,
@@ -213,7 +183,7 @@ impl InnerFlowId {
                 ..*v4
             }
             .into(),
-            Some(L4Info::Icmpv6(v6)) if v6.code == 0 => Icmpv6Info {
+            Some(L4Info::Icmpv6(v6)) if v6.code == 0 => IcmpInfo {
                 ty: match IcmpV6Type(v6.ty) {
                     IcmpV6Type::ECHO_REQUEST => IcmpV6Type::ECHO_REPLY,
                     IcmpV6Type::ECHO_REPLY => IcmpV6Type::ECHO_REQUEST,
@@ -258,21 +228,6 @@ impl InnerFlowId {
             IpProtocol::TCP | IpProtocol::UDP => {
                 Some(L4Info::Ports(zerocopy::transmute_ref!(&self.proto_info)))
             }
-            _ => None,
-        }
-    }
-
-    pub fn l4_info_mut(&mut self) -> Option<L4InfoMut<'_>> {
-        match IpProtocol(self.proto) {
-            IpProtocol::ICMP => Some(L4InfoMut::Icmpv4(
-                zerocopy::transmute_mut!(&mut self.proto_info),
-            )),
-            IpProtocol::ICMP_V6 => Some(L4InfoMut::Icmpv6(
-                zerocopy::transmute_mut!(&mut self.proto_info),
-            )),
-            IpProtocol::TCP | IpProtocol::UDP => Some(L4InfoMut::Ports(
-                zerocopy::transmute_mut!(&mut self.proto_info),
-            )),
             _ => None,
         }
     }
