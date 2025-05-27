@@ -13,6 +13,7 @@ use crate::api::DumpLayerResp;
 use crate::api::DumpTcpFlowsResp;
 use crate::api::DumpUftResp;
 use crate::api::InnerFlowId;
+use crate::api::L4Info;
 use crate::api::TcpFlowEntryDump;
 use opte_api::ActionDescEntryDump;
 use opte_api::ListLayersResp;
@@ -191,7 +192,7 @@ pub fn print_rule(
 
 /// Print the header for the [`print_lft_flow()`] output.
 pub fn print_lft_flow_header(t: &mut impl Write) -> std::io::Result<()> {
-    writeln!(t, "PROTO\tSRC IP\tSPORT\tDST IP\tDPORT\tHITS\tACTION")
+    writeln!(t, "PROTO\tSRC IP\tSPORT/TY\tDST IP\tDPORT\tHITS\tACTION")
 }
 
 /// Print information about a layer flow.
@@ -200,14 +201,30 @@ pub fn print_lft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &ActionDescEntryDump,
 ) -> std::io::Result<()> {
+    let sport_o;
+    let dport_o;
+    let (sport, dport) = match flow_id.l4_info() {
+        Some(L4Info::Ports(p)) => {
+            sport_o = p.src_port.to_string();
+            dport_o = p.dst_port.to_string();
+            (sport_o.as_str(), dport_o.as_str())
+        }
+        Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
+            sport_o = format!("{:#02x}/{:#02x}", p.ty, p.code);
+            dport_o = p.id.to_string();
+            (sport_o.as_str(), dport_o.as_str())
+        }
+        None => ("N/A", "N/A"),
+    };
+
     writeln!(
         t,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.protocol(),
         flow_id.src_ip(),
-        flow_id.proto_info[0],
+        sport,
         flow_id.dst_ip(),
-        flow_id.proto_info[1],
+        dport,
         flow_entry.hits,
         flow_entry.summary,
     )
@@ -215,7 +232,7 @@ pub fn print_lft_flow(
 
 /// Print the header for the [`print_uft_flow()`] output.
 pub fn print_uft_flow_header(t: &mut impl Write) -> std::io::Result<()> {
-    writeln!(t, "PROTO\tSRC IP\tSPORT\tDST IP\tDPORT\tHITS\tXFORMS")
+    writeln!(t, "PROTO\tSRC IP\tSPORT/TY\tDST IP\tDPORT\tHITS\tXFORMS")
 }
 
 /// Print information about a UFT entry.
@@ -224,14 +241,30 @@ pub fn print_uft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &UftEntryDump,
 ) -> std::io::Result<()> {
+    let sport_o;
+    let dport_o;
+    let (sport, dport) = match flow_id.l4_info() {
+        Some(L4Info::Ports(p)) => {
+            sport_o = p.src_port.to_string();
+            dport_o = p.dst_port.to_string();
+            (sport_o.as_str(), dport_o.as_str())
+        }
+        Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
+            sport_o = format!("{:#02x}/{:#02x}", p.ty, p.code);
+            dport_o = p.id.to_string();
+            (sport_o.as_str(), dport_o.as_str())
+        }
+        None => ("N/A", "N/A"),
+    };
+
     writeln!(
         t,
         "{}\t{}\t{}\t{}\t{}\t{}\t{}",
         flow_id.protocol(),
         flow_id.src_ip(),
-        flow_id.proto_info[0],
+        sport,
         flow_id.dst_ip(),
-        flow_id.proto_info[1],
+        dport,
         flow_entry.hits,
         flow_entry.summary,
     )

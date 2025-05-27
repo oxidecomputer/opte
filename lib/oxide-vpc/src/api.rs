@@ -926,7 +926,7 @@ impl Display for ProtoFilter {
                 Ok(())
             }
             ProtoFilter::Icmpv6(filter) => {
-                write!(f, "ICMPv6")?;
+                write!(f, "ICMP6")?;
                 if let Some(filter) = filter {
                     write!(f, ":{filter}")?;
                 }
@@ -995,13 +995,43 @@ impl FromStr for IcmpFilter {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        todo!()
+        let (ty_str, code_str) = match s.split_once(',') {
+            None => (s, None),
+            Some((lhs, rhs)) => (lhs, Some(rhs)),
+        };
+
+        let codes = code_str
+            .map(|s| {
+                let (lhs, rhs) = match s.split_once('-') {
+                    Some((lhs, rhs)) => (lhs, Some(rhs)),
+                    None => (s, None),
+                };
+                let start = lhs.parse::<u8>().map_err(|e| e.to_string())?;
+                let end = rhs
+                    .map(|v| v.parse::<u8>().map_err(|e| e.to_string()))
+                    .unwrap_or(Ok(start))?;
+
+                Ok::<_, String>(start..=end)
+            })
+            .transpose()?;
+
+        Ok(Self { ty: ty_str.parse::<u8>().map_err(|e| e.to_string())?, codes })
     }
 }
 
 impl Display for IcmpFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        write!(f, "{}", self.ty)?;
+        if let Some(ref code) = self.codes {
+            let start = code.start();
+            let end = code.end();
+            if start == end {
+                write!(f, ",{start}")?;
+            } else {
+                write!(f, ",{start}-{end}")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1090,6 +1120,21 @@ pub mod tests {
     fn parse_good_proto_filter() {
         assert_eq!("aNy".parse::<ProtoFilter>().unwrap(), ProtoFilter::Any);
         assert_eq!("TCp".parse::<ProtoFilter>().unwrap(), ProtoFilter::Tcp);
+        assert_eq!(
+            "icmp".parse::<ProtoFilter>().unwrap(),
+            ProtoFilter::Icmp(None)
+        );
+        assert_eq!(
+            "ICMP:3".parse::<ProtoFilter>().unwrap(),
+            ProtoFilter::Icmp(Some(IcmpFilter { ty: 3, codes: None }))
+        );
+        assert_eq!(
+            "icmp6:22,11-15".parse::<ProtoFilter>().unwrap(),
+            ProtoFilter::Icmpv6(Some(IcmpFilter {
+                ty: 22,
+                codes: Some(11..=15)
+            }))
+        );
     }
 
     #[test]
