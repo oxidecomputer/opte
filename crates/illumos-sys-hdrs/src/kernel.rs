@@ -416,6 +416,8 @@ unsafe extern "C" {
 
     pub type queue_t; // Definitely not using STREAMS.
 
+    pub type kthread_t;
+
     // DDI/DKI 9F
     pub fn allocb(size: size_t, pri: c_uint) -> *mut mblk_t;
 
@@ -575,6 +577,42 @@ unsafe extern "C" {
     pub fn rw_downgrade(rwlp: *mut krwlock_t);
     pub fn rw_tryupgrade(rwlp: *mut krwlock_t);
     pub fn rw_read_locked(rwlp: *mut krwlock_t);
+
+    pub fn cv_init(
+        cvp: *mut kcondvar_t,
+        name: *const c_char,
+        cv_type: kcv_type_t,
+        arg: *mut c_void,
+    );
+    pub fn cv_destroy(cvp: *mut kcondvar_t);
+    pub fn cv_wait(cvp: *mut kcondvar_t, mp: *mut kmutex_t);
+    pub fn cv_signal(cvp: *mut kcondvar_t);
+    pub fn cv_broadcast(cvp: *mut kcondvar_t);
+    pub fn cv_wait_sig(cvp: *mut kcondvar_t, mp: *mut kmutex_t) -> c_int;
+    pub fn cv_timedwait(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        timeout: clock_t,
+    ) -> clock_t;
+    pub fn cv_timedwait_sig(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        timeout: clock_t,
+    ) -> clock_t;
+    pub fn cv_reltimedwait(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        delta: clock_t,
+        res: time_res_t,
+    ) -> clock_t;
+    pub fn cv_reltimedwait_sig(
+        cvp: *mut kcondvar_t,
+        mp: *mut kmutex_t,
+        delta: clock_t,
+        res: time_res_t,
+    ) -> clock_t;
+
+    pub fn _curthread() -> *mut kthread_t;
 
     pub fn nochpoll() -> c_int;
     pub fn nodev() -> c_int;

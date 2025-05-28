@@ -8,20 +8,24 @@
 //!
 //! TODO: This should be in its own crate, wrapping the illumos-ddi-dki
 //! crate. But for now just let it live here.
+use core::cell::UnsafeCell;
 use core::ops::Deref;
 use core::ops::DerefMut;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use core::cell::UnsafeCell;
         use core::ptr;
+        use core::ptr::NonNull;
         use illumos_sys_hdrs::{
-            kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
-            mutex_destroy, mutex_init, rw_enter, rw_exit, rw_init,
-            rw_destroy
+            _curthread, cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
+            kcv_type_t, kcondvar_t, kmutex_t, krw_t, krwlock_t, kthread_t,
+            mutex_enter, mutex_exit, mutex_destroy, mutex_init, mutex_tryenter,
+            rw_enter, rw_exit, rw_init, rw_destroy
         };
     } else {
+        use std::sync::Condvar;
         use std::sync::Mutex;
+        use std::thread::ThreadId;
     }
 }
 
@@ -143,7 +147,18 @@ impl<T> KMutex<T> {
         unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
     }
+
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockTaken> {
+        let try_lock = unsafe { mutex_tryenter(self.mutex.0.get()) };
+        if try_lock != 0 {
+            Ok(KMutexGuard { lock: self })
+        } else {
+            Err(LockTaken)
+        }
+    }
 }
+
+pub struct LockTaken;
 
 unsafe impl<T: Send> Send for KMutex<T> {}
 unsafe impl<T: Sync> Sync for KMutex<T> {}
@@ -407,5 +422,166 @@ impl<T> KRwLock<T> {
     pub fn write(&self) -> KRwLockWriteGuard<T> {
         let guard = self.inner.write().unwrap();
         KRwLockWriteGuard { guard }
+    }
+}
+
+// TODO: these hold in `std`, think about it here.
+unsafe impl Send for KCondvar {}
+unsafe impl Sync for KCondvar {}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+pub struct KCondvar {
+    cv: UnsafeCell<kcondvar_t>,
+}
+
+#[cfg(any(feature = "std", test))]
+pub struct KCondvar {
+    cv: Condvar,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl KCondvar {
+    pub fn new() -> Self {
+        let mut cv = kcondvar_t { _opaque: 0 };
+
+        unsafe {
+            cv_init(
+                &mut cv,
+                ptr::null_mut(),
+                kcv_type_t::CV_DRIVER,
+                ptr::null_mut(),
+            );
+        }
+
+        Self { cv: UnsafeCell::new(cv) }
+    }
+
+    pub fn notify_one(&self) {
+        unsafe { cv_signal(self.cv.get()) }
+    }
+
+    pub fn notify_all(&self) {
+        unsafe { cv_broadcast(self.cv.get()) }
+    }
+
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        unsafe { cv_wait(self.cv.get(), lock.lock.mutex.0.get()) }
+        lock
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl KCondvar {
+    pub fn new() -> Self {
+        Self { cv: Condvar::new() }
+    }
+
+    pub fn notify_one(&self) {
+        self.cv.notify_one()
+    }
+
+    pub fn notify_all(&self) {
+        self.cv.notify_one()
+    }
+
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        KMutexGuard { guard: self.cv.wait(lock.guard).unwrap() }
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl Drop for KCondvar {
+    fn drop(&mut self) {
+        unsafe { cv_destroy(self.cv.get()) };
+    }
+}
+
+/// A mutual exclusion mechanism which loans out access to a single
+/// internal token. This is used to ensure at most one thread is present
+/// in a critical section *without actively holding a [`KMutex`]*.
+///
+/// This is necessary for some kernel-level operations which will upcall or
+/// enter some other context in which it is unsafe to hold a [`KMutex`] or
+/// [`KRwLock`]. Any functions attached to the token `T` should denote whether
+/// these restrictions apply.
+pub struct TokenLock<T> {
+    // In future, this could be arbitrary (i.e., taking user-held
+    // context like a file descriptor). Similarly this could allow
+    // for re-entrancy, but this is tricky to square with `&mut` access
+    // to the inner `T`.
+    #[cfg(all(not(feature = "std"), not(test)))]
+    holder: KMutex<Option<NonNull<kthread_t>>>,
+    #[cfg(any(feature = "std", test))]
+    holder: KMutex<Option<ThreadId>>,
+    cv: KCondvar,
+    inner: UnsafeCell<T>,
+}
+
+impl<T> TokenLock<T> {
+    pub fn new(token: T) -> Self {
+        let holder = KMutex::new(None);
+        let cv = KCondvar::new();
+
+        Self { holder, cv, inner: UnsafeCell::new(token) }
+    }
+
+    pub fn lock(&self) -> Token<'_, T> {
+        let mut thread_lock = self.holder.lock();
+
+        while thread_lock.is_some() {
+            thread_lock = self.cv.wait(thread_lock);
+        }
+
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let curthread = unsafe {
+            NonNull::new(_curthread())
+                .expect("current thread *must* be a valid pointer")
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let curthread = std::thread::current().id();
+
+        *thread_lock = Some(curthread);
+
+        Token { lock: self }
+    }
+}
+
+pub struct Token<'a, T> {
+    lock: &'a TokenLock<T>,
+}
+
+impl<T> Deref for Token<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: Only the thread indicated by `parent.holder`
+        // can have a `Token`, thus we are safe to take a shared ref
+        // (no other writers).
+        unsafe { &*self.lock.inner.get() }
+    }
+}
+
+impl<T> DerefMut for Token<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: Only the thread indicated by `parent.holder`
+        // can have a `Token`, thus there are no other writers.
+        // Rust has also guaranteed this is the only &mut to the Token
+        // itself, so no other readers.
+        unsafe { &mut *self.lock.inner.get() }
+    }
+}
+
+impl<T> Drop for Token<'_, T> {
+    fn drop(&mut self) {
+        let mut thread_lock = self.lock.holder.lock();
+        *thread_lock = None;
+        self.lock.cv.notify_all();
     }
 }
