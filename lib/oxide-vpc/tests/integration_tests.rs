@@ -3134,6 +3134,8 @@ fn uft_lft_invalidation_out() {
             "incr:stats.port.out_uft_miss",
         ]
     );
+
+    print_port(&g1.port, &g1.vpc_map);
 }
 
 // Verify that changing rules causes invalidation of UFT and LFT

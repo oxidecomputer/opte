@@ -2030,10 +2030,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
-    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&mut pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual

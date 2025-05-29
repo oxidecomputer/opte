@@ -52,6 +52,7 @@ use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use crate::ExecCtx;
+use crate::ExecCtx2;
 use crate::api::DumpLayerResp;
 use crate::api::DumpTcpFlowsResp;
 use crate::api::DumpUftResp;
@@ -608,7 +609,10 @@ impl<Id> fmt::Debug for UftEntry<Id> {
             .field("l4_hash", l4_hash)
             .field("epoch", epoch)
             .field("tcp_flow", tcp_flow)
-            .field("stats", &"TODO")
+            .field(
+                "stats",
+                &crate::api::FlowStat::<InnerFlowId>::from(stat.as_ref()),
+            )
             .finish()
     }
 }
@@ -1020,6 +1024,18 @@ impl<N: NetworkImpl> Port<N> {
         Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
     }
 
+    #[cfg(any(feature = "std", test))]
+    /// XXX TEST METHOD
+    pub fn dump_flow_stats(&self) -> Result<String> {
+        let data = self.data.read();
+        check_state!(
+            data.state,
+            [PortState::Running, PortState::Paused, PortState::Restored]
+        )?;
+
+        Ok(data.flow_stats.dump())
+    }
+
     /// Clear all entries from the Unified Flow Table (UFT).
     ///
     /// # States
@@ -1131,6 +1147,8 @@ impl<N: NetworkImpl> Port<N> {
         //      set TIME_WAIT_EXPIRE_TTL or another state-specific timer lower
         //      than 60s, we'll need to specifically expire the matching UFTs.
         let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
+
+        data.flow_stats.expire(now);
         Ok(())
     }
 
@@ -2010,11 +2028,13 @@ impl<N: NetworkImpl> Port<N> {
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
+        let mut ectx =
+            ExecCtx2 { user_ctx: &self.ectx, stats: &mut data.flow_stats };
+
         match dir {
             Direction::Out => {
                 for layer in &mut data.layers {
-                    let res =
-                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
+                    let res = layer.process(&mut ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -2028,8 +2048,7 @@ impl<N: NetworkImpl> Port<N> {
 
             Direction::In => {
                 for layer in data.layers.iter_mut().rev() {
-                    let res =
-                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
+                    let res = layer.process(&mut ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -2413,6 +2432,7 @@ impl<N: NetworkImpl> Port<N> {
         let ufid_out = pkt.flow().mirror();
         let stat =
             data.flow_stats.new_flow(ufid_in, &ufid_out, In, stat_parents);
+        stat.hit(pkt_len);
         let mut hte = UftEntry {
             pair: KMutex::new(Some(ufid_out)),
             xforms: xforms.compile(flags),
@@ -2693,6 +2713,7 @@ impl<N: NetworkImpl> Port<N> {
             Out,
             stat_parents,
         );
+        stat.hit(pkt_len);
 
         let hte = UftEntry {
             pair: KMutex::new(None),
