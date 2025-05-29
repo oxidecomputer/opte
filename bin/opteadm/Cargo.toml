@@ -10,9 +10,9 @@ repository.workspace = true
 # XXX For the time being opteadm needs to set the engine feature to
 # get all the types. Once there types are move to their appropriate
 # place this feature flag will be replaced/removed.
-opte = { workspace = true, features = ["api", "engine", "std"] }
+opte = { workspace = true, features = ["api", "std"] }
 opte-ioctl.workspace = true
-oxide-vpc = { workspace = true, features = ["api", "engine", "std"] }
+oxide-vpc = { workspace = true, features = ["api", "std"] }
 
 anyhow.workspace = true
 cfg-if.workspace = true

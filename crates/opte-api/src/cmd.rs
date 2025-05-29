@@ -2,13 +2,17 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use super::API_VERSION;
+use super::RuleId;
+use super::TcpState;
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Debug;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
@@ -244,7 +248,7 @@ impl OpteError {
 
 /// A marker trait indicating a success response type that is returned
 /// from a command and may be passed across the ioctl/API boundary.
-pub trait CmdOk: core::fmt::Debug + Serialize {}
+pub trait CmdOk: Debug + Serialize {}
 
 impl CmdOk for () {}
 
@@ -255,3 +259,153 @@ pub struct NoResp {
 }
 
 impl CmdOk for NoResp {}
+
+/// Dump various information about a layer, for use in debugging or
+/// administrative purposes.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpLayerReq {
+    /// The name of the port whose layer you want to dump.
+    pub port_name: String,
+    /// The name of the layer to dump.
+    pub name: String,
+}
+
+/// The response to a [`DumpLayerReq`].
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpLayerResp<Flow> {
+    /// The name of the layer.
+    pub name: String,
+    /// The inbound rules.
+    pub rules_in: Vec<RuleTableEntryDump>,
+    /// The outbound rules.
+    pub rules_out: Vec<RuleTableEntryDump>,
+    /// The default inbound action.
+    pub default_in: String,
+    /// The number of times the default inbound action was matched.
+    pub default_in_hits: u64,
+    /// The default outbound action.
+    pub default_out: String,
+    /// The number of times the default outbound action was matched.
+    pub default_out_hits: u64,
+    /// The inbound flow table.
+    pub ft_in: Vec<(Flow, ActionDescEntryDump)>,
+    /// The outbound flow table.
+    pub ft_out: Vec<(Flow, ActionDescEntryDump)>,
+}
+
+impl<T: Debug + Serialize> CmdOk for DumpLayerResp<T> {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListLayersReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct LayerDesc {
+    /// Name of the layer.
+    pub name: String,
+    /// Number of rules inbound.
+    pub rules_in: usize,
+    /// Number of rules outbound.
+    pub rules_out: usize,
+    /// Default action inbound.
+    pub default_in: String,
+    /// Default action outbound.
+    pub default_out: String,
+    /// Number of active flows.
+    pub flows: u32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListLayersResp {
+    pub layers: Vec<LayerDesc>,
+}
+
+impl CmdOk for ListLayersResp {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClearUftReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClearLftReq {
+    pub port_name: String,
+    pub layer_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpUftReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpUftResp<Flow> {
+    pub in_limit: u32,
+    pub in_num_flows: u32,
+    pub in_flows: Vec<(Flow, UftEntryDump)>,
+    pub out_limit: u32,
+    pub out_num_flows: u32,
+    pub out_flows: Vec<(Flow, UftEntryDump)>,
+}
+
+impl<T: Debug + Serialize> CmdOk for DumpUftResp<T> {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UftEntryDump {
+    pub hits: u64,
+    pub summary: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpTcpFlowsReq {
+    pub port_name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpTcpFlowsResp<Flow> {
+    pub flows: Vec<(Flow, TcpFlowEntryDump<Flow>)>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TcpFlowEntryDump<Flow> {
+    pub hits: u64,
+    pub inbound_ufid: Option<Flow>,
+    pub tcp_state: TcpFlowStateDump,
+    pub segs_in: u64,
+    pub segs_out: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TcpFlowStateDump {
+    pub tcp_state: TcpState,
+    pub guest_seq: Option<u32>,
+    pub guest_ack: Option<u32>,
+    pub remote_seq: Option<u32>,
+    pub remote_ack: Option<u32>,
+}
+
+impl<T: Debug + Serialize> CmdOk for DumpTcpFlowsResp<T> {}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ActionDescEntryDump {
+    pub hits: u64,
+    pub summary: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuleTableEntryDump {
+    pub id: RuleId,
+    pub hits: u64,
+    pub rule: RuleDump,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuleDump {
+    pub priority: u16,
+    pub predicates: Vec<String>,
+    pub data_predicates: Vec<String>,
+    pub action: String,
+}

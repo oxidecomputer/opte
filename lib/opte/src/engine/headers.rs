@@ -43,9 +43,6 @@ use serde::Serialize;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-pub const AF_INET: i32 = 2;
-pub const AF_INET6: i32 = 26;
-
 pub trait PushAction<HdrM> {
     fn push(&self) -> HdrM;
 }

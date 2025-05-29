@@ -9,6 +9,9 @@ use anyhow::Result;
 use cargo_metadata::Metadata;
 use clap::Args;
 use clap::Parser;
+use clap::ValueEnum;
+use std::collections::BTreeSet;
+use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,7 +30,14 @@ const LINK_TARGET: &str = "i686-unknown-illumos";
 #[derive(Debug, Parser)]
 enum Xtask {
     /// Build the XDE kernel module.
-    Build(BuildOptions),
+    Build {
+        /// The artefacts to be built.
+        #[clap(default_values_t = [BuildTarget::All])]
+        targets: Vec<BuildTarget>,
+
+        #[command(flatten)]
+        build: BuildOptions,
+    },
 
     /// Build and install the XDE kernel module.
     Install {
@@ -68,15 +78,15 @@ enum Xtask {
 struct BuildOptions {
     /// Disable building/packaging debug bits for both `opteadm`
     /// and the XDE module.
-    #[arg(long)]
-    release_only: bool,
+    #[arg(long, default_value_t = Profile::Release)]
+    profile: Profile,
 }
 
 fn main() -> anyhow::Result<()> {
     let cmd = Xtask::parse();
     // TODO: gate some of these to illumos only.
     match cmd {
-        Xtask::Build(b) => cmd_build(b.release_only),
+        Xtask::Build { targets, build } => cmd_build(targets, build.profile),
         Xtask::Install {
             from_package,
             force_package_unfreeze,
@@ -84,11 +94,11 @@ fn main() -> anyhow::Result<()> {
             build,
         } => {
             if !skip_build {
-                cmd_build(!from_package || build.release_only)?;
+                cmd_build(vec![BuildTarget::All], build.profile)?;
             }
 
             let pkg_info = if from_package {
-                Some(cmd_package(!skip_build, build.release_only)?)
+                Some(cmd_package(!skip_build, build.profile)?)
             } else {
                 None
             };
@@ -128,10 +138,10 @@ fn main() -> anyhow::Result<()> {
         }
         Xtask::Package { build, skip_build } => {
             if !skip_build {
-                cmd_build(build.release_only)?;
+                cmd_build(vec![BuildTarget::All], build.profile)?;
             }
 
-            let (p_path, _) = cmd_package(true, build.release_only)?;
+            let (p_path, _) = cmd_package(true, build.profile)?;
 
             println!(
                 "Successfully built package {}.",
@@ -215,17 +225,24 @@ fn elevate(operation: &str, extra_args: &[&str]) -> Result<bool> {
     }
 }
 
-fn cmd_build(release_only: bool) -> Result<()> {
-    let modes = if release_only {
-        &[PkgProfile::Release][..]
-    } else {
-        &[PkgProfile::Release, PkgProfile::Debug]
+fn cmd_build(targets: Vec<BuildTarget>, profile: Profile) -> Result<()> {
+    let modes: &[_] = match profile {
+        Profile::All => &[PkgProfile::Release, PkgProfile::Debug],
+        Profile::Release => &[PkgProfile::Release],
+        Profile::Debug => &[PkgProfile::Debug],
     };
 
+    let mut unique_targets: BTreeSet<_> = targets.into_iter().collect();
+    if unique_targets.remove(&BuildTarget::All) {
+        unique_targets.insert(BuildTarget::OpteAdm);
+        unique_targets.insert(BuildTarget::Xde);
+        unique_targets.insert(BuildTarget::XdeLink);
+    }
+
     for release_mode in modes {
-        BuildTarget::OpteAdm.build(*release_mode)?;
-        BuildTarget::Xde.build(*release_mode)?;
-        BuildTarget::XdeLink.build(*release_mode)?;
+        for target in &unique_targets {
+            target.build(*release_mode)?;
+        }
     }
 
     Ok(())
@@ -233,17 +250,23 @@ fn cmd_build(release_only: bool) -> Result<()> {
 
 fn cmd_package(
     do_package: bool,
-    release_only: bool,
+    profile: Profile,
 ) -> Result<(PathBuf, String)> {
     let meta = cargo_meta();
     let pkg_dir = meta.workspace_root.join("pkg");
+
+    if profile == Profile::Debug {
+        anyhow::bail!(
+            "`package` only supports the profiles 'release' or 'all'"
+        );
+    }
 
     if do_package {
         // XXX: I'm happy today for this to remain as a bash script,
         //      given that it would be very verbose to xtask-ify.
         let mut cmd = Command::new("bash");
 
-        if release_only {
+        if profile == Profile::Release {
             cmd.env("RELEASE_ONLY", "1");
         }
 
@@ -320,6 +343,25 @@ fn raw_install() -> Result<()> {
     Ok(())
 }
 
+#[derive(
+    Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, ValueEnum,
+)]
+enum Profile {
+    All,
+    Debug,
+    Release,
+}
+
+impl fmt::Display for Profile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::All => "all",
+            Self::Debug => "debug",
+            Self::Release => "release",
+        })
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 enum PkgProfile {
     Debug,
@@ -351,11 +393,25 @@ impl RustProfile {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(
+    Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, ValueEnum,
+)]
 enum BuildTarget {
+    All,
     OpteAdm,
     Xde,
     XdeLink,
+}
+
+impl fmt::Display for BuildTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::All => "all",
+            Self::OpteAdm => "opteadm",
+            Self::Xde => "xde",
+            Self::XdeLink => "xde-link",
+        })
+    }
 }
 
 fn build_cargo_bin(
@@ -420,9 +476,21 @@ impl BuildTarget {
         let p_name = rust_profile.name();
         let p_folder = rust_profile.folder();
         match self {
+            Self::All => anyhow::bail!("'all' should have been filtered"),
             Self::OpteAdm => {
                 println!("Building opteadm ({p_name}).");
-                build_cargo_bin(&["--bin", "opteadm"], p_name, None, true)
+
+                // While this *does* successfully build from `cwd = None`,
+                // feature unification from across the workspace causes cargo
+                // to end up re-enabling `engine` and related features.
+                // Making sure these are cut out gives us a faster build and
+                // smaller binaries.
+                build_cargo_bin(
+                    &["--bin", "opteadm"],
+                    p_name,
+                    Some("bin/opteadm"),
+                    true,
+                )
             }
             Self::Xde => {
                 println!("Building xde ({p_name}).");

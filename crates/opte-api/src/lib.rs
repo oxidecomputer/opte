@@ -28,6 +28,7 @@ pub mod encap;
 pub mod ip;
 pub mod mac;
 pub mod ndp;
+pub mod tcp;
 pub mod ulp;
 
 pub use cmd::*;
@@ -37,6 +38,7 @@ pub use encap::*;
 pub use ip::*;
 pub use mac::*;
 pub use ndp::*;
+pub use tcp::*;
 pub use ulp::*;
 
 /// The overall version of the API.
@@ -49,7 +51,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 35;
+pub const API_VERSION: u64 = 36;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;
@@ -83,15 +85,12 @@ impl Display for Direction {
     }
 }
 
+/// Opaque identifier for a rule within a layer.
+pub type RuleId = u64;
+
 /// Set the underlay devices used by the xde kernel module
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
-}
-
-/// Clear the underlay devices used by the xde kernel module
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClearXdeUnderlayReq {
-    pub _unused: u64,
 }

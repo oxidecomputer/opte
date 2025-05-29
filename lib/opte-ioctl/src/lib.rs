@@ -5,15 +5,26 @@
 // Copyright 2025 Oxide Computer Company
 
 use opte::api::API_VERSION;
-use opte::api::ClearXdeUnderlayReq;
+use opte::api::ClearLftReq;
+use opte::api::ClearUftReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::DumpLayerReq;
+use opte::api::DumpLayerResp;
+use opte::api::DumpTcpFlowsReq;
+use opte::api::DumpTcpFlowsResp;
+use opte::api::DumpUftReq;
+use opte::api::DumpUftResp;
+pub use opte::api::InnerFlowId;
+use opte::api::ListLayersReq;
+use opte::api::ListLayersResp;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
+use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::AllowCidrReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -23,10 +34,11 @@ use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::DumpVirt2PhysReq;
+use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrReq;
 use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::SetExternalIpsReq;
@@ -141,19 +153,46 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), OpteCmd::ListPorts, None::<&()>)
     }
 
-    /// Create a new handle to the OPTE control node.
-    pub fn open(what: &str) -> Result<Self, Error> {
+    /// List all layers in a given port.
+    pub fn list_layers(&self, port: &str) -> Result<ListLayersResp, Error> {
+        let cmd = OpteCmd::ListLayers;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ListLayersReq { port_name: port.to_string() }),
+        )
+    }
+
+    /// Return the contents of an OPTE layer.
+    pub fn dump_layer(
+        &self,
+        port_name: &str,
+        name: &str,
+    ) -> Result<DumpLayerResp, Error> {
+        let cmd = OpteCmd::DumpLayer;
+        let req = DumpLayerReq {
+            port_name: port_name.to_string(),
+            name: name.to_string(),
+        };
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Create a new handle to an OPTE control node on an arbitrary file.
+    pub fn open_on(what: &str) -> Result<Self, Error> {
         Ok(OpteHdl {
             device: OpenOptions::new().read(true).write(true).open(what)?,
         })
     }
 
-    pub fn dump_v2p(
-        &self,
-        req: &DumpVirt2PhysReq,
-    ) -> Result<DumpVirt2PhysResp, Error> {
+    /// Create a new handle to the OPTE control node.
+    pub fn open() -> Result<Self, Error> {
+        Self::open_on(Self::XDE_CTL)
+    }
+
+    /// Dump the Virtual-to-Physical mappings.
+    pub fn dump_v2p(&self) -> Result<DumpVirt2PhysResp, Error> {
         let cmd = OpteCmd::DumpVirt2Phys;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
@@ -179,6 +218,12 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
+    /// Dump the Virtual-to-Boundary mappings.
+    pub fn dump_v2b(&self) -> Result<DumpVirt2BoundaryResp, Error> {
+        let cmd = OpteCmd::DumpVirt2Boundary;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
     /// Set xde underlay devices.
     pub fn set_xde_underlay(
         &self,
@@ -192,9 +237,8 @@ impl OpteHdl {
 
     /// Clear xde underlay devices.
     pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
-        let req = ClearXdeUnderlayReq { _unused: 0 };
         let cmd = OpteCmd::ClearXdeUnderlay;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn add_router_entry(
@@ -213,7 +257,28 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
-    pub fn set_fw_rules(&self, req: &SetFwRulesReq) -> Result<NoResp, Error> {
+    /// Add a firewall rule
+    pub fn add_firewall_rule(
+        &self,
+        req: &AddFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AddFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Remove a firewall rule.
+    pub fn remove_firewall_rule(
+        &self,
+        req: &RemFwRuleReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::RemFwRule;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(req))
+    }
+
+    pub fn set_firewall_rules(
+        &self,
+        req: &SetFwRulesReq,
+    ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetFwRules;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
@@ -251,6 +316,56 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
+    }
+
+    /// Return the TCP flows.
+    pub fn dump_tcp_flows(
+        &self,
+        port_name: &str,
+    ) -> Result<DumpTcpFlowsResp, Error> {
+        let cmd = OpteCmd::DumpTcpFlows;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&DumpTcpFlowsReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Clear all entries from the Unified Flow Table (UFT).
+    pub fn clear_uft(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearUft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ClearUftReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Clear all entries from the given Layer's Flow Table (LFT).
+    pub fn clear_lft(
+        &self,
+        port_name: &str,
+        layer_name: &str,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearLft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ClearLftReq {
+                port_name: port_name.to_string(),
+                layer_name: layer_name.to_string(),
+            }),
+        )
+    }
+
+    /// Return the Unified Flow Table (UFT).
+    pub fn dump_uft(&self, port_name: &str) -> Result<DumpUftResp, Error> {
+        let cmd = OpteCmd::DumpUft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&DumpUftReq { port_name: port_name.to_string() }),
         )
     }
 }
