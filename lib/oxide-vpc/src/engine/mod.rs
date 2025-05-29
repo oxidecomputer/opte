@@ -8,8 +8,6 @@ pub mod firewall;
 pub mod gateway;
 pub mod nat;
 pub mod overlay;
-#[cfg(any(feature = "std", test))]
-pub mod print;
 pub mod router;
 
 use crate::cfg::VpcCfg;

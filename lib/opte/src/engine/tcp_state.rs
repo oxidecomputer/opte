@@ -7,7 +7,6 @@
 //! Basic TCP state machine.
 
 use super::packet::InnerFlowId;
-use super::tcp::TcpState;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
@@ -16,6 +15,8 @@ use illumos_sys_hdrs::uintptr_t;
 use ingot::tcp::TcpFlags as IngotTcpFlags;
 use ingot::tcp::TcpRef;
 use opte_api::Direction;
+use opte_api::TcpFlowStateDump;
+use opte_api::TcpState;
 use zerocopy::ByteSlice;
 
 /// An error processing a TCP flow.
@@ -95,7 +96,7 @@ pub struct TcpFlowState {
     remote_ack: Option<u32>,
 }
 
-impl From<TcpFlowState> for super::ioctl::TcpFlowStateDump {
+impl From<TcpFlowState> for TcpFlowStateDump {
     fn from(tfs: TcpFlowState) -> Self {
         Self {
             tcp_state: tfs.tcp_state,

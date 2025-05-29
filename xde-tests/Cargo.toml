@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-opteadm.workspace = true
+opte-ioctl.workspace = true
 oxide-vpc.workspace = true
 
 anyhow.workspace = true
