@@ -67,6 +67,19 @@ impl MacHandle {
         Ok(Self(mh))
     }
 
+    /// Grab a handle to the mac provider for the given link.
+    pub fn open_by_link_id(
+        link: LinkId,
+    ) -> Result<Self, MacOpenError<'static>> {
+        let mut mh = ptr::null_mut();
+        let ret = unsafe { mac_open_by_linkid(link.into(), &mut mh) };
+        if ret != 0 {
+            return Err(MacOpenError::OpenFailed("<unknown>", ret));
+        }
+
+        Ok(Self(mh))
+    }
+
     /// Get the primary MAC address associated with this device.
     pub fn get_mac_addr(&self) -> [u8; 6] {
         let mut mac = [0u8; 6];

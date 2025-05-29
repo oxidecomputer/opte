@@ -82,6 +82,7 @@ use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
+use opte::ddi::sync::TokenLock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::NetworkImpl;
@@ -251,6 +252,7 @@ pub struct xde_underlay_port {
 }
 
 struct XdeState {
+    management_lock: TokenLock<XdeMgmt>,
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
@@ -260,6 +262,7 @@ struct XdeState {
     cleanup: Periodic<()>,
 }
 
+#[derive(Clone)]
 struct UnderlayState {
     // each xde driver has a handle to two underlay ports that are used for I/O
     // onto the underlay network
@@ -282,6 +285,7 @@ impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
         XdeState {
+            management_lock: TokenLock::new(XdeMgmt),
             underlay: KMutex::new(None),
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
@@ -306,6 +310,8 @@ fn stat_parse_error(dir: Direction, err: &ParseError) {
 
     stats.vals.parse_error(dir, err);
 }
+
+struct XdeMgmt;
 
 #[repr(C)]
 pub struct XdeDev {
@@ -699,35 +705,47 @@ fn shared_periodic_expire(_: &mut ()) {
 fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     let state = get_xde_state();
-    let underlay_ = state.underlay.lock();
-    let underlay = match *underlay_ {
-        Some(ref u) => u,
-        None => {
-            return Err(OpteError::System {
-                errno: EINVAL,
-                msg: "underlay not initialized".to_string(),
-            });
-        }
+
+    // Taking the management lock alllows us to create XDE ports atomically
+    // with repsect to other threads (and enforces a lockout on, e.g., the
+    // underlay).
+    let token = state.management_lock.lock();
+
+    // TODO: refactor to have this as an Arc?
+    let UnderlayState { u1, u2, shared_props: underlay_capab } = {
+        let underlay_ = state.underlay.lock();
+        let underlay = match *underlay_ {
+            Some(ref u) => u,
+            None => {
+                return Err(OpteError::System {
+                    errno: EINVAL,
+                    msg: "underlay not initialized".to_string(),
+                });
+            }
+        };
+
+        underlay.clone()
     };
 
-    // It's imperative to take the devices write lock early. We want
-    // to hold it for the rest of this function in order for device
-    // creation to be atomic with regard to other threads.
-    //
-    // This does mean that the current Rx path is blocked on device
-    // creation, but that's a price we need to pay for the moment.
-    let mut devs = xde_devs().write();
-    if devs.get_by_name(&req.xde_devname).is_some() {
-        return Err(OpteError::PortExists(req.xde_devname.clone()));
-    }
-
     let cfg = VpcCfg::from(req.cfg.clone());
-    if devs.get(cfg.vni, cfg.guest_mac).is_some() {
-        return Err(OpteError::MacExists {
-            port: req.xde_devname.clone(),
-            vni: cfg.vni,
-            mac: cfg.guest_mac,
-        });
+
+    // Because we hold the token, no one else will add to/remove from
+    // the XdeDev map in parallel. Quickly check that there is no
+    // collision on name or MAC address -- take a read lock so as not
+    // to block the Rx datapath (yet).
+    // TODO: refactor to make exclusivity a guarantee from the type system
+    {
+        let devs = xde_devs().read();
+        if devs.get_by_name(&req.xde_devname).is_some() {
+            return Err(OpteError::PortExists(req.xde_devname.clone()));
+        }
+        if devs.get(cfg.vni, cfg.guest_mac).is_some() {
+            return Err(OpteError::MacExists {
+                port: req.xde_devname.clone(),
+                vni: cfg.vni,
+                mac: cfg.guest_mac,
+            });
+        }
     }
 
     // If this is the first guest in this VPC, then create a new
@@ -771,12 +789,11 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         vni: cfg.vni,
         vpc_cfg: cfg,
         passthrough: req.passthrough,
-        u1: underlay.u1.clone(),
-        u2: underlay.u2.clone(),
-        underlay_capab: underlay.shared_props,
+        u1,
+        u2,
+        underlay_capab,
         routes: RouteCache::default(),
     });
-    drop(underlay_);
 
     // set up upper mac
     let Some(mreg) = (unsafe { mac::mac_alloc(MAC_VERSION as u32).as_mut() })
@@ -823,7 +840,9 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     unsafe { mac::mac_free(mreg) };
 
-    // setup dls
+    // Setup DLS.
+    // Any DLS operations are liable to upcall, so we *must* be certain
+    // that *no locks are actively held at this moment*.
     match unsafe { dls::dls_devnet_create(xde.mh, req.linkid, 0) } {
         0 => {}
         err => {
@@ -843,19 +862,41 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mac::mac_tx_update(xde.mh);
     }
 
-    _ = devs.insert(xde);
+    // Finally, insert our fully established port.
+    // This temporarily blocks the Rx pathway.
+    {
+        let mut devs = xde_devs().write();
+        _ = devs.insert(xde);
+    }
+
     Ok(NoResp::default())
 }
 
 #[unsafe(no_mangle)]
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
-    let mut devs = xde_devs().write();
-    let Some(xde) = devs.get_by_name(&req.xde_devname) else {
-        return Err(OpteError::PortNotFound(req.xde_devname.clone()));
+
+    let token = state.management_lock.lock();
+
+    // First -- does the device exist?
+    // Remove it, knowing that we may need to reinsert on a rollback.
+    let xde = {
+        let mut devs = xde_devs().write();
+        let Some(xde) = devs.remove(&req.xde_devname) else {
+            return Err(OpteError::PortNotFound(req.xde_devname.clone()));
+        };
+
+        xde
+    };
+
+    let return_port = |port| {
+        let mut devs = xde_devs().write();
+        _ = devs.insert(port);
     };
 
     // Destroy DLS devnet device.
+    // Any DLS operations are liable to upcall, so we *must* be certain
+    // that *no locks are actively held at this moment*.
     let ret = unsafe {
         let mut tmpid = xde.linkid;
         dls::dls_devnet_destroy(xde.mh, &mut tmpid, boolean_t::B_TRUE)
@@ -864,6 +905,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     match ret {
         0 => {}
         err => {
+            return_port(xde);
             return Err(OpteError::System {
                 errno: err,
                 msg: format!("failed to destroy DLS devnet: {}", err),
@@ -872,6 +914,8 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     }
 
     // Unregister this xde's mac handle.
+    // We have the same lock constraints as above, given that we could
+    // have to rebind the DLS devnet on rollback.
     match unsafe { mac::mac_unregister(xde.mh) } {
         0 => {}
         err => {
@@ -881,6 +925,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
                     warn!("failed to recreate DLS devnet entry: {}", err);
                 }
             };
+            return_port(xde);
             return Err(OpteError::System {
                 errno: err,
                 msg: format!("failed to unregister mac: {}", err),
@@ -905,25 +950,53 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         }
     };
 
-    // Remove the xde device entry.
-    _ = devs.remove(&req.xde_devname);
     Ok(NoResp::default())
+}
+
+struct ResolvedLink<'a>(&'a str, LinkId);
+impl<'a> ResolvedLink<'a> {
+    fn new(name: &'a str) -> Result<Self, OpteError> {
+        let link_cstr = CString::new(name).unwrap();
+
+        let link_id =
+            LinkId::from_name(link_cstr).map_err(|err| OpteError::System {
+                errno: EFAULT,
+                msg: format!("failed to get linkid for {name}: {err}"),
+            })?;
+
+        Ok(Self(name, link_id))
+    }
 }
 
 #[unsafe(no_mangle)]
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
-    let mut underlay = state.underlay.lock();
-    if underlay.is_some() {
-        return Err(OpteError::System {
-            errno: EEXIST,
-            msg: "underlay already initialized".into(),
-        });
+    let token = state.management_lock.lock();
+
+    // Quickly check to see whether the underlay is sat.
+    // Holding `token` will prevent anyone from setting it in
+    // the interim.
+    {
+        let underlay = state.underlay.lock();
+        if underlay.is_some() {
+            return Err(OpteError::System {
+                errno: EEXIST,
+                msg: "underlay already initialized".into(),
+            });
+        }
     }
-    *underlay = Some(unsafe {
-        init_underlay_ingress_handlers(req.u1.clone(), req.u2.clone())?
-    });
+
+    // Resolve `LinkId`s outside of any locks -- these require upcalls.
+    let link1 = ResolvedLink::new(req.u1.as_str())?;
+    let link2 = ResolvedLink::new(req.u2.as_str())?;
+
+    // `init_underlay_ingress_handlers` contains no upcalls today, but
+    // we can keep it outside of the actual underlay lock's scope for safety.
+    let new_underlay = init_underlay_ingress_handlers(link1, link2, &token)?;
+
+    let mut underlay = state.underlay.lock();
+    *underlay = Some(new_underlay);
 
     Ok(NoResp::default())
 }
@@ -931,6 +1004,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 #[unsafe(no_mangle)]
 fn clear_xde_underlay() -> Result<NoResp, OpteError> {
     let state = get_xde_state();
+    let _token = state.management_lock.lock();
     let mut underlay = state.underlay.lock();
     if underlay.is_none() {
         return Err(OpteError::System {
@@ -1095,18 +1169,9 @@ unsafe extern "C" fn xde_attach(
 
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
-    link_name: String,
-    // This parameter is likely to be used as part of the flows work.
-    _mc_name: &str,
+    resolved: ResolvedLink<'_>,
 ) -> Result<(xde_underlay_port, OffloadInfo), OpteError> {
-    let link_cstr = CString::new(link_name.as_str()).unwrap();
-
-    let link_id =
-        LinkId::from_name(link_cstr).map_err(|err| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to get linkid for {link_name}: {err}"),
-        })?;
-
+    let ResolvedLink(link_name, link_id) = resolved;
     let stream =
         Arc::new(DlsStream::open(link_id).map_err(|e| OpteError::System {
             errno: EFAULT,
@@ -1129,12 +1194,15 @@ fn create_underlay_port(
     })?;
 
     // Grab mac handle for underlying link, to retrieve its MAC address.
-    let mh = MacHandle::open_by_link_name(&link_name).map(Arc::new).map_err(
-        |e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to open link {link_name} for underlay: {e}"),
-        },
-    )?;
+    let mh =
+        MacHandle::open_by_link_id(link_id).map(Arc::new).map_err(|e| {
+            OpteError::System {
+                errno: EFAULT,
+                msg: format!(
+                    "failed to open link {link_name} for underlay: {e}"
+                ),
+            }
+        })?;
 
     let mtu = *mh.get_valid_mtus().end();
     let cso_state = mh.get_cso_capabs();
@@ -1142,7 +1210,7 @@ fn create_underlay_port(
 
     Ok((
         xde_underlay_port {
-            name: link_name,
+            name: link_name.to_string(),
             mac: mh.get_mac_addr(),
             mtu,
             mph,
@@ -1153,12 +1221,13 @@ fn create_underlay_port(
 }
 
 #[unsafe(no_mangle)]
-unsafe fn init_underlay_ingress_handlers(
-    u1_name: String,
-    u2_name: String,
+fn init_underlay_ingress_handlers(
+    u1: ResolvedLink<'_>,
+    u2: ResolvedLink<'_>,
+    _token: &XdeMgmt,
 ) -> Result<UnderlayState, OpteError> {
-    let (u1, i1) = create_underlay_port(u1_name, "xdeu0")?;
-    let (u2, i2) = create_underlay_port(u2_name, "xdeu1")?;
+    let (u1, i1) = create_underlay_port(u1)?;
+    let (u2, i2) = create_underlay_port(u2)?;
     Ok(UnderlayState {
         u1: u1.into(),
         u2: u2.into(),

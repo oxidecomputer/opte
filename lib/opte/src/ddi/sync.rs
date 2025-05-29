@@ -17,10 +17,10 @@ cfg_if! {
         use core::ptr;
         use core::ptr::NonNull;
         use illumos_sys_hdrs::{
-            _curthread, cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
+            cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
             kcv_type_t, kcondvar_t, kmutex_t, krw_t, krwlock_t, kthread_t,
             mutex_enter, mutex_exit, mutex_destroy, mutex_init, mutex_tryenter,
-            rw_enter, rw_exit, rw_init, rw_destroy
+            rw_enter, rw_exit, rw_init, rw_destroy, threadp
         };
     } else {
         use std::sync::Condvar;
@@ -540,7 +540,7 @@ impl<T> TokenLock<T> {
 
         #[cfg(all(not(feature = "std"), not(test)))]
         let curthread = unsafe {
-            NonNull::new(_curthread())
+            NonNull::new(threadp())
                 .expect("current thread *must* be a valid pointer")
         };
 

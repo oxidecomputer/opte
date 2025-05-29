@@ -612,7 +612,8 @@ unsafe extern "C" {
         res: time_res_t,
     ) -> clock_t;
 
-    pub fn _curthread() -> *mut kthread_t;
+    // Underlies the `curthread` macro in kernel.
+    pub fn threadp() -> *mut kthread_t;
 
     pub fn nochpoll() -> c_int;
     pub fn nodev() -> c_int;
