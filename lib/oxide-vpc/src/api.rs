@@ -523,23 +523,11 @@ pub struct ListPortsResp {
 
 impl opte::api::cmd::CmdOk for ListPortsResp {}
 
-#[repr(C)]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2PhysReq {
-    pub unused: u64,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 pub struct VpcMapResp {
     pub vni: Vni,
     pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
     pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
-}
-
-#[repr(C)]
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpVirt2BoundaryReq {
-    pub unused: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

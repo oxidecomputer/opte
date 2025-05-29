@@ -479,6 +479,12 @@ impl BuildTarget {
             Self::All => anyhow::bail!("'all' should have been filtered"),
             Self::OpteAdm => {
                 println!("Building opteadm ({p_name}).");
+
+                // While this *does* successfully build from `cwd = None`,
+                // feature unification from across the workspace causes cargo
+                // to end up re-enabling `engine` and related features.
+                // Making sure these are cut out gives us a faster build and
+                // smaller binaries.
                 build_cargo_bin(
                     &["--bin", "opteadm"],
                     p_name,

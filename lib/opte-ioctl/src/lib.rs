@@ -7,7 +7,6 @@
 use opte::api::API_VERSION;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
-use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::DumpLayerReq;
@@ -35,9 +34,7 @@ use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::DumpVirt2BoundaryReq;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
-use oxide_vpc::api::DumpVirt2PhysReq;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
@@ -195,11 +192,7 @@ impl OpteHdl {
     /// Dump the Virtual-to-Physical mappings.
     pub fn dump_v2p(&self) -> Result<DumpVirt2PhysResp, Error> {
         let cmd = OpteCmd::DumpVirt2Phys;
-        run_cmd_ioctl(
-            self.device.as_raw_fd(),
-            cmd,
-            Some(&DumpVirt2PhysReq { unused: 0 }),
-        )
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn set_v2p(&self, req: &SetVirt2PhysReq) -> Result<NoResp, Error> {
@@ -228,11 +221,7 @@ impl OpteHdl {
     /// Dump the Virtual-to-Boundary mappings.
     pub fn dump_v2b(&self) -> Result<DumpVirt2BoundaryResp, Error> {
         let cmd = OpteCmd::DumpVirt2Boundary;
-        run_cmd_ioctl(
-            self.device.as_raw_fd(),
-            cmd,
-            Some(&DumpVirt2BoundaryReq { unused: 99 }),
-        )
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     /// Set xde underlay devices.
@@ -248,9 +237,8 @@ impl OpteHdl {
 
     /// Clear xde underlay devices.
     pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
-        let req = ClearXdeUnderlayReq { _unused: 0 };
         let cmd = OpteCmd::ClearXdeUnderlay;
-        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn add_router_entry(

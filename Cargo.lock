@@ -2527,7 +2527,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "libnet",
- "opteadm",
+ "opte-ioctl",
  "oxide-vpc",
  "rand",
  "slog",

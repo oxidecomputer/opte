@@ -94,9 +94,3 @@ pub struct SetXdeUnderlayReq {
     pub u1: String,
     pub u2: String,
 }
-
-/// Clear the underlay devices used by the xde kernel module
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ClearXdeUnderlayReq {
-    pub _unused: u64,
-}

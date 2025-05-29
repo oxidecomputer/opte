@@ -21,8 +21,8 @@ use opte::print::print_layer;
 use opte::print::print_list_layers;
 use opte::print::print_tcp_flows;
 use opte::print::print_uft;
+use opte_ioctl::OpteHdl;
 use opteadm::COMMIT_COUNT;
-use opteadm::OpteAdm;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
@@ -567,7 +567,7 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
-    let hdl = OpteAdm::open()?;
+    let hdl = OpteHdl::open()?;
 
     match cmd {
         Command::ListPorts => {

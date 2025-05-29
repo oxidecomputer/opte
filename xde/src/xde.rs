@@ -65,7 +65,6 @@ use ingot::udp::Udp;
 use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
-use opte::api::ClearXdeUnderlayReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
 use opte::api::DumpLayerReq;
@@ -117,9 +116,7 @@ use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::DumpVirt2BoundaryReq;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
-use oxide_vpc::api::DumpVirt2PhysReq;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::PhysNet;
@@ -539,10 +536,7 @@ fn set_xde_underlay_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     set_xde_underlay(&req)
 }
 
-fn clear_xde_underlay_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<NoResp, OpteError> {
-    let _req: ClearXdeUnderlayReq = env.copy_in_req()?;
+fn clear_xde_underlay_hdlr() -> Result<NoResp, OpteError> {
     clear_xde_underlay()
 }
 
@@ -602,7 +596,7 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
         }
 
         OpteCmd::ClearXdeUnderlay => {
-            let resp = clear_xde_underlay_hdlr(&mut env);
+            let resp = clear_xde_underlay_hdlr();
             hdlr_resp(&mut env, resp)
         }
 
@@ -632,7 +626,7 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
         }
 
         OpteCmd::DumpVirt2Phys => {
-            let resp = dump_v2p_hdlr(&mut env);
+            let resp = dump_v2p_hdlr();
             hdlr_resp(&mut env, resp)
         }
 
@@ -647,7 +641,7 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
         }
 
         OpteCmd::DumpVirt2Boundary => {
-            let resp = dump_v2b_hdlr(&mut env);
+            let resp = dump_v2b_hdlr();
             hdlr_resp(&mut env, resp)
         }
 
@@ -2282,10 +2276,7 @@ fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[unsafe(no_mangle)]
-fn dump_v2p_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<DumpVirt2PhysResp, OpteError> {
-    let _req: DumpVirt2PhysReq = env.copy_in_req()?;
+fn dump_v2p_hdlr() -> Result<DumpVirt2PhysResp, OpteError> {
     let state = get_xde_state();
     Ok(state.vpc_map.dump())
 }
@@ -2307,10 +2298,7 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 }
 
 #[unsafe(no_mangle)]
-fn dump_v2b_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<DumpVirt2BoundaryResp, OpteError> {
-    let _req: DumpVirt2BoundaryReq = env.copy_in_req()?;
+fn dump_v2b_hdlr() -> Result<DumpVirt2BoundaryResp, OpteError> {
     let state = get_xde_state();
     Ok(state.v2b.dump())
 }

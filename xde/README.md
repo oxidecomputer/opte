@@ -34,7 +34,16 @@ OPTE can be installed using the following command from the workspace root:
 ```
 cargo xtask install
 ```
-The above module file can alternately be copied to `/kernel/drv/amd64/` on the platform you're testing on after the first installation.
+
+The xtask automates building xde and required links (if not done already), as well as installation of the driver using [`add_drv(8)`](https://illumos.org/man/8/add_drv).
+
+A prebuilt module file can alternately be copied to `/kernel/drv/amd64/` on the platform you're testing on _after the first installation_.
+If doing so, you will need to remove ([`rem_drv(8)`](https://illumos.org/man/8/rem_drv)) and re-add ([`add_drv(8)`](https://illumos.org/man/8/add_drv)) the module:
+
+```bash
+rem_drv xde
+add_drv xde
+```
 
 ## Usage
 
