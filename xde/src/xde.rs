@@ -684,6 +684,22 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = remove_cidr_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+
+        // TEMP
+        OpteCmd::DumpFlowStats => {
+            let resp = flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+fn flow_stats_hdlr(env: &mut IoctlEnvelope) -> Result<oxide_vpc::api::DumpFlowStatsResp, OpteError> {
+    let req: oxide_vpc::api::DumpUftReq = env.copy_in_req()?;
+    let devs = xde_devs().read();
+    match devs.get_by_name(&req.port_name) {
+        Some(dev) => dev.port.dump_flow_stats().map(|data| oxide_vpc::api::DumpFlowStatsResp {data}),
+        None => Err(OpteError::PortNotFound(req.port_name)),
     }
 }
 

@@ -49,6 +49,9 @@ pub enum OpteCmd {
     SetExternalIps = 80,     // set xde external IPs for a port
     AllowCidr = 90,          // allow ip block through gateway tx/rx
     RemoveCidr = 91,         // deny ip block through gateway tx/rx
+
+    // TEMP
+    DumpFlowStats = 34,
 }
 
 impl TryFrom<c_int> for OpteCmd {

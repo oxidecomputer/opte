@@ -32,6 +32,7 @@ use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpFlowStatsResp;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
@@ -276,6 +277,13 @@ enum Command {
         #[arg(long = "dir")]
         direction: Option<Direction>,
     },
+
+    /// XXX TEMP
+    DumpFlowStats {
+        /// The OPTE port to read...
+        #[arg(short)]
+        port: String,
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -858,6 +866,12 @@ fn main() -> anyhow::Result<()> {
                         });
                 })?;
             }
+        }
+
+        // XXX TEMP
+        Command::DumpFlowStats { port } => {
+            let DumpFlowStatsResp{ data } =  hdl.dump_flowstats(&port)?;
+            println!("{data}");
         }
     }
 

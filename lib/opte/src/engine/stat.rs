@@ -14,6 +14,7 @@ use crate::engine::flow_table::Ttl;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::sync::Weak;
 use alloc::vec::Vec;
@@ -503,7 +504,7 @@ impl StatTree {
         });
     }
 
-    #[cfg(any(feature = "std", test))]
+    // TEMP
     pub fn dump(&self) -> String {
         let mut out = String::new();
         out.push_str("--Roots--\n");
@@ -525,9 +526,12 @@ impl StatTree {
         for (id, stat) in &self.flows {
             // let d: ApiFlowStat<InnerFlowId> = stat.as_ref().into();
             let d: ApiPktCounter = (&stat.as_ref().shared.stats).into();
+            let parents: Vec<_> =
+                stat.parents.iter().map(|v| v.stats.id()).collect();
             out.push_str(&format!("\t{id}/{} ->\n", stat.dir));
             out.push_str(&format!("\t\t{:?} {d:?}\n", stat.shared.stats.id));
-            out.push_str(&format!("\t\tparents {:?}\n\n", stat.bases));
+            out.push_str(&format!("\t\tparents {:?}\n", parents));
+            out.push_str(&format!("\t\tbases {:?}\n\n", stat.bases));
         }
         out.push_str("----\n");
         out

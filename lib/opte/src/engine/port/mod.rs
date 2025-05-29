@@ -1024,7 +1024,6 @@ impl<N: NetworkImpl> Port<N> {
         Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
     }
 
-    #[cfg(any(feature = "std", test))]
     /// XXX TEST METHOD
     pub fn dump_flow_stats(&self) -> Result<String> {
         let data = self.data.read();
