@@ -21,7 +21,7 @@ use crate::mac;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacEmul;
 use crate::mac::MacHandle;
-use crate::mac::MacPromiscHandle;
+use crate::mac::MacSiphon;
 use crate::mac::MacTxFlags;
 use crate::mac::OffloadInfo;
 use crate::mac::TcpLsoFlags;
@@ -48,6 +48,7 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
+use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
@@ -238,7 +239,7 @@ fn bad_packet_probe(
 
 /// Underlay port state.
 #[derive(Debug)]
-pub struct xde_underlay_port {
+pub struct XdeUnderlayPort {
     /// Name of the link being used for this underlay port.
     pub name: String,
 
@@ -249,7 +250,7 @@ pub struct xde_underlay_port {
     pub mtu: u32,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    mph: MacPromiscHandle<DlsStream>,
+    siphon: MacSiphon<DlsStream>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
@@ -269,8 +270,8 @@ struct XdeState {
 struct UnderlayState {
     // each xde driver has a handle to two underlay ports that are used for I/O
     // onto the underlay network
-    u1: Arc<xde_underlay_port>,
-    u2: Arc<xde_underlay_port>,
+    u1: Arc<XdeUnderlayPort>,
+    u2: Arc<XdeUnderlayPort>,
     shared_props: OffloadInfo,
 }
 
@@ -337,8 +338,8 @@ pub struct XdeDev {
 
     // These are clones of the underlay ports initialized by the
     // driver.
-    pub u1: Arc<xde_underlay_port>,
-    pub u2: Arc<xde_underlay_port>,
+    pub u1: Arc<XdeUnderlayPort>,
+    pub u2: Arc<XdeUnderlayPort>,
     underlay_capab: OffloadInfo,
 
     // We make this a per-port cache rather than sharing between all
@@ -948,47 +949,51 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
+    // Given we're the only management thread allowed by the RwLock, the below
+    // ownership checks cannot be violated.
     if let Some(underlay) = underlay.take() {
-        // There shouldn't be anymore refs to the underlay given we checked for
-        // 0 ports above.
-        let Some(u1) = Arc::into_inner(underlay.u1) else {
-            return Err(OpteError::System {
-                errno: EBUSY,
-                msg: "underlay u1 has outstanding refs".into(),
-            });
-        };
-        let Some(u2) = Arc::into_inner(underlay.u2) else {
-            return Err(OpteError::System {
-                errno: EBUSY,
-                msg: "underlay u2 has outstanding refs".into(),
-            });
-        };
+        // If the underlay references have leaked/spread beyond `XdeDev`s and not
+        // been cleaned up, we committed have a fatal programming error.
+        // We aren't using `Weak` references to these types either, so no strong
+        // references could be created.
+        //
+        // We know these must succeed given that the only holders of an
+        // `Arc<XdeUnderlayPort>` are `XdeState` (whose ref we have exclusively locked)
+        // and `XdeDev` (of which none remain).
+        let name = underlay.u1.name.clone();
+        let u1 = Arc::into_inner(underlay.u1).expect(&format!(
+            "underlay u1 ({name}) must have one ref during teardown",
+        ));
+
+        let name = underlay.u2.name.clone();
+        let u2 = Arc::into_inner(underlay.u2).expect(&format!(
+            "underlay u2 ({name}) must have one ref during teardown",
+        ));
 
         for u in [u1, u2] {
-            // We have a chain of refs here: `MacPromiscHandle` holds a ref to
-            // `DldStream`. We explicitly drop them in order here to ensure
+            // We have a chain of refs here: `MacSiphon` holds a ref to
+            // `DlsStream`. We explicitly drop them in order here to ensure
             // there are no outstanding refs.
 
-            // 1. Remove promisc callback.
-            drop(u.mph);
+            // 1. Remove packet rx callback.
+            drop(u.siphon);
 
             // Although `xde_rx` can be called into without any running ports
-            // via the promisc handle, illumos guarantees that this callback won't
-            // be running here. `mac_promisc_remove` will either remove the callback
-            // immediately (if there are no walkers) or will mark the callback as
-            // condemned and await all active walkers finishing. Accordingly, no one
-            // else will have or try to clone the Stream handle.
+            // via the siphon handle, illumos guarantees that this callback won't
+            // be running here. `mac_siphon_clear` performs the moral equivalent of
+            // `mac_rx_barrier` -- the client's SRS is quiesced, and then restarted
+            // after the callback is removed.
+            // Because there are no ports and we hold the write/management lock, no
+            // one else will have or try to clone the Stream handle.
 
             // 2. Close the open stream handle.
-            if Arc::into_inner(u.stream).is_none() {
-                return Err(OpteError::System {
-                    errno: EBUSY,
-                    msg: format!(
-                        "underlay {} has outstanding dls_stream refs",
-                        u.name
-                    ),
-                });
-            }
+            // The only other hold on this `DlsStream` is via `u.siphon`, which
+            // we just dropped. The `expect` asserts that we have consumed them
+            // in the correct order.
+            Arc::into_inner(u.stream).expect(&format!(
+                "underlay ({}) must have no external refs to its DlsStream",
+                u.name
+            ));
         }
     }
 
@@ -1101,7 +1106,7 @@ fn create_underlay_port(
     link_name: String,
     // This parameter is likely to be used as part of the flows work.
     _mc_name: &str,
-) -> Result<(xde_underlay_port, OffloadInfo), OpteError> {
+) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
     let link_cstr = CString::new(link_name.as_str()).unwrap();
 
     let link_id =
@@ -1116,19 +1121,12 @@ fn create_underlay_port(
             msg: format!("failed to grab open stream for {link_name}: {e}"),
         })?);
 
-    // Setup promiscuous callback to receive all packets on this link.
-    //
-    // We specify `MAC_PROMISC_FLAGS_NO_TX_LOOP` here to skip receiving copies
-    // of outgoing packets we sent ourselves.
-    let mph = MacPromiscHandle::new(
-        stream.clone(),
-        mac::mac_client_promisc_type_t::MAC_CLIENT_PROMISC_ALL,
-        xde_rx,
-        mac::MAC_PROMISC_FLAGS_NO_TX_LOOP,
-    )
-    .map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("mac_promisc_add failed for {link_name}: {e}"),
+    // Bind a packet handler to the MAC client underlying `stream`.
+    let siphon = MacSiphon::new(stream.clone(), xde_rx).map_err(|e| {
+        OpteError::System {
+            errno: EFAULT,
+            msg: format!("failed to set MAC siphon on {link_name}: {e}"),
+        }
     })?;
 
     // Grab mac handle for underlying link, to retrieve its MAC address.
@@ -1144,11 +1142,11 @@ fn create_underlay_port(
     let lso_state = mh.get_lso_capabs();
 
     Ok((
-        xde_underlay_port {
+        XdeUnderlayPort {
             name: link_name,
             mac: mh.get_mac_addr(),
             mtu,
-            mph,
+            siphon,
             stream,
         },
         OffloadInfo { lso_state, cso_state, mtu },
@@ -2051,31 +2049,41 @@ fn new_port(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_rx(
     arg: *mut c_void,
-    mrh: *mut mac::mac_resource_handle,
     mp_chain: *mut mblk_t,
-    _is_loopback: boolean_t,
-) {
+    out_mp_tail: *mut *mut mblk_t,
+    out_count: *mut c_uint,
+    out_len: *mut usize,
+) -> *mut mblk_t {
     __dtrace_probe_rx(mp_chain as uintptr_t);
 
     // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
-    // corresponding to the underlay port we're receiving on. Being
-    // here in the callback means the `MacPromiscHandle` hasn't been
-    // dropped yet and thus our `MacClientHandle` is also still valid.
-    let stream: Arc<DlsStream> = unsafe {
-        let mch_ptr = arg as *const DlsStream;
-        Arc::increment_strong_count(mch_ptr);
-        Arc::from_raw(mch_ptr)
+    // corresponding to the underlay port we're receiving on (derived from
+    // `DlsStream`). Being here in the callback means the `MacSiphon` hasn't
+    // been dropped yet, and thus our `MacClientHandle` is also still valid.
+    let stream = unsafe {
+        (arg as *const DlsStream)
+            .as_ref()
+            .expect("packet was received from siphon with a NULL argument")
     };
 
-    let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
+    let mut chain = if let Ok(chain) = unsafe { MsgBlkChain::new(mp_chain) } {
+        chain
+    } else {
         bad_packet_probe(
             None,
-            Direction::Out,
+            Direction::In,
             mp_chain as uintptr_t,
             c"rx'd packet chain was null",
         );
-        return;
+
+        // Continue processing on an empty chain to uphold the contract with
+        // MAC for the three `out_` pointer values.
+        MsgBlkChain::empty()
     };
+
+    let mut out_chain = MsgBlkChain::empty();
+    let mut count = 0;
+    let mut len = 0;
 
     // TODO: In future we may want to batch packets for further tx
     // by the mch they're being targeted to. E.g., either build a list
@@ -2083,17 +2091,46 @@ unsafe extern "C" fn xde_rx(
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
         unsafe {
-            xde_rx_one(&stream, mrh, pkt);
+            if let Some(pkt) = xde_rx_one(&stream, pkt) {
+                count += 1;
+                len += pkt.byte_len();
+                out_chain.append(pkt);
+            }
         }
     }
+
+    let (head, tail) = out_chain
+        .unwrap_head_and_tail()
+        .map(|v| (v.0.as_ptr(), v.1.as_ptr()))
+        .unwrap_or((ptr::null_mut(), ptr::null_mut()));
+
+    if let Some(ptr) = NonNull::new(out_len) {
+        unsafe {
+            ptr.write(len);
+        }
+    }
+
+    if let Some(ptr) = NonNull::new(out_count) {
+        unsafe {
+            ptr.write(count);
+        }
+    }
+
+    if let Some(ptr) = NonNull::new(out_mp_tail) {
+        unsafe {
+            ptr.write(tail);
+        }
+    }
+
+    head
 }
 
+/// Processes an individual packet receiver on the underlay device `stream`.
+///
+/// This function returns any input `pkt` which is not of interest to XDE (e.g.,
+/// the packet is not Geneve over v6, or no matching OPTE port could be found).
 #[inline]
-unsafe fn xde_rx_one(
-    stream: &DlsStream,
-    mrh: *mut mac::mac_resource_handle,
-    mut pkt: MsgBlk,
-) {
+unsafe fn xde_rx_one(stream: &DlsStream, mut pkt: MsgBlk) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
     // We must first parse the packet in order to determine where it
@@ -2112,7 +2149,7 @@ unsafe fn xde_rx_one(
             opte::engine::dbg!("Tx bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
-            return;
+            return Some(pkt);
         }
     };
 
@@ -2124,7 +2161,7 @@ unsafe fn xde_rx_one(
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
             opte::engine::dbg!("{}", e);
-            return;
+            return None;
         }
     };
 
@@ -2142,7 +2179,7 @@ unsafe fn xde_rx_one(
             vni,
             ether_dst
         );
-        return;
+        return Some(pkt);
     };
 
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
@@ -2153,9 +2190,9 @@ unsafe fn xde_rx_one(
     if dev.passthrough {
         drop(parsed_pkt);
         unsafe {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
         }
-        return;
+        return None;
     }
 
     let port = &dev.port;
@@ -2164,7 +2201,7 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => unsafe {
-            mac::mac_rx(dev.mh, mrh, pkt.unwrap_mblk().as_ptr());
+            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
         },
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
@@ -2189,7 +2226,11 @@ unsafe fn xde_rx_one(
             }
 
             unsafe {
-                mac::mac_rx(dev.mh, mrh, npkt.unwrap_mblk().as_ptr());
+                mac::mac_rx(
+                    dev.mh,
+                    ptr::null_mut(),
+                    npkt.unwrap_mblk().as_ptr(),
+                );
             }
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
@@ -2197,6 +2238,8 @@ unsafe fn xde_rx_one(
         }
         _ => {}
     }
+
+    None
 }
 
 #[unsafe(no_mangle)]
