@@ -13,6 +13,7 @@
 //#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dev_map::DevMap;
+use crate::dev_map::FastKey;
 use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
@@ -370,14 +371,6 @@ impl XdeDev {
 
 struct TheView {
     devs: Arc<DevMap>,
-    mail: Mailbox,
-}
-
-impl TheView {
-    fn deliver_all(&mut self) {
-        let mail = &mut self.mail;
-        self.devs.deliver_all(mail);
-    }
 }
 
 #[repr(C)]
@@ -829,10 +822,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2: underlay.u2.clone(),
         underlay_capab: underlay.shared_props,
         routes: RouteCache::default(),
-        port_map: KMutex::new(TheView {
-            devs: Arc::new(DevMap::new()),
-            mail: Mailbox::new(),
-        }),
+        port_map: KMutex::new(TheView { devs: Arc::new(DevMap::new()) }),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -971,7 +961,6 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     if let Some(xde) = devs.remove(&req.xde_devname) {
         let mut pmap = xde.port_map.lock();
         pmap.devs = DevMap::new().into();
-        pmap.mail = Mailbox::new();
     }
     refresh_maps(devs);
 
@@ -987,7 +976,6 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
     for port in devs.iter() {
         let mut map = port.port_map.lock();
         map.devs = new_map.clone();
-        map.mail.sync(&devs);
     }
 
     // Update all underlays' maps.
@@ -998,7 +986,6 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
         for map in port {
             let mut map = map.lock();
             map.devs = new_map.clone();
-            map.mail.sync(&devs);
         }
     }
 }
@@ -1213,10 +1200,7 @@ fn create_underlay_port(
     let cpus = unsafe { ncpus } as usize;
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map.push(KMutex::new(TheView {
-            devs: DevMap::new().into(),
-            mail: Mailbox::new(),
-        }));
+        ports_map.push(KMutex::new(TheView { devs: DevMap::new().into() }));
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -2193,11 +2177,15 @@ unsafe extern "C" fn xde_rx(
         // These are cpu_id, then cpu_seqid. We want the latter.
         *(cpu as *mut processorid_t).offset(1)
     };
+
     let mut devs = stream.ports_map[cpu_index as usize].lock();
+    let mut mailbox = Mailbox::new();
 
     while let Some(pkt) = chain.pop_front() {
         unsafe {
-            if let Some(pkt) = xde_rx_one(&stream.stream, pkt, &mut devs) {
+            if let Some(pkt) =
+                xde_rx_one(&stream.stream, pkt, &mut devs, &mut mailbox)
+            {
                 count += 1;
                 len += pkt.byte_len();
                 out_chain.append(pkt);
@@ -2205,7 +2193,7 @@ unsafe extern "C" fn xde_rx(
         }
     }
 
-    devs.deliver_all();
+    devs.devs.deliver_all(&mut mailbox);
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()
@@ -2246,6 +2234,7 @@ unsafe fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
     devs: &mut TheView,
+    mailbox: &mut Mailbox,
 ) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
@@ -2286,8 +2275,8 @@ unsafe fn xde_rx_one(
 
     let ether_dst = meta.inner_eth.destination();
 
-    let Some((delivery_key, dev)) = devs.devs.get_key_value(vni, ether_dst)
-    else {
+    let port_key = FastKey::new(vni, ether_dst);
+    let Some(dev) = devs.devs.get_by_key(&port_key) else {
         // TODO add SDT probe
         // TODO add stat
         opte::engine::dbg!(
@@ -2305,7 +2294,7 @@ unsafe fn xde_rx_one(
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        devs.mail.deliver(vni, ether_dst, pkt);
+        mailbox.post_by_key(port_key, pkt);
         return None;
     }
 
@@ -2315,7 +2304,7 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => {
-            devs.mail.deliver(vni, ether_dst, pkt);
+            mailbox.post_by_key(port_key, pkt);
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
@@ -2339,7 +2328,7 @@ unsafe fn xde_rx_one(
                 opte::engine::err!("failed to set offload info: {}", e);
             }
 
-            devs.mail.deliver_direct(delivery_key, npkt);
+            mailbox.post_by_key(port_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());

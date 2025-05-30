@@ -12,10 +12,21 @@ use alloc::sync::Arc;
 use opte::api::MacAddr;
 use opte::api::Vni;
 
-// From microbenchmarking (https://github.com/oxidecomputer/opte/issues/637)
-// it is apparent that we have *far* faster `Ord` and `Eq` implementations
-// on these wider integer types than (Vni, MacAddr).
-type Key = (u32, u64);
+/// A map/set lookup key for ports indexed on `(Vni, MacAddr)`.
+///
+/// From microbenchmarking (https://github.com/oxidecomputer/opte/issues/637)
+/// it is apparent that we have *far* faster `Ord` and `Eq` implementations
+/// on these wider integer types than (Vni, MacAddr).
+#[derive(Copy, Clone, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct FastKey(u32, u64);
+
+impl FastKey {
+    #[inline]
+    pub fn new(vni: Vni, mac: MacAddr) -> Self {
+        FastKey(vni.as_u32(), mac_to_u64(mac))
+    }
+}
+
 type Val = Arc<XdeDev>;
 
 /// `BTreeMap`-accelerated lookup of XDE ports.
@@ -23,10 +34,10 @@ type Val = Arc<XdeDev>;
 /// `XdeDev`s are uniquely keyed on both their name, and their `(Vni, MacAddr)`
 /// pair. The former is used mostly by the control plane, and the latter by the
 /// data plane -- thus, querying by address provides a direct lookup. Any other
-/// lookups (e.g., multicast listeners) should return `Key`s or `&[Key]`s.
+/// lookups (e.g., multicast listeners) should return `FastKey`s or `&[FastKey]`s.
 #[derive(Clone)]
 pub struct DevMap {
-    devs: BTreeMap<Key, Val>,
+    devs: BTreeMap<FastKey, Val>,
     names: BTreeMap<String, Val>,
 }
 
@@ -62,16 +73,15 @@ impl DevMap {
     #[inline]
     #[must_use]
     pub fn get(&self, vni: Vni, mac: MacAddr) -> Option<&Val> {
-        self.devs.get(&(vni.as_u32(), mac_to_u64(mac)))
+        let key = FastKey::new(vni, mac);
+        self.get_by_key(&key)
     }
 
-    /// Return a reference to an `XdeDev` using its address, alongside its
-    /// prebaked key.
+    /// Return a reference to an `XdeDev` using its address.
     #[inline]
     #[must_use]
-    pub fn get_key_value(&self, vni: Vni, mac: MacAddr) -> Option<(Key, &Val)> {
-        let key = (vni.as_u32(), mac_to_u64(mac));
-        self.devs.get(&key).map(|v| (key, v))
+    pub fn get_by_key(&self, key: &FastKey) -> Option<&Val> {
+        self.devs.get(key)
     }
 
     /// Return a reference to an `XdeDev` using its name.
@@ -87,7 +97,7 @@ impl DevMap {
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
-    pub fn iter_keys(&self) -> impl Iterator<Item = &Key> {
+    pub fn iter_keys(&self) -> impl Iterator<Item = &FastKey> {
         self.devs.keys()
     }
 
@@ -113,6 +123,6 @@ fn mac_to_u64(val: MacAddr) -> u64 {
 }
 
 #[inline(always)]
-fn get_key(dev: &Val) -> Key {
-    (dev.vni.as_u32(), mac_to_u64(dev.port.mac_addr()))
+fn get_key(dev: &Val) -> FastKey {
+    FastKey::new(dev.vni, dev.port.mac_addr())
 }
