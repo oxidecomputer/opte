@@ -4,6 +4,7 @@
 
 // Copyright 2025 Oxide Computer Company
 
+use crate::mailbox::Mailbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::String;
@@ -64,6 +65,15 @@ impl DevMap {
         self.devs.get(&(vni.as_u32(), mac_to_u64(mac)))
     }
 
+    /// Return a reference to an `XdeDev` using its address, alongside its
+    /// prebaked key.
+    #[inline]
+    #[must_use]
+    pub fn get_key_value(&self, vni: Vni, mac: MacAddr) -> Option<(Key, &Val)> {
+        let key = (vni.as_u32(), mac_to_u64(mac));
+        self.devs.get(&key).map(|v| (key, v))
+    }
+
     /// Return a reference to an `XdeDev` using its name.
     #[inline]
     #[must_use]
@@ -76,9 +86,23 @@ impl DevMap {
         self.devs.values()
     }
 
+    /// Return an iterator over all `XdeDev`s, sorted by address.
+    pub fn iter_keys(&self) -> impl Iterator<Item = &Key> {
+        self.devs.keys()
+    }
+
     /// Return whether any ports currently exist.
     pub fn is_empty(&self) -> bool {
         self.devs.is_empty()
+    }
+
+    #[inline]
+    pub fn deliver_all(&self, mailbox: &mut Mailbox) {
+        for (k, v) in mailbox.drain() {
+            if let Some(port) = self.devs.get(&k) {
+                port.deliver(v);
+            }
+        }
     }
 }
 

@@ -36,7 +36,7 @@ use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
-use crate::mac::mac_rx_barrier;
+use crate::mailbox::Mailbox;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -96,7 +96,6 @@ use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
 use opte::ddi::sync::KRwLockWriteGuard;
 use opte::ddi::time::Interval;
@@ -357,13 +356,34 @@ pub struct XdeDev {
     routes: RouteCache,
 
     // Each port has its own copy of XDE_DEVS.
-    port_map: KMutex<Arc<DevMap>>,
+    port_map: KMutex<TheView>,
+}
+
+impl XdeDev {
+    #[inline]
+    pub fn deliver(&self, pkt: impl AsMblk) {
+        if let Some(pkt) = pkt.unwrap_mblk() {
+            unsafe { mac::mac_rx(self.mh, ptr::null_mut(), pkt.as_ptr()) }
+        }
+    }
+}
+
+struct TheView {
+    devs: Arc<DevMap>,
+    mail: Mailbox,
+}
+
+impl TheView {
+    fn deliver_all(&mut self) {
+        let mail = &mut self.mail;
+        self.devs.deliver_all(mail);
+    }
 }
 
 #[repr(C)]
 struct UnderlayDev {
     stream: DlsStream,
-    ports_map: Vec<KMutex<Arc<DevMap>>>,
+    ports_map: Vec<KMutex<TheView>>,
 }
 
 impl core::fmt::Debug for UnderlayDev {
@@ -809,7 +829,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2: underlay.u2.clone(),
         underlay_capab: underlay.shared_props,
         routes: RouteCache::default(),
-        port_map: KMutex::new(Arc::new(DevMap::new())),
+        port_map: KMutex::new(TheView {
+            devs: Arc::new(DevMap::new()),
+            mail: Mailbox::new(),
+        }),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -947,7 +970,8 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     // Remove the xde device entry. Clear its devmap to break any cycles.
     if let Some(xde) = devs.remove(&req.xde_devname) {
         let mut pmap = xde.port_map.lock();
-        *pmap = DevMap::new().into();
+        pmap.devs = DevMap::new().into();
+        pmap.mail = Mailbox::new();
     }
     refresh_maps(devs);
 
@@ -962,7 +986,8 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
     // Update all ports' maps.
     for port in devs.iter() {
         let mut map = port.port_map.lock();
-        *map = new_map.clone();
+        map.devs = new_map.clone();
+        map.mail.sync(&devs);
     }
 
     // Update all underlays' maps.
@@ -972,7 +997,8 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
     for port in ports {
         for map in port {
             let mut map = map.lock();
-            *map = new_map.clone();
+            map.devs = new_map.clone();
+            map.mail.sync(&devs);
         }
     }
 }
@@ -1187,7 +1213,10 @@ fn create_underlay_port(
     let cpus = unsafe { ncpus } as usize;
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map.push(KMutex::new(DevMap::new().into()));
+        ports_map.push(KMutex::new(TheView {
+            devs: DevMap::new().into(),
+            mail: Mailbox::new(),
+        }));
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -1552,7 +1581,7 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KMutexGuard<Arc<DevMap>>,
+    devs: &KMutexGuard<TheView>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
@@ -1590,7 +1619,7 @@ fn guest_loopback(
     let flow = parsed_pkt.flow();
 
     let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let maybe_dest_dev = devs.get(vni, ether_dst);
+    let maybe_dest_dev = devs.devs.get(vni, ether_dst);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
@@ -2156,19 +2185,27 @@ unsafe extern "C" fn xde_rx(
     let mut count = 0;
     let mut len = 0;
 
-    // TODO: In future we may want to batch packets for further tx
-    // by the mch they're being targeted to. E.g., either build a list
-    // of chains (port0, port1, ...), or hold tx until another
-    // packet breaks the run targeting the same dest.
+    // Acquire our own dev map -- this gives us access to prebuilt mailboxes
+    // for all active ports.
+    let cpu_index = unsafe {
+        let cpu = curcpup();
+        // this is a dumb cast while I prototype this work.
+        // These are cpu_id, then cpu_seqid. We want the latter.
+        *(cpu as *mut processorid_t).offset(1)
+    };
+    let mut devs = stream.ports_map[cpu_index as usize].lock();
+
     while let Some(pkt) = chain.pop_front() {
         unsafe {
-            if let Some(pkt) = xde_rx_one(&stream, pkt) {
+            if let Some(pkt) = xde_rx_one(&stream.stream, pkt, &mut devs) {
                 count += 1;
                 len += pkt.byte_len();
                 out_chain.append(pkt);
             }
         }
     }
+
+    devs.deliver_all();
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()
@@ -2205,7 +2242,11 @@ unsafe extern "C" {
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
 #[inline]
-unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
+unsafe fn xde_rx_one(
+    stream: &DlsStream,
+    mut pkt: MsgBlk,
+    devs: &mut TheView,
+) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
     // We must first parse the packet in order to determine where it
@@ -2229,13 +2270,6 @@ unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
     };
 
     let meta = parsed_pkt.meta();
-    let cpu_index = unsafe {
-        let cpu = curcpup();
-        // this is a dumb cast while I prototype this work.
-        // These are cpu_id, then cpu_seqid. We want the latter.
-        *(cpu as *mut processorid_t).offset(1)
-    };
-    let devs = stream.ports_map[cpu_index as usize].lock();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
@@ -2252,7 +2286,8 @@ unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
 
     let ether_dst = meta.inner_eth.destination();
 
-    let Some(dev) = devs.get(vni, ether_dst) else {
+    let Some((delivery_key, dev)) = devs.devs.get_key_value(vni, ether_dst)
+    else {
         // TODO add SDT probe
         // TODO add stat
         opte::engine::dbg!(
@@ -2270,9 +2305,7 @@ unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        unsafe {
-            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
-        }
+        devs.mail.deliver(vni, ether_dst, pkt);
         return None;
     }
 
@@ -2281,9 +2314,9 @@ unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
     let res = port.process(Direction::In, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Bypass) => unsafe {
-            mac::mac_rx(dev.mh, ptr::null_mut(), pkt.unwrap_mblk().as_ptr());
-        },
+        Ok(ProcessResult::Bypass) => {
+            devs.mail.deliver(vni, ether_dst, pkt);
+        }
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
             let len = npkt.byte_len();
@@ -2306,16 +2339,10 @@ unsafe fn xde_rx_one(stream: &UnderlayDev, mut pkt: MsgBlk) -> Option<MsgBlk> {
                 opte::engine::err!("failed to set offload info: {}", e);
             }
 
-            unsafe {
-                mac::mac_rx(
-                    dev.mh,
-                    ptr::null_mut(),
-                    npkt.unwrap_mblk().as_ptr(),
-                );
-            }
+            devs.mail.deliver_direct(delivery_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
         }
         _ => {}
     }

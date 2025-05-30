@@ -44,6 +44,7 @@ pub mod dev_map;
 pub mod dls;
 pub mod ip;
 pub mod mac;
+pub mod mailbox;
 pub mod route;
 pub mod secpolicy;
 pub mod stats;
