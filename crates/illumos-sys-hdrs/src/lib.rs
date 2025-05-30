@@ -222,6 +222,35 @@ pub enum krw_type_t {
 }
 
 // ======================================================================
+// uts/common/sys/condvar.h
+// ======================================================================
+
+#[repr(C)]
+pub struct kcondvar_t {
+    pub _opaque: c_ushort,
+}
+
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct kcv_type_t(pub c_int);
+impl kcv_type_t {
+    pub const CV_DEFAULT: Self = Self(0);
+    pub const CV_DRIVER: Self = Self(1);
+}
+
+#[repr(transparent)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub struct time_res_t(pub c_int);
+impl time_res_t {
+    pub const TR_NANOSEC: Self = Self(0);
+    pub const TR_MICROSEC: Self = Self(1);
+    pub const TR_MILLISEC: Self = Self(2);
+    pub const TR_SEC: Self = Self(3);
+    pub const TR_CLOCK_TICK: Self = Self(4);
+    pub const TR_COUNT: Self = Self(5);
+}
+
+// ======================================================================
 // uts/common/sys/stream.h
 // ======================================================================
 
@@ -323,6 +352,7 @@ pub type hrtime_t = c_longlong;
 // ======================================================================
 // uts/common/sys/types.h
 // ======================================================================
+pub type clock_t = c_long;
 pub type datalink_id_t = uint32_t;
 pub type dev_t = c_ulong;
 pub type id_t = c_int;

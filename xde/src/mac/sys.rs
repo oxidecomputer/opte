@@ -117,6 +117,10 @@ unsafe extern "C" {
         link: *const c_char,
         mhp: *mut *mut mac_handle,
     ) -> c_int;
+    pub fn mac_open_by_linkid(
+        link: datalink_id_t,
+        mhp: *mut *mut mac_handle,
+    ) -> c_int;
     pub fn mac_promisc_add(
         mch: *const mac_client_handle,
         ptype: mac_client_promisc_type_t,
