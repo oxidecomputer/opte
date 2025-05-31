@@ -71,7 +71,7 @@ use poptrie::Poptrie;
 pub const OVERLAY_LAYER_NAME: &str = "overlay";
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
     v2b: Arc<Virt2Boundary>,
@@ -92,14 +92,14 @@ pub fn setup(
         actions: vec![encap, decap],
         default_in: DefaultAction::Deny,
         default_out: DefaultAction::Deny,
+        ..Default::default()
     };
 
-    let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(OVERLAY_LAYER_NAME, pb, actions, ft_limit);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
-    layer.add_rule(Direction::Out, encap_rule);
+    layer.add_rule(Direction::Out, encap_rule, pb.stats_mut());
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap());
-    layer.add_rule(Direction::In, decap_rule);
+    layer.add_rule(Direction::In, decap_rule, pb.stats_mut());
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     pb.add_layer(layer, Pos::Last)

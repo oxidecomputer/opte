@@ -86,6 +86,11 @@ pub fn print_port(
     write_hr(&mut out)?;
     writeln!(&mut out, "{:#?}", port.stats_snap())?;
 
+    // ================================================================
+    // Print the Better Stats
+    // ================================================================
+    writeln!(&mut out, "{}", port.dump_flow_stats().unwrap())?;
+
     write_hrb(&mut out)?;
     writeln!(&mut out)?;
 
