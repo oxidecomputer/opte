@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Header metadata modifications for IP, ULP, and Encap.
 
@@ -260,8 +260,7 @@ impl HeaderLen for EncapMeta {
     fn packet_length(&self) -> usize {
         match self {
             EncapMeta::Geneve(g) => {
-                Self::MINIMUM_LENGTH
-                    + g.oxide_external_pkt.then_some(4).unwrap_or_default()
+                Self::MINIMUM_LENGTH + if g.oxide_external_pkt { 4 } else { 0 }
             }
         }
     }

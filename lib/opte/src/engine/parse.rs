@@ -35,6 +35,8 @@ use super::packet::MismatchError;
 use super::packet::OpteMeta;
 use super::packet::ParseError;
 use super::rule::CompiledTransform;
+use crate::api::IcmpInfo;
+use crate::api::PortInfo;
 use core::fmt;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
@@ -313,16 +315,29 @@ fn flow_id<V: ByteSlice>(
         None => (255, FLOW_ID_DEFAULT.addrs),
     };
 
-    let (src_port, dst_port) = ulp
-        .map(|ulp| {
-            (
-                ulp.true_src_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
-                ulp.true_dst_port().or_else(|| ulp.pseudo_port()).unwrap_or(0),
-            )
-        })
-        .unwrap_or((0, 0));
+    let proto_info = match ulp {
+        Some(ValidUlp::Tcp(t)) => {
+            PortInfo { src_port: t.source(), dst_port: t.destination() }.into()
+        }
+        Some(ValidUlp::Udp(u)) => {
+            PortInfo { src_port: u.source(), dst_port: u.destination() }.into()
+        }
+        Some(ValidUlp::IcmpV4(v4)) => IcmpInfo {
+            ty: v4.ty().0,
+            code: v4.code(),
+            id: v4.echo_id().unwrap_or_default(),
+        }
+        .into(),
+        Some(ValidUlp::IcmpV6(v6)) => IcmpInfo {
+            ty: v6.ty().0,
+            code: v6.code(),
+            id: v6.echo_id().unwrap_or_default(),
+        }
+        .into(),
+        _ => Default::default(),
+    };
 
-    InnerFlowId { proto, addrs, src_port, dst_port }
+    InnerFlowId { proto, addrs, proto_info }
 }
 
 #[derive(Parse)]
@@ -674,64 +689,6 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             csum.sub_bytes(&b[0..6]);
 
             Some(csum)
-        }
-    }
-}
-
-impl<V: ByteSlice> Ulp<V> {
-    #[inline]
-    pub fn true_src_port(&self) -> Option<u16> {
-        match self {
-            Ulp::Tcp(pkt) => Some(pkt.source()),
-            Ulp::Udp(pkt) => Some(pkt.source()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn true_dst_port(&self) -> Option<u16> {
-        match self {
-            Ulp::Tcp(pkt) => Some(pkt.destination()),
-            Ulp::Udp(pkt) => Some(pkt.destination()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn pseudo_port(&self) -> Option<u16> {
-        match self {
-            Ulp::IcmpV4(pkt) => pkt.echo_id(),
-            Ulp::IcmpV6(pkt) => pkt.echo_id(),
-            _ => None,
-        }
-    }
-}
-
-impl<V: ByteSlice> ValidUlp<V> {
-    #[inline]
-    pub fn true_src_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::Tcp(pkt) => Some(pkt.source()),
-            ValidUlp::Udp(pkt) => Some(pkt.source()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn true_dst_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::Tcp(pkt) => Some(pkt.destination()),
-            ValidUlp::Udp(pkt) => Some(pkt.destination()),
-            _ => None,
-        }
-    }
-
-    #[inline]
-    pub fn pseudo_port(&self) -> Option<u16> {
-        match self {
-            ValidUlp::IcmpV4(pkt) => pkt.echo_id(),
-            ValidUlp::IcmpV6(pkt) => pkt.echo_id(),
-            _ => None,
         }
     }
 }

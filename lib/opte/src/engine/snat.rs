@@ -28,6 +28,9 @@ use super::rule::Resource;
 use super::rule::ResourceEntry;
 use super::rule::ResourceError;
 use super::rule::StatefulAction;
+use crate::api::IcmpInfo;
+use crate::api::L4Info;
+use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
 use crate::engine::icmp::QueryEcho;
 use alloc::collections::btree_map::BTreeMap;
@@ -178,7 +181,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
             }
 
             None => {
-                panic!("cannot release port to unknown mapping: {}", priv_ip);
+                panic!("cannot release port to unknown mapping: {priv_ip}");
             }
         }
     }
@@ -285,14 +288,14 @@ impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Here and below: all ULP-specific pools have the same SNAT mappings.
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "{pub_ip}:{}-{}", ports.start(), ports.end())
     }
 }
 
 impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
     }
 }
 
@@ -306,8 +309,15 @@ where
         pkt: &Packet<MblkFullParsed>,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
-        let priv_port = flow_id.src_port;
         let proto = flow_id.protocol();
+        let priv_port = match flow_id.l4_info() {
+            Some(L4Info::Ports(PortInfo { src_port, .. })) => Ok(*src_port),
+            Some(L4Info::Icmpv4(IcmpInfo { id, .. })) => Ok(*id),
+            Some(L4Info::Icmpv6(IcmpInfo { id, .. })) => Ok(*id),
+            _ => Err(GenDescError::Unexpected {
+                msg: format!("SNAT pool (unexpected ULP: {proto})"),
+            }),
+        }?;
         let is_icmp = proto == T::MESSAGE_PROTOCOL;
         let pool = match proto {
             Protocol::TCP => &self.tcp_pool,
@@ -315,7 +325,7 @@ where
             _ if is_icmp => &self.icmp_pool,
             proto => {
                 return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (unexpected ULP: {})", proto),
+                    msg: format!("SNAT pool (unexpected ULP: {proto})"),
                 });
             }
         };
@@ -337,7 +347,7 @@ where
             }
 
             Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (no match: {})", ip),
+                msg: format!("SNAT pool (no match: {ip})"),
             }),
         }
     }
