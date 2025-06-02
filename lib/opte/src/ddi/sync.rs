@@ -442,7 +442,6 @@ impl<T> KRwReader<T> {
     }
 }
 
-// TODO: these hold in `std`, think about it here.
 unsafe impl Send for KCondvar {}
 unsafe impl Sync for KCondvar {}
 
@@ -598,7 +597,19 @@ impl<T> DerefMut for Token<'_, T> {
 impl<T> Drop for Token<'_, T> {
     fn drop(&mut self) {
         let mut thread_lock = self.lock.holder.lock();
-        *thread_lock = None;
+        let lock_thread = thread_lock.take();
+
         self.lock.cv.notify_all();
+
+        // Sanity checking -- same thread at exit.
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let curthread = unsafe {
+            NonNull::new(threadp())
+                .expect("current thread *must* be a valid pointer")
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let curthread = std::thread::current().id();
+        assert_eq!(Some(curthread), lock_thread);
     }
 }

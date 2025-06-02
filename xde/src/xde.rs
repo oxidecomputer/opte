@@ -713,11 +713,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
     // Taking the management lock alllows us to create XDE ports atomically
-    // with repsect to other threads (and enforces a lockout on, e.g., the
+    // with respect to other threads (and enforces a lockout on, e.g., the
     // underlay).
     let token = state.management_lock.lock();
 
-    // TODO: refactor to have this as an Arc?
     let UnderlayState { u1, u2, shared_props: underlay_capab } = {
         let underlay_ = token.underlay.lock();
         let underlay = match *underlay_ {
@@ -739,7 +738,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // the XdeDev map in parallel. Quickly check that there is no
     // collision on name or MAC address -- take a read lock so as not
     // to block the Rx datapath (yet).
-    // TODO: refactor to make exclusivity a guarantee from the type system
     {
         let devs = token.devs.read();
         if devs.get_by_name(&req.xde_devname).is_some() {
