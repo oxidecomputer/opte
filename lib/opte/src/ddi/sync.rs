@@ -2,12 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Safe abstractions for synchronization primitives.
 //!
 //! TODO: This should be in its own crate, wrapping the illumos-ddi-dki
 //! crate. But for now just let it live here.
+use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::ops::Deref;
 use core::ops::DerefMut;
@@ -422,6 +423,22 @@ impl<T> KRwLock<T> {
     pub fn write(&self) -> KRwLockWriteGuard<T> {
         let guard = self.inner.write().unwrap();
         KRwLockWriteGuard { guard }
+    }
+}
+
+/// A read-only wrapper around a shared [`KRwLock`], used to
+/// limit write access to certain contexts.
+pub struct KRwReader<T> {
+    rwl: Arc<KRwLock<T>>,
+}
+
+impl<T> KRwReader<T> {
+    pub fn new(rwl: Arc<KRwLock<T>>) -> Self {
+        Self { rwl }
+    }
+
+    pub fn read(&self) -> KRwLockReadGuard<T> {
+        self.rwl.read()
     }
 }
 

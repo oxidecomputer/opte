@@ -58,44 +58,46 @@ pub struct XdeStats {
 }
 
 impl XdeStats {
-    pub fn parse_error(&mut self, dir: Direction, err: &ParseError) {
+    pub fn parse_error(&self, dir: Direction, err: &ParseError) {
         use Direction::*;
         match (dir, err) {
             (In, ParseError::IngotError(e)) => match e.error() {
-                IngotError::Unwanted => self.in_drop_unwanted_proto += 1,
+                IngotError::Unwanted => self.in_drop_unwanted_proto.incr(1),
                 IngotError::TooSmall | IngotError::NoRemainingChunks => {
-                    self.in_drop_truncated += 1
+                    self.in_drop_truncated.incr(1)
                 }
-                IngotError::StraddledHeader => self.in_drop_straddled += 1,
-                IngotError::Reject => self.in_drop_reject += 1,
-                IngotError::IllegalValue => self.in_drop_illegal_val += 1,
+                IngotError::StraddledHeader => self.in_drop_straddled.incr(1),
+                IngotError::Reject => self.in_drop_reject.incr(1),
+                IngotError::IllegalValue => self.in_drop_illegal_val.incr(1),
                 IngotError::NeedsHint | IngotError::CannotAccept => {
-                    self.in_drop_misc += 1
+                    self.in_drop_misc.incr(1)
                 }
             },
-            (In, ParseError::IllegalValue(_)) => self.in_drop_illegal_val += 1,
-            (In, ParseError::BadLength(_)) => self.in_drop_bad_len += 1,
+            (In, ParseError::IllegalValue(_)) => {
+                self.in_drop_illegal_val.incr(1)
+            }
+            (In, ParseError::BadLength(_)) => self.in_drop_bad_len.incr(1),
             (In, ParseError::UnrecognisedTunnelOpt { .. }) => {
-                self.in_drop_bad_tun_opt += 1
+                self.in_drop_bad_tun_opt.incr(1)
             }
 
             (Out, ParseError::IngotError(e)) => match e.error() {
-                IngotError::Unwanted => self.out_drop_unwanted_proto += 1,
+                IngotError::Unwanted => self.out_drop_unwanted_proto.incr(1),
                 IngotError::TooSmall | IngotError::NoRemainingChunks => {
-                    self.out_drop_truncated += 1
+                    self.out_drop_truncated.incr(1)
                 }
-                IngotError::StraddledHeader => self.out_drop_straddled += 1,
-                IngotError::Reject => self.out_drop_reject += 1,
-                IngotError::IllegalValue => self.out_drop_illegal_val += 1,
+                IngotError::StraddledHeader => self.out_drop_straddled.incr(1),
+                IngotError::Reject => self.out_drop_reject.incr(1),
+                IngotError::IllegalValue => self.out_drop_illegal_val.incr(1),
                 IngotError::NeedsHint | IngotError::CannotAccept => {
-                    self.out_drop_misc += 1
+                    self.out_drop_misc.incr(1)
                 }
             },
             (Out, ParseError::IllegalValue(_)) => {
-                self.out_drop_illegal_val += 1
+                self.out_drop_illegal_val.incr(1)
             }
-            (Out, ParseError::BadLength(_)) => self.out_drop_bad_len += 1,
-            (Out, _) => self.out_drop_misc += 1,
+            (Out, ParseError::BadLength(_)) => self.out_drop_bad_len.incr(1),
+            (Out, _) => self.out_drop_misc.incr(1),
         }
     }
 }
