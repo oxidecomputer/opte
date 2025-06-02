@@ -18,7 +18,7 @@ cfg_if! {
         use core::ptr;
         use core::ptr::NonNull;
         use illumos_sys_hdrs::{
-            cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait,
+            cv_broadcast, cv_destroy, cv_init, cv_signal, cv_wait, cv_wait_sig,
             kcv_type_t, kcondvar_t, kmutex_t, krw_t, krwlock_t, kthread_t,
             mutex_enter, mutex_exit, mutex_destroy, mutex_init, mutex_tryenter,
             rw_enter, rw_exit, rw_init, rw_destroy, threadp
@@ -487,6 +487,17 @@ impl KCondvar {
         unsafe { cv_wait(self.cv.get(), lock.lock.mutex.0.get()) }
         lock
     }
+
+    pub fn wait_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        // TODO: return interrupt cause.
+        unsafe {
+            cv_wait_sig(self.cv.get(), lock.lock.mutex.0.get());
+        }
+        lock
+    }
 }
 
 #[cfg(any(feature = "std", test))]
@@ -508,6 +519,13 @@ impl KCondvar {
         lock: KMutexGuard<'a, T>,
     ) -> KMutexGuard<'a, T> {
         KMutexGuard { guard: self.cv.wait(lock.guard).unwrap() }
+    }
+
+    pub fn wait_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        self.wait(lock)
     }
 }
 
@@ -551,7 +569,7 @@ impl<T> TokenLock<T> {
         let mut thread_lock = self.holder.lock();
 
         while thread_lock.is_some() {
-            thread_lock = self.cv.wait(thread_lock);
+            thread_lock = self.cv.wait_sig(thread_lock);
         }
 
         #[cfg(all(not(feature = "std"), not(test)))]
