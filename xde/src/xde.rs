@@ -87,7 +87,6 @@ use opte::ddi::kstat::KStatProvider;
 use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
-use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockType;
@@ -267,7 +266,7 @@ struct XdeState {
 /// lookup/resolution of link state, etc. which could possibly upcall.**
 struct XdeMgmt {
     devs: Arc<KRwLock<DevMap>>,
-    underlay: KMutex<Option<UnderlayState>>,
+    underlay: Option<UnderlayState>,
 }
 
 #[derive(Clone)]
@@ -300,7 +299,7 @@ impl XdeState {
         XdeState {
             management_lock: TokenLock::new(XdeMgmt {
                 devs: dev_map,
-                underlay: KMutex::new(None),
+                underlay: None,
             }),
             devs,
             ectx,
@@ -718,8 +717,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let token = state.management_lock.lock();
 
     let UnderlayState { u1, u2, shared_props: underlay_capab } = {
-        let underlay_ = token.underlay.lock();
-        let underlay = match *underlay_ {
+        let underlay = match token.underlay {
             Some(ref u) => u,
             None => {
                 return Err(OpteError::System {
@@ -976,19 +974,13 @@ impl<'a> ResolvedLink<'a> {
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
-    let token = state.management_lock.lock();
+    let mut token = state.management_lock.lock();
 
-    // Quickly check to see whether the underlay is sat.
-    // Holding `token` will prevent anyone from setting it in
-    // the interim.
-    {
-        let underlay = token.underlay.lock();
-        if underlay.is_some() {
-            return Err(OpteError::System {
-                errno: EEXIST,
-                msg: "underlay already initialized".into(),
-            });
-        }
+    if token.underlay.is_some() {
+        return Err(OpteError::System {
+            errno: EEXIST,
+            msg: "underlay already initialized".into(),
+        });
     }
 
     // Resolve `LinkId`s outside of any locks -- these require upcalls.
@@ -998,9 +990,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     // `init_underlay_ingress_handlers` contains no upcalls today, but
     // we can keep it outside of the actual underlay lock's scope for safety.
     let new_underlay = init_underlay_ingress_handlers(link1, link2, &token)?;
-
-    let mut underlay = token.underlay.lock();
-    *underlay = Some(new_underlay);
+    token.underlay = Some(new_underlay);
 
     Ok(NoResp::default())
 }
@@ -1008,9 +998,8 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 #[unsafe(no_mangle)]
 fn clear_xde_underlay() -> Result<NoResp, OpteError> {
     let state = get_xde_state();
-    let token = state.management_lock.lock();
-    let mut underlay = token.underlay.lock();
-    if underlay.is_none() {
+    let mut token = state.management_lock.lock();
+    if token.underlay.is_none() {
         return Err(OpteError::System {
             errno: ENOENT,
             msg: "underlay not yet initialized".into(),
@@ -1023,7 +1012,7 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
-    if let Some(underlay) = underlay.take() {
+    if let Some(underlay) = token.underlay.take() {
         // There shouldn't be anymore refs to the underlay given we checked for
         // 0 ports above.
         let Some(u1) = Arc::into_inner(underlay.u1) else {
@@ -1371,9 +1360,8 @@ unsafe extern "C" fn xde_detach(
     {
         let state_ref = unsafe { &*(state) };
         let token = state_ref.management_lock.lock();
-        let underlay = token.underlay.lock();
 
-        if underlay.is_some() {
+        if token.underlay.is_some() {
             warn!("failed to detach: underlay is set");
             return DDI_FAILURE;
         }
