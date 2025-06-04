@@ -708,7 +708,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     let state = get_xde_state();
 
-    // Taking the management lock alllows us to create XDE ports atomically
+    // Taking the management lock allows us to create XDE ports atomically
     // with respect to other threads (and enforces a lockout on, e.g., the
     // underlay).
     let token = state.management_lock.lock();
