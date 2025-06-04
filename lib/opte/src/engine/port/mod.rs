@@ -64,7 +64,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
-use crate::ddi::sync::KRwLockType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
@@ -348,9 +347,6 @@ impl PortBuilder {
             ),
         };
 
-        let mut data = KRwLock::new(data);
-        data.init(KRwLockType::Driver);
-
         Ok(Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
@@ -359,7 +355,7 @@ impl PortBuilder {
             epoch: AtomicU64::new(1),
             stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             net,
-            data,
+            data: KRwLock::new(data),
         })
     }
 

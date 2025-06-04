@@ -8,8 +8,11 @@ use crate::xde::XdeDev;
 use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use opte::api::MacAddr;
 use opte::api::Vni;
+use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockReadGuard;
 
 // From microbenchmarking (https://github.com/oxidecomputer/opte/issues/637)
 // it is apparent that we have *far* faster `Ord` and `Eq` implementations
@@ -87,4 +90,18 @@ fn mac_to_u64(val: MacAddr) -> u64 {
 #[inline(always)]
 fn get_key(dev: &Val) -> Key {
     (dev.vni.as_u32(), mac_to_u64(dev.port.mac_addr()))
+}
+
+/// A read-only wrapper around a shared [`DevMap`], used to
+/// limit write access to certain contexts.
+pub struct ReadOnlyDevMap(Arc<KRwLock<DevMap>>);
+
+impl ReadOnlyDevMap {
+    pub fn new(rwl: Arc<KRwLock<DevMap>>) -> Self {
+        Self(rwl)
+    }
+
+    pub fn read(&self) -> KRwLockReadGuard<DevMap> {
+        self.0.read()
+    }
 }

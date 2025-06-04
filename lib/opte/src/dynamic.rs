@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! A KRwLock-based wrapper for dynamically updateable resources (e.g., config),
 //! and for memoizing the outputs generated from those resources.
@@ -13,7 +13,6 @@
 // TODO: Implement the generated outputs to reduce cost of, e.g., DHCP responses.
 
 use crate::ddi::sync::KRwLock;
-use crate::ddi::sync::KRwLockType;
 use alloc::sync::Arc;
 use core::fmt::Debug;
 use core::ops::Deref;
@@ -37,8 +36,7 @@ pub struct Snapshot<T> {
 
 impl<T> From<T> for Dynamic<T> {
     fn from(value: T) -> Self {
-        let mut inner = KRwLock::new(value.into());
-        inner.init(KRwLockType::Driver);
+        let inner = KRwLock::new(value.into());
 
         Self(InnerDynamic { inner, epoch: AtomicU64::default() }.into())
     }
