@@ -13,6 +13,7 @@
 //#![allow(clippy::arc_with_non_send_sync)]
 
 use crate::dev_map::DevMap;
+use crate::dev_map::ReadOnlyDevMap;
 use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
@@ -89,9 +90,7 @@ use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
-use opte::ddi::sync::KRwLockType;
-use opte::ddi::sync::KRwReader;
-use opte::ddi::sync::Token;
+use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
@@ -252,7 +251,7 @@ struct XdeState {
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
-    devs: KRwReader<DevMap>,
+    devs: ReadOnlyDevMap,
     stats: KStatNamed<XdeStats>,
     #[allow(unused)]
     cleanup: Periodic<()>,
@@ -291,10 +290,8 @@ fn get_xde_state() -> &'static XdeState {
 impl XdeState {
     fn new() -> Self {
         let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
-        let mut dev_map = KRwLock::new(DevMap::default());
-        dev_map.init(KRwLockType::Driver);
-        let dev_map = Arc::new(dev_map);
-        let devs = KRwReader::new(dev_map.clone());
+        let dev_map = Arc::new(KRwLock::new(DevMap::default()));
+        let devs = ReadOnlyDevMap::new(dev_map.clone());
 
         XdeState {
             management_lock: TokenLock::new(XdeMgmt {
@@ -717,17 +714,14 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let token = state.management_lock.lock();
 
     let UnderlayState { u1, u2, shared_props: underlay_capab } = {
-        let underlay = match token.underlay {
-            Some(ref u) => u,
-            None => {
-                return Err(OpteError::System {
-                    errno: EINVAL,
-                    msg: "underlay not initialized".to_string(),
-                });
-            }
-        };
-
-        underlay.clone()
+        token
+            .underlay
+            .as_ref()
+            .ok_or_else(|| OpteError::System {
+                errno: EINVAL,
+                msg: "underlay not initialized".to_string(),
+            })?
+            .clone()
     };
 
     let cfg = VpcCfg::from(req.cfg.clone());
@@ -884,14 +878,14 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     // Remove it, knowing that we may need to reinsert on a rollback.
     let xde = {
         let mut devs = token.devs.write();
-        let Some(xde) = devs.remove(&req.xde_devname) else {
-            return Err(OpteError::PortNotFound(req.xde_devname.clone()));
-        };
+        let xde = devs
+            .remove(&req.xde_devname)
+            .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?;
 
         xde
     };
 
-    let return_port = |token: &Token<'_, XdeMgmt>, port| {
+    let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
         let mut devs = token.devs.write();
         _ = devs.insert(port);
     };
@@ -974,6 +968,11 @@ impl<'a> ResolvedLink<'a> {
 fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
+    // Resolve `LinkId`s outside of any locks -- these require upcalls,
+    // but we don't need to
+    let link1 = ResolvedLink::new(req.u1.as_str())?;
+    let link2 = ResolvedLink::new(req.u2.as_str())?;
+
     let mut token = state.management_lock.lock();
 
     if token.underlay.is_some() {
@@ -983,12 +982,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
         });
     }
 
-    // Resolve `LinkId`s outside of any locks -- these require upcalls.
-    let link1 = ResolvedLink::new(req.u1.as_str())?;
-    let link2 = ResolvedLink::new(req.u2.as_str())?;
-
-    // `init_underlay_ingress_handlers` contains no upcalls today, but
-    // we can keep it outside of the actual underlay lock's scope for safety.
+    // `init_underlay_ingress_handlers` contains no upcalls today.
     let new_underlay = init_underlay_ingress_handlers(link1, link2, &token)?;
     token.underlay = Some(new_underlay);
 
@@ -2268,9 +2262,9 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddRouterEntryReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     router::add_entry(&dev.port, req.dest, req.target, req.class)
 }
@@ -2282,9 +2276,9 @@ fn del_router_entry_hdlr(
     let req: DelRouterEntryReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     router::del_entry(&dev.port, req.dest, req.target, req.class)
 }
@@ -2294,9 +2288,9 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddFwRuleReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     firewall::add_fw_rule(&dev.port, &req)?;
     Ok(NoResp::default())
@@ -2307,9 +2301,9 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: RemFwRuleReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     firewall::rem_fw_rule(&dev.port, &req)?;
     Ok(NoResp::default())
@@ -2320,9 +2314,9 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetFwRulesReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     firewall::set_fw_rules(&dev.port, &req)?;
     Ok(NoResp::default())
@@ -2379,9 +2373,9 @@ fn list_layers_hdlr(
     let req: ListLayersReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     Ok(dev.port.list_layers())
 }
@@ -2391,9 +2385,9 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearUftReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     dev.port.clear_uft()?;
     Ok(NoResp::default())
@@ -2404,9 +2398,9 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearLftReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     dev.port.clear_lft(&req.layer_name)?;
     Ok(NoResp::default())
@@ -2417,9 +2411,9 @@ fn dump_uft_hdlr(env: &mut IoctlEnvelope) -> Result<DumpUftResp, OpteError> {
     let req: DumpUftReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     dev.port.dump_uft()
 }
@@ -2431,9 +2425,9 @@ fn dump_layer_hdlr(
     let req: DumpLayerReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     dev.port.dump_layer(&req.name)
 }
@@ -2445,9 +2439,9 @@ fn dump_tcp_flows_hdlr(
     let req: DumpTcpFlowsReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     dev.port.dump_tcp_flows()
 }
@@ -2457,9 +2451,9 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::SetExternalIpsReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
     Ok(NoResp::default())
@@ -2470,9 +2464,9 @@ fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: oxide_vpc::api::AllowCidrReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     gateway::allow_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())?;
     Ok(NoResp::default())
@@ -2485,9 +2479,9 @@ fn remove_cidr_hdlr(
     let req: oxide_vpc::api::RemoveCidrReq = env.copy_in_req()?;
     let state = get_xde_state();
     let devs = state.devs.read();
-    let Some(dev) = devs.get_by_name(&req.port_name) else {
-        return Err(OpteError::PortNotFound(req.port_name));
-    };
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
 }
