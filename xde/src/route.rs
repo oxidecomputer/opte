@@ -8,7 +8,6 @@ use crate::ip;
 use crate::sys;
 use crate::xde::DropRef;
 use crate::xde::XdeDev;
-use crate::xde::XdeUnderlayPort;
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::sync::Arc;
@@ -269,10 +268,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
 #[unsafe(no_mangle)]
-fn next_hop<'a>(
-    key: &RouteKey,
-    ustate: &'a XdeDev,
-) -> Result<Route<'a>, &'a XdeUnderlayPort> {
+fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, u8> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -288,7 +284,7 @@ fn next_hop<'a>(
         let xmit_hint = l4_hash.unwrap_or(0);
         let mut generation_op = 0u32;
 
-        let mut underlay_dev = &*ustate.u1;
+        let mut underlay_idx = 0;
 
         // Step (1): Lookup the IRE for the destination. This is going
         // to return one of the default gateway entries.
@@ -326,7 +322,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"no IRE for destination",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
         let ill = (*ire.inner()).ire_ill;
         if ill.is_null() {
@@ -338,7 +334,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"destination ILL is NULL",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         // Step (2): Lookup the IRE for the gateway's link-local
@@ -382,7 +378,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"no IRE for gateway",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         // Step (3): Determine the source address of the outer frame
@@ -401,7 +397,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"gateway ILL phys addr is NULL",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         let src: [u8; 6] = alloc::slice::from_raw_parts(src, 6)
@@ -411,7 +407,7 @@ fn next_hop<'a>(
         // Switch to the 2nd underlay device if we determine the source mac
         // belongs to that device.
         if src == ustate.u2.mac {
-            underlay_dev = &ustate.u2;
+            underlay_idx = 1;
         }
 
         let src = EtherAddr::from(src);
@@ -429,7 +425,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"no NCE for gateway",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         let nce_common = (*nce.inner()).nce_common;
@@ -442,7 +438,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"no NCE common for gateway",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         let mac = (*nce_common).ncec_lladdr;
@@ -455,7 +451,7 @@ fn next_hop<'a>(
                 EtherAddr::zero(),
                 c"NCE MAC address if NULL for gateway",
             );
-            return Err(underlay_dev);
+            return Err(underlay_idx);
         }
 
         let maclen = (*nce_common).ncec_lladdr_length;
@@ -468,7 +464,7 @@ fn next_hop<'a>(
 
         next_hop_probe(ip6_dst, Some(&gw_ip6), src, dst, c"");
 
-        Ok(Route { src, dst, underlay_dev })
+        Ok(Route { src, dst, underlay_idx })
     }
 }
 
@@ -517,7 +513,7 @@ impl RouteCache {
     /// This will retrieve an existing entry, if one exists from a recent
     /// query, or computes the current route using `next_hop` on miss or
     /// discovery of a stale entry.
-    pub fn next_hop<'b>(&self, key: RouteKey, xde: &'b XdeDev) -> Route<'b> {
+    pub fn next_hop(&self, key: RouteKey, xde: &XdeDev) -> Route {
         let t = Moment::now();
 
         let (maybe_route, map_ptr_int) = {
@@ -531,7 +527,7 @@ impl RouteCache {
         match maybe_route {
             Some(route) if route.is_valid(t) => {
                 route_hit_probe(map_ptr_int, &key);
-                return route.into_route(xde);
+                return route.into();
             }
             _ => {}
         }
@@ -546,7 +542,7 @@ impl RouteCache {
         let entry_exists = match &maybe_route {
             Entry::Occupied(e) if e.get().is_valid(t) => {
                 route_hit_probe(map_ptr_int, &key);
-                return e.get().into_route(xde);
+                return (*e.get()).into();
             }
             Entry::Occupied(_) => true,
             _ => false,
@@ -567,12 +563,12 @@ impl RouteCache {
             match (maybe_route, next_hop(&key, xde)) {
                 (Entry::Vacant(slot), Ok(route)) => {
                     route_insert_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(xde, t));
+                    slot.insert(route.cached(t));
                     route
                 }
                 (Entry::Occupied(mut slot), Ok(route)) => {
                     route_refresh_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(xde, t));
+                    slot.insert(route.cached(t));
                     route
                 }
                 (_, Err(dev)) => Route::zero_addr(dev),
@@ -633,41 +629,34 @@ impl CachedRoute {
         u128::from(t.delta_as_millis(self.timestamp))
             <= REMOVE_ROUTE_LIFETIME.as_millis()
     }
+}
 
-    fn into_route(self, xde: &XdeDev) -> Route<'_> {
-        Route {
-            src: self.src,
-            dst: self.dst,
-            // This is not a pretty construction, and will not work for
-            // a hypothetically higher port count.
-            underlay_dev: if self.underlay_idx == 0 {
-                &xde.u1
-            } else {
-                &xde.u2
-            },
-        }
+impl From<CachedRoute> for Route {
+    fn from(value: CachedRoute) -> Self {
+        let CachedRoute { src, dst, underlay_idx, .. } = value;
+        Route { src, dst, underlay_idx }
     }
 }
 
 /// Output port and L2 information needed to emit a packet over the underlay.
 #[derive(Copy, Clone, Debug)]
-pub struct Route<'a> {
+pub struct Route {
     pub src: EtherAddr,
     pub dst: EtherAddr,
-    pub underlay_dev: &'a XdeUnderlayPort,
+    pub underlay_idx: u8,
 }
 
-impl<'a> Route<'a> {
-    fn cached(&self, xde: &XdeDev, timestamp: Moment) -> CachedRoute {
-        // As unfortunate as `into_route`.
-        let port_0: &XdeUnderlayPort = &xde.u1;
-        let underlay_idx =
-            if core::ptr::eq(self.underlay_dev, port_0) { 0 } else { 1 };
-
-        CachedRoute { src: self.src, dst: self.dst, underlay_idx, timestamp }
+impl Route {
+    fn cached(&self, timestamp: Moment) -> CachedRoute {
+        CachedRoute {
+            src: self.src,
+            dst: self.dst,
+            underlay_idx: self.underlay_idx,
+            timestamp,
+        }
     }
 
-    fn zero_addr(underlay_dev: &'a XdeUnderlayPort) -> Route<'a> {
-        Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_dev }
+    fn zero_addr(underlay_idx: u8) -> Route {
+        Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_idx }
     }
 }

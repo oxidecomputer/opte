@@ -19,6 +19,7 @@ use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 use core::ops::RangeInclusive;
 use core::ptr;
 use illumos_sys_hdrs::*;
@@ -259,12 +260,14 @@ impl MacClientHandle {
     /// the packet when no descriptors are available, then use
     /// [`MacClient::tx_drop_on_no_desc()`].
     ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
+    /// `hint` will be used for fanout if needed -- a `None` value
+    /// implies the hint is unknown, or the packets belong to different
+    /// flows (and should be hashed out separately by, e.g.,
+    /// mac_tx_fanout_mode).
     pub fn tx(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: Option<NonZeroUsize>,
         flags: MacTxFlags,
     ) -> Option<MsgBlk> {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
@@ -273,7 +276,13 @@ impl MacClientHandle {
         let mut ret_mp = ptr::null_mut();
         let mblk = pkt.unwrap_mblk()?;
         unsafe {
-            mac_tx(self.mch, mblk.as_ptr(), hint, flags.bits(), &mut ret_mp)
+            mac_tx(
+                self.mch,
+                mblk.as_ptr(),
+                zerocopy::transmute!(hint),
+                flags.bits(),
+                &mut ret_mp,
+            )
         };
         if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
@@ -291,16 +300,14 @@ impl MacClientHandle {
     }
 
     /// Send the [`Packet`] on this client, dropping if there is no
-    /// descriptor available
+    /// descriptor available.
     ///
-    /// This function always consumes the [`Packet`].
-    ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
+    /// This function always consumes the [`Packet`]. See
+    /// [`MacClientHandle::tx`] for discussion on `hint`.
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: Option<NonZeroUsize>,
         flags: MacTxFlags,
     ) {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
@@ -315,7 +322,13 @@ impl MacClientHandle {
         };
 
         unsafe {
-            mac_tx(self.mch, mblk.as_ptr(), hint, raw_flags, &mut ret_mp)
+            mac_tx(
+                self.mch,
+                mblk.as_ptr(),
+                zerocopy::transmute!(hint),
+                raw_flags,
+                &mut ret_mp,
+            )
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }

@@ -39,6 +39,7 @@ use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
 use crate::postbox::Postbox;
+use crate::postbox::TxPostbox;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -54,11 +55,13 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use core::u32;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
@@ -1632,9 +1635,10 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KMutexGuard<PerEntryState>,
+    local_state: &KMutexGuard<PerEntryState>,
     mut pkt: MsgBlk,
     vni: Vni,
+    postbox: &mut TxPostbox,
 ) {
     use Direction::*;
 
@@ -1670,7 +1674,8 @@ fn guest_loopback(
     let flow = parsed_pkt.flow();
 
     let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let maybe_dest_dev = devs.devs.get(vni, ether_dst);
+    let port_key = FastKey::new(vni, ether_dst);
+    let maybe_dest_dev = local_state.devs.get_by_key(&port_key);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
@@ -1694,20 +1699,19 @@ fn guest_loopback(
                         .flags
                         .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
                     {
+                        // We have only asked for cksum emulation, so we
+                        // will either have:
+                        //  * 0 pkts (checksum could not be emulated,
+                        //            packet dropped)
+                        //  * 1 pkt.
                         mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
-                            .and_then(|v| v.unwrap_mblk())
+                            .and_then(|mut v| v.pop_front())
                     } else {
-                        Some(pkt.unwrap_mblk())
+                        Some(pkt)
                     };
 
                     if let Some(pkt) = pkt {
-                        unsafe {
-                            mac::mac_rx(
-                                dest_dev.mh,
-                                ptr::null_mut(),
-                                pkt.as_ptr(),
-                            )
-                        };
+                        postbox.post_local(port_key, pkt);
                     }
                 }
 
@@ -1724,13 +1728,7 @@ fn guest_loopback(
 
                 Ok(ProcessResult::Bypass) => {
                     opte::engine::dbg!("loopback rx bypass");
-                    unsafe {
-                        mac::mac_rx(
-                            dest_dev.mh,
-                            ptr::null_mut(),
-                            pkt.unwrap_mblk().as_ptr(),
-                        )
-                    };
+                    postbox.post_local(port_key, pkt);
                 }
 
                 Err(e) => {
@@ -1789,21 +1787,48 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     };
 
+    let mut tx_postbox = TxPostbox::new();
+
     // TODO: In future we may want to batch packets for further tx
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
         unsafe {
-            xde_mc_tx_one(src_dev, pkt);
+            xde_mc_tx_one(src_dev, pkt, &mut tx_postbox);
         }
+    }
+
+    {
+        let entry_state = src_dev.port_map.lock();
+        entry_state.devs.deliver_all(&mut tx_postbox.postbox());
+    }
+
+    if let Some(u_chain) = tx_postbox.drain_underlay(0) {
+        src_dev.u1.stream.stream.tx_drop_on_no_desc(
+            u_chain.msgs,
+            u_chain.last_hint,
+            MacTxFlags::empty(),
+        );
+    }
+
+    if let Some(u_chain) = tx_postbox.drain_underlay(1) {
+        src_dev.u2.stream.stream.tx_drop_on_no_desc(
+            u_chain.msgs,
+            u_chain.last_hint,
+            MacTxFlags::empty(),
+        );
     }
 
     ptr::null_mut()
 }
 
 #[inline]
-unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
+unsafe fn xde_mc_tx_one(
+    src_dev: &XdeDev,
+    mut pkt: MsgBlk,
+    postbox: &mut TxPostbox,
+) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let offload_req = pkt.offload_flags();
@@ -1822,7 +1847,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 mblk_addr,
                 &e,
             );
-            return ptr::null_mut();
+            return;
         }
     };
     let old_len = parsed_pkt.len();
@@ -1832,22 +1857,16 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
     else {
         opte::engine::dbg!("sum of packet L3/L4 exceeds u32::MAX");
-        return ptr::null_mut();
+        return;
     };
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
             opte::engine::dbg!("{}", e);
-            return ptr::null_mut();
+            return;
         }
     };
-
-    // Choose u1 as a starting point. This may be changed in the next_hop
-    // function when we are actually able to determine what interface should be
-    // used.
-    let stream = &src_dev.u1.stream;
-    let hint = 0;
 
     // Send straight to underlay in passthrough mode.
     if src_dev.passthrough {
@@ -1858,8 +1877,8 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         //
         // TODO Is there way to set mac_tx to must use result?
         drop(parsed_pkt);
-        stream.stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
-        return ptr::null_mut();
+        postbox.post_underlay(0, None, pkt);
+        return;
     }
 
     let port = &src_dev.port;
@@ -1880,7 +1899,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     // XXX add SDT probe
                     // XXX add stat
                     opte::engine::dbg!("no outer IPv6 header, dropping");
-                    return ptr::null_mut();
+                    return;
                 }
             };
 
@@ -1890,7 +1909,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     // XXX add SDT probe
                     // XXX add stat
                     opte::engine::dbg!("no geneve header, dropping");
-                    return ptr::null_mut();
+                    return;
                 }
             };
 
@@ -1900,9 +1919,9 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             let new_len = out_pkt.byte_len();
 
             if ip6_src == ip6_dst {
-                let devs = src_dev.port_map.lock();
-                guest_loopback(src_dev, &devs, out_pkt, vni);
-                return ptr::null_mut();
+                let local_state = src_dev.port_map.lock();
+                guest_loopback(src_dev, &local_state, out_pkt, vni, postbox);
+                return;
             }
 
             let Ok(encap_len) = u32::try_from(new_len.saturating_sub(old_len))
@@ -1910,7 +1929,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 opte::engine::err!(
                     "tried to push encap_len greater than u32::MAX"
                 );
-                return ptr::null_mut();
+                return;
             };
 
             // Boost MSS to use full jumbo frames if we know our path
@@ -1975,7 +1994,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             // expiry so that we can actually react to new reachability/load
             // info from DDM.
             let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(l4_hash) };
-            let Route { src, dst, underlay_dev } =
+            let Route { src, dst, underlay_idx } =
                 src_dev.routes.next_hop(my_key, src_dev);
 
             // Get a pointer to the beginning of the outer frame and
@@ -1991,35 +2010,34 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 MsgBlk::wrap_mblk(mblk).unwrap()
             };
 
-            underlay_dev.stream.stream.tx_drop_on_no_desc(
+            // We do *have* a flow hash but zero means no hint given, as
+            // far as illumos is concerned. Invert the bits in this case.
+            let hint = NonZeroUsize::try_from(
+                NonZeroU32::new(l4_hash)
+                    .unwrap_or(NonZeroU32::new(u32::MAX).unwrap()),
+            )
+            .expect("usize should be at least 32b on target platform");
+
+            postbox.post_underlay(
+                usize::from(underlay_idx),
+                Some(hint),
                 new_pkt,
-                hint,
-                MacTxFlags::empty(),
             );
         }
 
-        Ok(ProcessResult::Drop { .. }) => {
-            return ptr::null_mut();
-        }
+        Ok(ProcessResult::Drop { .. }) => {}
 
-        Ok(ProcessResult::Hairpin(hpkt)) => unsafe {
-            mac::mac_rx(
-                src_dev.mh,
-                ptr::null_mut(),
-                hpkt.unwrap_mblk().as_ptr(),
-            );
-        },
+        Ok(ProcessResult::Hairpin(hpkt)) => {
+            let key = FastKey::new(src_dev.vni, src_dev.port.mac_addr());
+            postbox.post_local(key, hpkt);
+        }
 
         Ok(ProcessResult::Bypass) => {
-            stream.stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
+            postbox.post_underlay(0, None, pkt);
         }
 
         Err(_) => {}
     }
-
-    // On return the Packet is dropped and its underlying mblk
-    // segments are freed.
-    ptr::null_mut()
 }
 
 /// This is a generic wrapper for references that should be dropped once not in
@@ -2236,7 +2254,7 @@ unsafe extern "C" fn xde_rx(
     let mut count = 0;
     let mut len = 0;
 
-    // Acquire our own dev map -- this gives us access to prebuilt mailboxes
+    // Acquire our own dev map -- this gives us access to prebuilt postboxes
     // for all active ports.
     let cpu_index = unsafe {
         let cpu = curcpup();
@@ -2245,13 +2263,13 @@ unsafe extern "C" fn xde_rx(
         *(cpu as *mut processorid_t).offset(1)
     };
 
-    let mut devs = stream.ports_map[cpu_index as usize].lock();
-    let mut mailbox = Postbox::new();
+    let mut cpu_state = stream.ports_map[cpu_index as usize].lock();
+    let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
         unsafe {
             if let Some(pkt) =
-                xde_rx_one(&stream.stream, pkt, &mut devs, &mut mailbox)
+                xde_rx_one(&stream.stream, pkt, &mut cpu_state, &mut postbox)
             {
                 count += 1;
                 len += pkt.byte_len();
@@ -2260,7 +2278,7 @@ unsafe extern "C" fn xde_rx(
         }
     }
 
-    devs.devs.deliver_all(&mut mailbox);
+    cpu_state.devs.deliver_all(&mut postbox);
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()
@@ -2301,7 +2319,7 @@ unsafe fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
     devs: &mut PerEntryState,
-    mailbox: &mut Postbox,
+    postbox: &mut Postbox,
 ) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
@@ -2361,7 +2379,7 @@ unsafe fn xde_rx_one(
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        mailbox.post(port_key, pkt);
+        postbox.post(port_key, pkt);
         return None;
     }
 
@@ -2371,7 +2389,7 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => {
-            mailbox.post(port_key, pkt);
+            postbox.post(port_key, pkt);
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
@@ -2395,10 +2413,10 @@ unsafe fn xde_rx_one(
                 opte::engine::err!("failed to set offload info: {}", e);
             }
 
-            mailbox.post(port_key, npkt);
+            postbox.post(port_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(hppkt, None, MacTxFlags::empty());
         }
         _ => {}
     }

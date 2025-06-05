@@ -87,10 +87,8 @@ impl TxPostbox {
     }
 
     #[inline]
-    pub fn drain_local(
-        &mut self,
-    ) -> impl Iterator<Item = (FastKey, MsgBlkChain)> {
-        self.local_ports.drain()
+    pub fn postbox(&mut self) -> &mut Postbox {
+        &mut self.local_ports
     }
 
     #[inline]
