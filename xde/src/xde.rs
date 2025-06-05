@@ -1159,9 +1159,6 @@ unsafe extern "C" fn xde_attach(
 
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
-    link_name: String,
-    // This parameter is likely to be used as part of the flows work.
-    _mc_name: &str,
     resolved: ResolvedLink<'_>,
 ) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
     let ResolvedLink(link_name, link_id) = resolved;
