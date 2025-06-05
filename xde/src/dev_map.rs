@@ -4,7 +4,7 @@
 
 // Copyright 2025 Oxide Computer Company
 
-use crate::mailbox::Mailbox;
+use crate::postbox::Postbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::String;
@@ -109,7 +109,7 @@ impl DevMap {
     }
 
     #[inline]
-    pub fn deliver_all(&self, mailbox: &mut Mailbox) {
+    pub fn deliver_all(&self, mailbox: &mut Postbox) {
         for (k, v) in mailbox.drain() {
             if let Some(port) = self.devs.get(&k) {
                 port.deliver(v);

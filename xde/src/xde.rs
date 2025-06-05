@@ -38,7 +38,7 @@ use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
-use crate::mailbox::Mailbox;
+use crate::postbox::Postbox;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
@@ -362,7 +362,7 @@ pub struct XdeDev {
     routes: RouteCache,
 
     // Each port has its own copy of XDE_DEVS.
-    port_map: KMutex<TheView>,
+    port_map: KMutex<PerEntryState>,
 }
 
 impl XdeDev {
@@ -374,14 +374,14 @@ impl XdeDev {
     }
 }
 
-struct TheView {
+struct PerEntryState {
     devs: Arc<DevMap>,
 }
 
 #[repr(C)]
 struct UnderlayDev {
     stream: DlsStream,
-    ports_map: Vec<KMutex<TheView>>,
+    ports_map: Vec<KMutex<PerEntryState>>,
 }
 
 impl core::fmt::Debug for UnderlayDev {
@@ -832,7 +832,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2,
         underlay_capab,
         routes: RouteCache::default(),
-        port_map: KMutex::new(TheView { devs: Arc::new(DevMap::new()) }),
+        port_map: KMutex::new(PerEntryState { devs: Arc::new(DevMap::new()) }),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -1259,7 +1259,8 @@ fn create_underlay_port(
     let cpus = unsafe { ncpus } as usize;
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map.push(KMutex::new(TheView { devs: DevMap::new().into() }));
+        ports_map
+            .push(KMutex::new(PerEntryState { devs: DevMap::new().into() }));
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -1631,7 +1632,7 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    devs: &KMutexGuard<TheView>,
+    devs: &KMutexGuard<PerEntryState>,
     mut pkt: MsgBlk,
     vni: Vni,
 ) {
@@ -2245,7 +2246,7 @@ unsafe extern "C" fn xde_rx(
     };
 
     let mut devs = stream.ports_map[cpu_index as usize].lock();
-    let mut mailbox = Mailbox::new();
+    let mut mailbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
         unsafe {
@@ -2299,8 +2300,8 @@ unsafe extern "C" {
 unsafe fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
-    devs: &mut TheView,
-    mailbox: &mut Mailbox,
+    devs: &mut PerEntryState,
+    mailbox: &mut Postbox,
 ) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
@@ -2360,7 +2361,7 @@ unsafe fn xde_rx_one(
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
         drop(parsed_pkt);
-        mailbox.post_by_key(port_key, pkt);
+        mailbox.post(port_key, pkt);
         return None;
     }
 
@@ -2370,7 +2371,7 @@ unsafe fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Bypass) => {
-            mailbox.post_by_key(port_key, pkt);
+            mailbox.post(port_key, pkt);
         }
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
@@ -2394,7 +2395,7 @@ unsafe fn xde_rx_one(
                 opte::engine::err!("failed to set offload info: {}", e);
             }
 
-            mailbox.post_by_key(port_key, npkt);
+            mailbox.post(port_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
             stream.tx_drop_on_no_desc(hppkt, 0, MacTxFlags::empty());
