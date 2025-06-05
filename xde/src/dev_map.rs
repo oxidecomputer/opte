@@ -11,6 +11,8 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use opte::api::MacAddr;
 use opte::api::Vni;
+use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockReadGuard;
 
 /// A map/set lookup key for ports indexed on `(Vni, MacAddr)`.
 ///
@@ -125,4 +127,18 @@ fn mac_to_u64(val: MacAddr) -> u64 {
 #[inline(always)]
 fn get_key(dev: &Val) -> FastKey {
     FastKey::new(dev.vni, dev.port.mac_addr())
+}
+
+/// A read-only wrapper around a shared [`DevMap`], used to
+/// limit write access to certain contexts.
+pub struct ReadOnlyDevMap(Arc<KRwLock<DevMap>>);
+
+impl ReadOnlyDevMap {
+    pub fn new(rwl: Arc<KRwLock<DevMap>>) -> Self {
+        Self(rwl)
+    }
+
+    pub fn read(&self) -> KRwLockReadGuard<DevMap> {
+        self.0.read()
+    }
 }
