@@ -1112,6 +1112,11 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             "underlay u1 ({name}) must have one ref during teardown",
         ));
 
+        // XXX
+        // TODO: We hit the above on teardown.
+        //       Something has survived for too long.
+        // XXX
+
         let name = underlay.u2.name.clone();
         let u2 = Arc::into_inner(underlay.u2).expect(&format!(
             "underlay u2 ({name}) must have one ref during teardown",
@@ -2028,8 +2033,9 @@ unsafe fn xde_mc_tx_one(
         Ok(ProcessResult::Drop { .. }) => {}
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            let key = FastKey::new(src_dev.vni, src_dev.port.mac_addr());
-            postbox.post_local(key, hpkt);
+            // Going via postbox is a great way to get ourselves
+            // a panic due to a recursive lock.
+            src_dev.deliver(hpkt);
         }
 
         Ok(ProcessResult::Bypass) => {
