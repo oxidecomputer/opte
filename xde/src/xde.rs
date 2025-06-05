@@ -98,7 +98,6 @@ use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockWriteGuard;
 use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
@@ -910,7 +909,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     {
         let mut devs = token.devs.write();
         _ = devs.insert(xde);
-        refresh_maps(devs);
+        refresh_maps(
+            devs,
+            token.underlay.as_ref().expect(
+                "bailed out above if no underlay, and protected by token",
+            ),
+        );
     }
 
     Ok(NoResp::default())
@@ -930,7 +934,13 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             .remove(&req.xde_devname)
             .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?;
 
-        refresh_maps(devs);
+        refresh_maps(
+            devs,
+            token
+                .underlay
+                .as_ref()
+                .expect("underlay must exist while ports exist"),
+        );
 
         xde
     };
@@ -938,7 +948,13 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
         let mut devs = token.devs.write();
         _ = devs.insert(port);
-        refresh_maps(devs);
+        refresh_maps(
+            devs,
+            token
+                .underlay
+                .as_ref()
+                .expect("underlay must exist while ports exist"),
+        );
     };
 
     // Destroy DLS devnet device.
@@ -1001,8 +1017,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
 }
 
 // NOTE: mut not used but effectively guaranteering writelock from ioctl.
-fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
-    let state = get_xde_state();
+fn refresh_maps(devs: KRwLockWriteGuard<DevMap>, underlay: &UnderlayState) {
     let new_map = Arc::new(devs.clone());
 
     // Update all ports' maps.
@@ -1012,8 +1027,6 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>) {
     }
 
     // Update all underlays' maps.
-    let underlay_ = state.underlay.lock();
-    let underlay = underlay_.as_ref().unwrap();
     let ports = [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
     for port in ports {
         for map in port {
@@ -1235,13 +1248,12 @@ unsafe extern "C" fn xde_attach(
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
     resolved: ResolvedLink<'_>,
-) -> Result<(xde_underlay_port, OffloadInfo), OpteError> {
+) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
     let ResolvedLink(link_name, link_id) = resolved;
-    let stream =
-        Arc::new(DlsStream::open(link_id).map_err(|e| OpteError::System {
-            errno: EFAULT,
-            msg: format!("failed to grab open stream for {link_name}: {e}"),
-        })?);
+    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
+        errno: EFAULT,
+        msg: format!("failed to grab open stream for {link_name}: {e}"),
+    })?;
 
     // Maybe also a RwLock?
     let cpus = unsafe { ncpus } as usize;
