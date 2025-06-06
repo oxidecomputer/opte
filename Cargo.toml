@@ -41,11 +41,11 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
-cargo_metadata = "0.19"
+cargo_metadata = "0.20"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
-criterion = "0.5"
+criterion = "0.6"
 ctor = "0.4"
 darling = "0.20"
 dyn-clone = "1.0"
@@ -60,7 +60,7 @@ pcap-parser = "0.16"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
 quote = "1.0"
-rand = "0.9.0"
+rand = "0.9.1"
 ron = "0.10"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }

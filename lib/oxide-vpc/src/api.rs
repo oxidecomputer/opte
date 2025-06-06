@@ -670,7 +670,7 @@ impl FromStr for FirewallRule {
                 Some(("priority", val)) => {
                     priority =
                         Some(val.parse::<u16>().map_err(|e| {
-                            format!("bad priroity: '{val}' {e}")
+                            format!("bad priority: '{val}' {e}")
                         })?);
                 }
 

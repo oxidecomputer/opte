@@ -30,7 +30,6 @@ use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockType;
 use opte::engine::ether::EtherMeta;
 use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
@@ -580,16 +579,11 @@ impl Virt2Boundary {
     }
 
     pub fn new() -> Self {
-        let mut pt4 = KRwLock::new(Poptrie::default());
-        pt4.init(KRwLockType::Driver);
-        let mut pt6 = KRwLock::new(Poptrie::default());
-        pt6.init(KRwLockType::Driver);
-
         Virt2Boundary {
             ip4: KMutex::new(BTreeMap::new()),
             ip6: KMutex::new(BTreeMap::new()),
-            pt4,
-            pt6,
+            pt4: KRwLock::new(Poptrie::default()),
+            pt6: KRwLock::new(Poptrie::default()),
         }
     }
 }
