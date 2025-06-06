@@ -878,11 +878,8 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     // Remove it, knowing that we may need to reinsert on a rollback.
     let xde = {
         let mut devs = token.devs.write();
-        let xde = devs
-            .remove(&req.xde_devname)
-            .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?;
-
-        xde
+        devs.remove(&req.xde_devname)
+            .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?
     };
 
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {

@@ -878,7 +878,7 @@ impl FromStr for ProtoFilter {
             "icmp6" => Ok(ProtoFilter::Proto(Protocol::ICMPv6)),
             "tcp" => Ok(ProtoFilter::Proto(Protocol::TCP)),
             "udp" => Ok(ProtoFilter::Proto(Protocol::UDP)),
-            _ => Err(format!("unknown protocol: {}", s)),
+            _ => Err(format!("unknown protocol: {s}")),
         }
     }
 }
@@ -888,7 +888,7 @@ impl Display for ProtoFilter {
         match self {
             ProtoFilter::Any => write!(f, "ANY"),
             ProtoFilter::Arp => write!(f, "ARP"),
-            ProtoFilter::Proto(proto) => write!(f, "{},", proto),
+            ProtoFilter::Proto(proto) => write!(f, "{proto}"),
         }
     }
 }

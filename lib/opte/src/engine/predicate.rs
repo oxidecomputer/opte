@@ -224,7 +224,7 @@ impl Display for PortMatch {
         use PortMatch::*;
 
         match self {
-            Exact(port) => write!(f, "{}", port),
+            Exact(port) => write!(f, "{port}"),
         }
     }
 }
@@ -256,7 +256,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.ether_type={}", s)
+                write!(f, "inner.ether.ether_type={s}")
             }
 
             InnerEtherDst(list) => {
@@ -265,7 +265,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.dst={}", s)
+                write!(f, "inner.ether.dst={s}")
             }
 
             InnerEtherSrc(list) => {
@@ -274,7 +274,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ether.src={}", s)
+                write!(f, "inner.ether.src={s}")
             }
 
             InnerIpProto(list) => {
@@ -283,7 +283,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.proto={}", s)
+                write!(f, "inner.ip.proto={s}")
             }
 
             InnerSrcIp4(list) => {
@@ -292,7 +292,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.src={}", s)
+                write!(f, "inner.ip.src={s}")
             }
 
             InnerDstIp4(list) => {
@@ -301,7 +301,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip.dst={}", s)
+                write!(f, "inner.ip.dst={s}")
             }
 
             InnerSrcIp6(list) => {
@@ -310,7 +310,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip6.src={}", s)
+                write!(f, "inner.ip6.src={s}")
             }
 
             InnerDstIp6(list) => {
@@ -319,7 +319,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ip6.dst={}", s)
+                write!(f, "inner.ip6.dst={s}")
             }
 
             InnerSrcPort(list) => {
@@ -328,7 +328,7 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ulp.src={}", s)
+                write!(f, "inner.ulp.src={s}")
             }
 
             InnerDstPort(list) => {
@@ -337,11 +337,11 @@ impl Display for Predicate {
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(",");
-                write!(f, "inner.ulp.dst={}", s)
+                write!(f, "inner.ulp.dst={s}")
             }
 
             Meta(key, val) => {
-                write!(f, "meta: {}={}", key, val)
+                write!(f, "meta: {key}={val}")
             }
 
             Not(pred) => {
