@@ -669,7 +669,7 @@ impl FromStr for FirewallRule {
                 Some(("priority", val)) => {
                     priority =
                         Some(val.parse::<u16>().map_err(|e| {
-                            format!("bad priroity: '{val}' {e}")
+                            format!("bad priority: '{val}' {e}")
                         })?);
                 }
 
@@ -833,7 +833,7 @@ impl FromStr for Address {
 
             addrstr => match addrstr.split_once('=') {
                 None => {
-                    Err(format!("malformed address specification: {addrstr}",))
+                    Err(format!("malformed address specification: {addrstr}"))
                 }
                 Some(("ip", val)) => Ok(Address::Ip(val.parse()?)),
                 Some(("subnet", val)) => Ok(Address::Subnet(val.parse()?)),
