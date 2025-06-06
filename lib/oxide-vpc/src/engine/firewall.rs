@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The Oxide VPC firewall.
 //!
@@ -19,7 +19,9 @@ pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
 use crate::engine::overlay::ACTION_META_VNI;
+use alloc::collections::BTreeSet;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use opte::api::Direction;
 use opte::api::IpAddr;
@@ -36,7 +38,7 @@ use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::IpProtoMatch;
 use opte::engine::predicate::Ipv4AddrMatch;
 use opte::engine::predicate::Ipv6AddrMatch;
-use opte::engine::predicate::PortMatch;
+use opte::engine::predicate::Match;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
@@ -100,18 +102,16 @@ pub struct Firewall {}
 
 pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
-    let proto_pred = fw_rule.filters.protocol().into_predicate();
+    let proto_preds = fw_rule.filters.protocol().into_predicates();
     let port_pred = fw_rule.filters.ports().into_predicate();
 
-    if addr_pred.is_none() && proto_pred.is_none() && port_pred.is_none() {
+    if addr_pred.is_none() && proto_preds.is_empty() && port_pred.is_none() {
         return Rule::match_any(fw_rule.priority, action);
     }
 
     let mut rule = Rule::new(fw_rule.priority, action);
 
-    if let Some(proto_pred) = proto_pred {
-        rule.add_predicate(proto_pred);
-    }
+    rule.add_predicates(proto_preds);
 
     if let Some(port_pred) = port_pred {
         rule.add_predicate(port_pred);
@@ -147,18 +147,53 @@ impl Firewall {
 }
 
 impl ProtoFilter {
-    pub fn into_predicate(self) -> Option<Predicate> {
+    pub fn into_predicates(self) -> Vec<Predicate> {
         match self {
-            ProtoFilter::Any => None,
+            // Non-L4 cases.
+            ProtoFilter::Any => vec![],
 
             ProtoFilter::Arp => {
-                Some(Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
+                vec![Predicate::InnerEtherType(vec![EtherTypeMatch::Exact(
                     ETHER_TYPE_ARP,
-                )]))
+                )])]
             }
 
-            ProtoFilter::Proto(p) => {
-                Some(Predicate::InnerIpProto(vec![IpProtoMatch::Exact(p)]))
+            // L4 cases.
+            ProtoFilter::Icmp(Some(filter)) => {
+                let mut out = vec![
+                    // Match::Exact(Protocol::ICMP) is validated in msg type/code.
+                    Predicate::IcmpMsgType(vec![Match::Exact(
+                        filter.ty.into(),
+                    )]),
+                ];
+
+                if let Some(codes) = filter.codes {
+                    out.push(Predicate::IcmpMsgCode(vec![codes.into()]));
+                }
+
+                out
+            }
+
+            ProtoFilter::Icmpv6(Some(filter)) => {
+                let mut out = vec![
+                    // Match::Exact(Protocol::ICMP) is validated in msg type/code.
+                    Predicate::Icmpv6MsgType(vec![Match::Exact(
+                        filter.ty.into(),
+                    )]),
+                ];
+
+                if let Some(codes) = filter.codes {
+                    out.push(Predicate::Icmpv6MsgCode(vec![codes.into()]));
+                }
+
+                out
+            }
+
+            other => {
+                let proto = other
+                    .l4_protocol()
+                    .expect("handled all non-l4 cases above");
+                vec![Predicate::InnerIpProto(vec![IpProtoMatch::Exact(proto)])]
             }
         }
     }
@@ -215,10 +250,79 @@ impl Ports {
             Ports::Any => None,
 
             Ports::PortList(ports) => {
-                let mlist =
-                    ports.iter().map(|p| PortMatch::Exact(*p)).collect();
+                // TODO: We may want to reshape the controlplane API to make
+                // this more direct. We'd probably still want to optimise what
+                // they tell us at this stage, though.
+                let ports: BTreeSet<_> = ports.iter().copied().collect();
+
+                let mut mlist = vec![];
+                let mut curr_range = None;
+                for port in ports {
+                    let range = curr_range.get_or_insert(port..=port);
+                    let end = *range.end();
+                    if port <= end {
+                        // Created new.
+                    } else if port == end + 1 {
+                        // Extend range
+                        *range = *range.start()..=port;
+                    } else {
+                        // Finalise.
+                        let mut temp = port..=port;
+                        core::mem::swap(&mut temp, range);
+                        mlist.push(temp.into());
+                    }
+                }
+                if let Some(range) = curr_range.take() {
+                    mlist.push(range.into());
+                }
                 Some(Predicate::InnerDstPort(mlist))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_predicate_simplification() {
+        // Verify that we can correctly convert a control-plane given
+        // Vec<u16> port list into something a little less `O(n)`.
+        let simple = Ports::PortList(vec![1000, 1001, 1002, 1003, 1004]);
+        assert_eq!(
+            simple.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1000..=1004).into()]))
+        );
+
+        let gappy = Ports::PortList(vec![
+            80, 443, 1000, 1001, 1002, 1003, 1004, 60_000,
+        ]);
+        assert_eq!(
+            gappy.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![
+                80.into(),
+                443.into(),
+                (1000..=1004).into(),
+                60_000.into()
+            ]))
+        );
+
+        let dupes_order = Ports::PortList(vec![1, 2, 2, 3, 6, 5, 5, 7]);
+        assert_eq!(
+            dupes_order.into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1..=3).into(), (5..=7).into()]))
+        );
+
+        let reversed = Ports::PortList(vec![
+            60_000, 1004, 1003, 1002, 1001, 1000, 443, 80,
+        ]);
+        assert_eq!(reversed.into_predicate(), gappy.into_predicate());
+
+        let large_list: Vec<u16> = (1024..=65535).collect();
+        assert_eq!(
+            Ports::PortList(large_list).into_predicate(),
+            Some(Predicate::InnerDstPort(vec![(1024..=65535).into()]))
+        );
     }
 }
