@@ -281,6 +281,7 @@ pub struct dblk_t {
     pub db_meoi: [u8; 16], // imprecise
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for dblk_t {
     fn default() -> Self {
         dblk_t {

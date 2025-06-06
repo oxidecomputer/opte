@@ -58,8 +58,7 @@ impl HairpinAction for IcmpEchoReply {
             // should be impossible, but we avoid panicking given the kernel
             // context.
             return Err(GenErr::Unexpected(format!(
-                "Expected ICMP packet metadata, but found: {:?}",
-                meta
+                "Expected ICMP packet metadata, but found: {meta:?}",
             )));
         };
 
@@ -76,8 +75,7 @@ impl HairpinAction for IcmpEchoReply {
                 // Echo Request. However, programming error could
                 // cause this to happen -- let's not take any chances.
                 return Err(GenErr::Unexpected(format!(
-                    "expected an ICMPv4 Echo Request, got {} {}",
-                    ty, code,
+                    "expected an ICMPv4 Echo Request, got {ty} {code}",
                 )));
             }
         };

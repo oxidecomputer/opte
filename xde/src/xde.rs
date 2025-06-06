@@ -512,7 +512,7 @@ fn dtrace_probe_hdlr_resp<T>(resp: &Result<T, OpteError>)
 where
     T: CmdOk,
 {
-    let resp_arg = CString::new(format!("{:?}", resp)).unwrap();
+    let resp_arg = CString::new(format!("{resp:?}")).unwrap();
     __dtrace_probe_hdlr__resp(resp_arg.as_ptr() as uintptr_t);
 }
 
@@ -879,11 +879,8 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     // Remove it, knowing that we may need to reinsert on a rollback.
     let xde = {
         let mut devs = token.devs.write();
-        let xde = devs
-            .remove(&req.xde_devname)
-            .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?;
-
-        xde
+        devs.remove(&req.xde_devname)
+            .ok_or_else(|| OpteError::PortNotFound(req.xde_devname.clone()))?
     };
 
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
@@ -905,7 +902,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             return_port(&token, xde);
             return Err(OpteError::System {
                 errno: err,
-                msg: format!("failed to destroy DLS devnet: {}", err),
+                msg: format!("failed to destroy DLS devnet: {err}"),
             });
         }
     }
@@ -925,7 +922,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             return_port(&token, xde);
             return Err(OpteError::System {
                 errno: err,
-                msg: format!("failed to unregister mac: {}", err),
+                msg: format!("failed to unregister mac: {err}"),
             });
         }
     }

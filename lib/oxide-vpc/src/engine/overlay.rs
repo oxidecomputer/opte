@@ -227,8 +227,7 @@ impl StaticAction for EncapAction {
             Err(e) => {
                 return Err(GenHtError::Unexpected {
                     msg: format!(
-                        "failed to parse metadata entry '{}': {}",
-                        target_str, e
+                        "failed to parse metadata entry '{target_str}': {e}",
                     ),
                 });
             }
