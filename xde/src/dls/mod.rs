@@ -15,12 +15,12 @@ use crate::mac::MacTxFlags;
 use crate::mac::mac_client_handle;
 use core::ffi::CStr;
 use core::fmt::Display;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use illumos_sys_hdrs::ENOENT;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
-use illumos_sys_hdrs::uintptr_t;
 use opte::ddi::mblk::AsMblk;
 pub use sys::*;
 
@@ -200,12 +200,14 @@ impl DlsStream {
     ///
     /// This function always consumes the [`Packet`].
     ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
+    /// `hint` will be used for fanout if needed -- a `None` value
+    /// implies the hint is unknown, or the packets belong to different
+    /// flows (and should be hashed out separately by, e.g.,
+    /// mac_tx_fanout_mode).
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: Option<NonZeroUsize>,
         flags: MacTxFlags,
     ) {
         let Some(inner) = self.inner.as_ref() else {
@@ -221,11 +223,10 @@ impl DlsStream {
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {
-            // mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
             str_mdata_fastpath_put(
                 inner.dld_str.as_ptr(),
                 mblk.as_ptr(),
-                hint,
+                zerocopy::transmute!(hint),
                 raw_flags,
             )
         };

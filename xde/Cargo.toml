@@ -14,9 +14,10 @@ oxide-vpc = { workspace = true, features = ["engine", "kernel"], default-feature
 ingot.workspace = true
 
 bitflags.workspace = true
+crc32fast.workspace = true
 postcard.workspace = true
 serde.workspace = true
-crc32fast.workspace = true
+zerocopy.workspace = true
 
 [lib]
 crate-type = ["staticlib"]

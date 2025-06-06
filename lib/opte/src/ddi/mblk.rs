@@ -98,8 +98,13 @@ pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 
 impl MsgBlkChain {
     /// Create an empty packet chain.
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self(None)
+    }
+
+    /// Create an empty packet chain.
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_none()
     }
 
     /// Convert an mblk_t packet chain into a safe source of `MsgBlk`s.
