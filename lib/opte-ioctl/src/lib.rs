@@ -466,7 +466,7 @@ where
                 libc::EPERM => "permission denied".to_string(),
 
                 errno => {
-                    format!("unexpected errno: {}", errno)
+                    format!("unexpected errno: {errno}")
                 }
             };
 

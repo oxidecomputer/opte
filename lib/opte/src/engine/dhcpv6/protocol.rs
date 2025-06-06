@@ -66,7 +66,7 @@ impl fmt::Display for MessageType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use MessageType::*;
         match self {
-            Other(x) => write!(f, "Other({})", x),
+            Other(x) => write!(f, "Other({x})"),
             other => write!(
                 f,
                 "{}",

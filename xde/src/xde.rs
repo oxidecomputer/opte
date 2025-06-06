@@ -559,7 +559,7 @@ fn dtrace_probe_hdlr_resp<T>(resp: &Result<T, OpteError>)
 where
     T: CmdOk,
 {
-    let resp_arg = CString::new(format!("{:?}", resp)).unwrap();
+    let resp_arg = CString::new(format!("{resp:?}")).unwrap();
     __dtrace_probe_hdlr__resp(resp_arg.as_ptr() as uintptr_t);
 }
 
@@ -982,7 +982,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             return_port(&token, xde);
             return Err(OpteError::System {
                 errno: err,
-                msg: format!("failed to destroy DLS devnet: {}", err),
+                msg: format!("failed to destroy DLS devnet: {err}"),
             });
         }
     }
@@ -1002,7 +1002,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
             return_port(&token, xde);
             return Err(OpteError::System {
                 errno: err,
-                msg: format!("failed to unregister mac: {}", err),
+                msg: format!("failed to unregister mac: {err}"),
             });
         }
     }
@@ -1104,8 +1104,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
-    // Given we're the only management thread allowed by the RwLock, the below
-    // ownership checks cannot be violated.
     if let Some(underlay) = token.underlay.take() {
         // If the underlay references have leaked/spread beyond `XdeDev`s and not
         // been cleaned up, we committed have a fatal programming error.
@@ -1116,14 +1114,14 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         // `Arc<XdeUnderlayPort>` are `XdeState` (whose ref we have exclusively locked)
         // and `XdeDev` (of which none remain).
         let name = underlay.u1.name.clone();
-        let u1 = Arc::into_inner(underlay.u1).expect(&format!(
-            "underlay u1 ({name}) must have one ref during teardown",
-        ));
+        let u1 = Arc::into_inner(underlay.u1).unwrap_or_else(|| {
+            panic!("underlay u1 ({name}) must have one ref during teardown",)
+        });
 
         let name = underlay.u2.name.clone();
-        let u2 = Arc::into_inner(underlay.u2).expect(&format!(
-            "underlay u2 ({name}) must have one ref during teardown",
-        ));
+        let u2 = Arc::into_inner(underlay.u2).unwrap_or_else(|| {
+            panic!("underlay u2 ({name}) must have one ref during teardown",)
+        });
 
         for u in [u1, u2] {
             // We have a chain of refs here: `MacSiphon` holds a ref to
@@ -1145,10 +1143,12 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // The only other hold on this `DlsStream` is via `u.siphon`, which
             // we just dropped. The `expect` asserts that we have consumed them
             // in the correct order.
-            Arc::into_inner(u.stream).expect(&format!(
-                "underlay ({}) must have no external refs to its DlsStream",
-                u.name
-            ));
+            Arc::into_inner(u.stream).unwrap_or_else(|| {
+                panic!(
+                    "underlay ({}) must have no external refs to its DlsStream",
+                    u.name
+                )
+            });
         }
     }
 

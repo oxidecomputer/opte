@@ -178,7 +178,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
             }
 
             None => {
-                panic!("cannot release port to unknown mapping: {}", priv_ip);
+                panic!("cannot release port to unknown mapping: {priv_ip}");
             }
         }
     }
@@ -285,14 +285,14 @@ impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Here and below: all ULP-specific pools have the same SNAT mappings.
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{}:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "{pub_ip}:{}-{}", ports.start(), ports.end())
     }
 }
 
 impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "[{}]:{}-{}", pub_ip, ports.start(), ports.end())
+        write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
     }
 }
 
@@ -315,7 +315,7 @@ where
             _ if is_icmp => &self.icmp_pool,
             proto => {
                 return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (unexpected ULP: {})", proto),
+                    msg: format!("SNAT pool (unexpected ULP: {proto})"),
                 });
             }
         };
@@ -337,7 +337,7 @@ where
             }
 
             Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (no match: {})", ip),
+                msg: format!("SNAT pool (no match: {ip})"),
             }),
         }
     }
