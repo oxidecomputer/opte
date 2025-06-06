@@ -50,7 +50,7 @@ impl Postbox {
             unsafe { chain_ptr.as_mut() }
         } else {
             let chain =
-                self.boxen.entry(key).or_insert_with(|| MsgBlkChain::empty());
+                self.boxen.entry(key).or_insert_with(MsgBlkChain::empty);
             self.last_caller = Some((key, chain.into()));
             chain
         };
@@ -123,6 +123,12 @@ impl TxPostbox {
     }
 }
 
+impl Default for TxPostbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct UnderlayChain {
     /// The message chain in question.
     pub msgs: MsgBlkChain,
@@ -136,5 +142,11 @@ pub struct UnderlayChain {
 impl UnderlayChain {
     const fn new() -> Self {
         Self { msgs: MsgBlkChain::empty(), last_hint: None }
+    }
+}
+
+impl Default for UnderlayChain {
+    fn default() -> Self {
+        Self::new()
     }
 }

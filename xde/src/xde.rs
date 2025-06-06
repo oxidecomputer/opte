@@ -61,7 +61,6 @@ use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
-use core::u32;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
@@ -99,8 +98,8 @@ use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
-use opte::ddi::sync::KMutexGuard;
 use opte::ddi::sync::KRwLock;
+use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockWriteGuard;
 use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
@@ -365,7 +364,10 @@ pub struct XdeDev {
     routes: RouteCache,
 
     // Each port has its own copy of XDE_DEVS.
-    port_map: KMutex<PerEntryState>,
+    // This is kept under an RwLock because we need to handle nested
+    // acquisition by the same thread (local zone delivery, zone DHCP
+    // handling) which will happily call back here mid `mac_rx`.
+    port_map: KRwLock<PerEntryState>,
 }
 
 impl XdeDev {
@@ -835,7 +837,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2,
         underlay_capab,
         routes: RouteCache::default(),
-        port_map: KMutex::new(PerEntryState { devs: Arc::new(DevMap::new()) }),
+        port_map: KRwLock::new(PerEntryState { devs: Arc::new(DevMap::new()) }),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -948,6 +950,12 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         xde
     };
 
+    // Clear the port's devmap to break any cycles.
+    {
+        let mut pmap = xde.port_map.write();
+        pmap.devs = DevMap::new().into();
+    }
+
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
         let mut devs = token.devs.write();
         _ = devs.insert(port);
@@ -1025,7 +1033,7 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>, underlay: &UnderlayState) {
 
     // Update all ports' maps.
     for port in devs.iter() {
-        let mut map = port.port_map.lock();
+        let mut map = port.port_map.write();
         map.devs = new_map.clone();
     }
 
@@ -1111,11 +1119,6 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         let u1 = Arc::into_inner(underlay.u1).expect(&format!(
             "underlay u1 ({name}) must have one ref during teardown",
         ));
-
-        // XXX
-        // TODO: We hit the above on teardown.
-        //       Something has survived for too long.
-        // XXX
 
         let name = underlay.u2.name.clone();
         let u2 = Arc::into_inner(underlay.u2).expect(&format!(
@@ -1640,7 +1643,7 @@ fn guest_loopback_probe(
 #[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
-    local_state: &KMutexGuard<PerEntryState>,
+    entry_state: &PerEntryState,
     mut pkt: MsgBlk,
     vni: Vni,
     postbox: &mut TxPostbox,
@@ -1680,7 +1683,7 @@ fn guest_loopback(
 
     let ether_dst = parsed_pkt.meta().inner_eth.destination();
     let port_key = FastKey::new(vni, ether_dst);
-    let maybe_dest_dev = local_state.devs.get_by_key(&port_key);
+    let maybe_dest_dev = entry_state.devs.get_by_key(&port_key);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
@@ -1794,19 +1797,20 @@ unsafe extern "C" fn xde_mc_tx(
 
     let mut tx_postbox = TxPostbox::new();
 
+    // We don't need to read-lock the port map unless we have local
+    // delivery to perform.
+    let mut entry_state = None;
+
     // TODO: In future we may want to batch packets for further tx
     // by the mch they're being targeted to. E.g., either build a list
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        unsafe {
-            xde_mc_tx_one(src_dev, pkt, &mut tx_postbox);
-        }
+        xde_mc_tx_one(src_dev, pkt, &mut tx_postbox, &mut entry_state);
     }
 
-    {
-        let entry_state = src_dev.port_map.lock();
-        entry_state.devs.deliver_all(&mut tx_postbox.postbox());
+    if let Some(entry_state) = entry_state {
+        entry_state.devs.deliver_all(tx_postbox.postbox());
     }
 
     if let Some(u_chain) = tx_postbox.drain_underlay(0) {
@@ -1829,10 +1833,11 @@ unsafe extern "C" fn xde_mc_tx(
 }
 
 #[inline]
-unsafe fn xde_mc_tx_one(
-    src_dev: &XdeDev,
+fn xde_mc_tx_one<'a>(
+    src_dev: &'a XdeDev,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
+    entry_state: &mut Option<KRwLockReadGuard<'a, PerEntryState>>,
 ) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
@@ -1924,8 +1929,9 @@ unsafe fn xde_mc_tx_one(
             let new_len = out_pkt.byte_len();
 
             if ip6_src == ip6_dst {
-                let local_state = src_dev.port_map.lock();
-                guest_loopback(src_dev, &local_state, out_pkt, vni, postbox);
+                let entry_state =
+                    entry_state.get_or_insert_with(|| src_dev.port_map.read());
+                guest_loopback(src_dev, entry_state, out_pkt, vni, postbox);
                 return;
             }
 
@@ -2033,8 +2039,8 @@ unsafe fn xde_mc_tx_one(
         Ok(ProcessResult::Drop { .. }) => {}
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            // Going via postbox is a great way to get ourselves
-            // a panic due to a recursive lock.
+            // We already know the dest port, and there is limited value in
+            // trying to batch up ARP/ICMP replies.
             src_dev.deliver(hpkt);
         }
 
@@ -2273,14 +2279,12 @@ unsafe extern "C" fn xde_rx(
     let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
-        unsafe {
-            if let Some(pkt) =
-                xde_rx_one(&stream.stream, pkt, &mut cpu_state, &mut postbox)
-            {
-                count += 1;
-                len += pkt.byte_len();
-                out_chain.append(pkt);
-            }
+        if let Some(pkt) =
+            xde_rx_one(&stream.stream, pkt, &mut cpu_state, &mut postbox)
+        {
+            count += 1;
+            len += pkt.byte_len();
+            out_chain.append(pkt);
         }
     }
 
@@ -2321,7 +2325,7 @@ unsafe extern "C" {
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
 #[inline]
-unsafe fn xde_rx_one(
+fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
     devs: &mut PerEntryState,
