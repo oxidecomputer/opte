@@ -1014,14 +1014,14 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         // `Arc<XdeUnderlayPort>` are `XdeState` (whose ref we have exclusively locked)
         // and `XdeDev` (of which none remain).
         let name = underlay.u1.name.clone();
-        let u1 = Arc::into_inner(underlay.u1).expect(&format!(
-            "underlay u1 ({name}) must have one ref during teardown",
-        ));
+        let u1 = Arc::into_inner(underlay.u1).unwrap_or_else(|| {
+            panic!("underlay u1 ({name}) must have one ref during teardown",)
+        });
 
         let name = underlay.u2.name.clone();
-        let u2 = Arc::into_inner(underlay.u2).expect(&format!(
-            "underlay u2 ({name}) must have one ref during teardown",
-        ));
+        let u2 = Arc::into_inner(underlay.u2).unwrap_or_else(|| {
+            panic!("underlay u2 ({name}) must have one ref during teardown",)
+        });
 
         for u in [u1, u2] {
             // We have a chain of refs here: `MacSiphon` holds a ref to
@@ -1043,10 +1043,12 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // The only other hold on this `DlsStream` is via `u.siphon`, which
             // we just dropped. The `expect` asserts that we have consumed them
             // in the correct order.
-            Arc::into_inner(u.stream).expect(&format!(
-                "underlay ({}) must have no external refs to its DlsStream",
-                u.name
-            ));
+            Arc::into_inner(u.stream).unwrap_or_else(|| {
+                panic!(
+                    "underlay ({}) must have no external refs to its DlsStream",
+                    u.name
+                )
+            });
         }
     }
 
@@ -1694,16 +1696,14 @@ unsafe extern "C" fn xde_mc_tx(
     // of chains (u1, u2, port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        unsafe {
-            xde_mc_tx_one(src_dev, pkt);
-        }
+        xde_mc_tx_one(src_dev, pkt);
     }
 
     ptr::null_mut()
 }
 
 #[inline]
-unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
+fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let offload_req = pkt.offload_flags();
@@ -1722,7 +1722,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 mblk_addr,
                 &e,
             );
-            return ptr::null_mut();
+            return;
         }
     };
     let old_len = parsed_pkt.len();
@@ -1732,14 +1732,14 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
     else {
         opte::engine::dbg!("sum of packet L3/L4 exceeds u32::MAX");
-        return ptr::null_mut();
+        return;
     };
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
             opte::engine::dbg!("{}", e);
-            return ptr::null_mut();
+            return;
         }
     };
 
@@ -1759,7 +1759,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
         // TODO Is there way to set mac_tx to must use result?
         drop(parsed_pkt);
         stream.tx_drop_on_no_desc(pkt, hint, MacTxFlags::empty());
-        return ptr::null_mut();
+        return;
     }
 
     let port = &src_dev.port;
@@ -1780,7 +1780,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     // XXX add SDT probe
                     // XXX add stat
                     opte::engine::dbg!("no outer IPv6 header, dropping");
-                    return ptr::null_mut();
+                    return;
                 }
             };
 
@@ -1790,7 +1790,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                     // XXX add SDT probe
                     // XXX add stat
                     opte::engine::dbg!("no geneve header, dropping");
-                    return ptr::null_mut();
+                    return;
                 }
             };
 
@@ -1803,7 +1803,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 let state = get_xde_state();
                 let devs = state.devs.read();
                 guest_loopback(src_dev, &devs, out_pkt, vni);
-                return ptr::null_mut();
+                return;
             }
 
             let Ok(encap_len) = u32::try_from(new_len.saturating_sub(old_len))
@@ -1811,7 +1811,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
                 opte::engine::err!(
                     "tried to push encap_len greater than u32::MAX"
                 );
-                return ptr::null_mut();
+                return;
             };
 
             // Boost MSS to use full jumbo frames if we know our path
@@ -1899,9 +1899,7 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
             );
         }
 
-        Ok(ProcessResult::Drop { .. }) => {
-            return ptr::null_mut();
-        }
+        Ok(ProcessResult::Drop { .. }) => {}
 
         Ok(ProcessResult::Hairpin(hpkt)) => unsafe {
             mac::mac_rx(
@@ -1917,10 +1915,6 @@ unsafe fn xde_mc_tx_one(src_dev: &XdeDev, mut pkt: MsgBlk) -> *mut mblk_t {
 
         Err(_) => {}
     }
-
-    // On return the Packet is dropped and its underlying mblk
-    // segments are freed.
-    ptr::null_mut()
 }
 
 /// This is a generic wrapper for references that should be dropped once not in
@@ -2142,12 +2136,10 @@ unsafe extern "C" fn xde_rx(
     // of chains (port0, port1, ...), or hold tx until another
     // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
-        unsafe {
-            if let Some(pkt) = xde_rx_one(&stream, pkt) {
-                count += 1;
-                len += pkt.byte_len();
-                out_chain.append(pkt);
-            }
+        if let Some(pkt) = xde_rx_one(stream, pkt) {
+            count += 1;
+            len += pkt.byte_len();
+            out_chain.append(pkt);
         }
     }
 
@@ -2182,7 +2174,7 @@ unsafe extern "C" fn xde_rx(
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
 #[inline]
-unsafe fn xde_rx_one(stream: &DlsStream, mut pkt: MsgBlk) -> Option<MsgBlk> {
+fn xde_rx_one(stream: &DlsStream, mut pkt: MsgBlk) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
 
     // We must first parse the packet in order to determine where it
