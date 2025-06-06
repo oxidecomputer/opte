@@ -1734,11 +1734,6 @@ fn guest_loopback(
                     opte::engine::dbg!("unexpected loopback rx hairpin");
                 }
 
-                Ok(ProcessResult::Bypass) => {
-                    opte::engine::dbg!("loopback rx bypass");
-                    postbox.post_local(port_key, pkt);
-                }
-
                 Err(e) => {
                     opte::engine::dbg!(
                         "loopback port process error: {} -> {} {:?}",
@@ -2042,10 +2037,6 @@ fn xde_mc_tx_one<'a>(
             // We already know the dest port, and there is limited value in
             // trying to batch up ARP/ICMP replies.
             src_dev.deliver(hpkt);
-        }
-
-        Ok(ProcessResult::Bypass) => {
-            postbox.post_underlay(0, None, pkt);
         }
 
         Err(_) => {}
@@ -2398,9 +2389,6 @@ fn xde_rx_one(
     let res = port.process(Direction::In, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Bypass) => {
-            postbox.post(port_key, pkt);
-        }
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
             let len = npkt.byte_len();
