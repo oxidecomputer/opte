@@ -19,9 +19,6 @@ use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
 use crate::ioctl::IoctlEnvelope;
-use crate::ip::cpu;
-use crate::ip::ncpus;
-use crate::ip::processorid_t;
 use crate::mac;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacClient;
@@ -45,6 +42,8 @@ use crate::route::RouteCache;
 use crate::route::RouteKey;
 use crate::secpolicy;
 use crate::stats::XdeStats;
+use crate::sys::current_cpu;
+use crate::sys::ncpus;
 use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
@@ -379,6 +378,9 @@ impl XdeDev {
     }
 }
 
+// SAFETY: The sole pointer member (the mac handle) safely supports
+// multiple threads calling e.g. `mac_rx`. Management operations which
+// would invalidate this require either `&mut` or use of an owned `XdeDev`.
 unsafe impl Send for XdeDev {}
 unsafe impl Sync for XdeDev {}
 
@@ -1030,7 +1032,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-// NOTE: mut not used but effectively guaranteering writelock from ioctl.
+/// Rebuild each entrypoint's view of the central `DevMap`.
 fn refresh_maps(devs: KRwLockWriteGuard<DevMap>, underlay: &UnderlayState) {
     let new_map = Arc::new(devs.clone());
 
@@ -1070,7 +1072,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
     // Resolve `LinkId`s outside of any locks -- these require upcalls,
-    // but we don't need to
+    // but we don't need to perform these from within the management lock.
     let link1 = ResolvedLink::new(req.u1.as_str())?;
     let link2 = ResolvedLink::new(req.u2.as_str())?;
 
@@ -1269,8 +1271,7 @@ fn create_underlay_port(
         msg: format!("failed to grab open stream for {link_name}: {e}"),
     })?;
 
-    // Maybe also a RwLock?
-    let cpus = unsafe { ncpus } as usize;
+    let cpus = ncpus();
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
         ports_map
@@ -1643,7 +1644,6 @@ fn guest_loopback_probe(
     );
 }
 
-#[unsafe(no_mangle)]
 fn guest_loopback(
     src_dev: &XdeDev,
     entry_state: &PerEntryState,
@@ -2257,15 +2257,11 @@ unsafe extern "C" fn xde_rx(
     let mut len = 0;
 
     // Acquire our own dev map -- this gives us access to prebuilt postboxes
-    // for all active ports.
-    let cpu_index = unsafe {
-        let cpu = curcpup();
-        // this is a dumb cast while I prototype this work.
-        // These are cpu_id, then cpu_seqid. We want the latter.
-        *(cpu as *mut processorid_t).offset(1)
-    };
-
-    let mut cpu_state = stream.ports_map[cpu_index as usize].lock();
+    // for all active ports. We don't worry about this changing for rx -- caller
+    // threads here (interrupt contexts, poll threads, fanout, worker threads)
+    // are all bound to a given CPU each by MAC.
+    let cpu_index = current_cpu().seq_id;
+    let mut cpu_state = stream.ports_map[cpu_index].lock();
     let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
@@ -2304,10 +2300,6 @@ unsafe extern "C" fn xde_rx(
     }
 
     head
-}
-
-unsafe extern "C" {
-    safe fn curcpup() -> *mut cpu;
 }
 
 /// Processes an individual packet receiver on the underlay device `stream`.
