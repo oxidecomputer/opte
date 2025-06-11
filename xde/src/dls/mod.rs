@@ -178,6 +178,11 @@ pub struct DlsStream {
     link: LinkId,
 }
 
+// SAFETY: Mac/DLS use their own internal locking where required,
+// such that the use of a stream is valid from multiple threads.
+unsafe impl Send for DlsStream {}
+unsafe impl Sync for DlsStream {}
+
 #[derive(Debug)]
 struct DlsStreamInner {
     dld_str: NonNull<dld_str_s>,

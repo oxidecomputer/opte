@@ -15,7 +15,7 @@ use opte::ddi::mblk::MsgBlkChain;
 /// Temporary storage to collect and transmit packets bound for the same
 /// destination in a single batch.
 pub struct Postbox {
-    boxen: BTreeMap<FastKey, MsgBlkChain>,
+    boxes: BTreeMap<FastKey, MsgBlkChain>,
     // Avoid any lookup on adjacent runs of packets hitting a single port.
     last_caller: Option<(FastKey, NonNull<MsgBlkChain>)>,
 }
@@ -28,29 +28,29 @@ impl Default for Postbox {
 
 impl Postbox {
     pub const fn new() -> Self {
-        Self { boxen: BTreeMap::new(), last_caller: None }
+        Self { boxes: BTreeMap::new(), last_caller: None }
     }
 
-    /// Append the given `pkt` to the given
+    /// Append the given `pkt` to a chain for delivery to `key`.
     #[inline]
     pub fn post(&mut self, key: FastKey, pkt: MsgBlk) {
         let chain = if let Some((stored_key, mut chain_ptr)) = self.last_caller
             && stored_key == key
         {
             // SAFETY: We have a guarantee that the pointer is not aliased
-            // by holding `&mut self` -- this would invalidate any `&mut`s we
-            // might return.
+            // by holding `&mut self` -- this would invalidate any other
+            // `&mut`s we might return.
             // We know the pointer remains valid because:
-            // a) any inserts which could change the structure of `boxen`
+            // a) any inserts which *could* change the structure of `boxes`
             //    unconditionally update this pointer after the insert is made
-            //    (they've used a different chain).
-            // b) chain pkt append will not add a new `MsgBlkChain` to `boxen`.
-            // c) `drain` (the only public way to remove entries from `boxen`)
+            //    (even if an existing chain was selected).
+            // b) chain pkt append will not add a new `MsgBlkChain` to `boxes`.
+            // c) `drain` (the only public way to remove entries from `boxes`)
             //    sets `last_caller` to `None`.
             unsafe { chain_ptr.as_mut() }
         } else {
             let chain =
-                self.boxen.entry(key).or_insert_with(MsgBlkChain::empty);
+                self.boxes.entry(key).or_insert_with(MsgBlkChain::empty);
             self.last_caller = Some((key, chain.into()));
             chain
         };
@@ -61,11 +61,16 @@ impl Postbox {
     #[inline]
     pub fn drain(&mut self) -> impl Iterator<Item = (FastKey, MsgBlkChain)> {
         let mut the_set = BTreeMap::new();
-        mem::swap(&mut the_set, &mut self.boxen);
+        mem::swap(&mut the_set, &mut self.boxes);
         self.last_caller = None;
         the_set.into_iter()
     }
 }
+
+// SAFETY: The only `!Send`/`!Sync` element in here is the `NonNull<...>`.
+// We never allow `&self` to use this mutably.
+unsafe impl Send for Postbox {}
+unsafe impl Sync for Postbox {}
 
 /// A [`Postbox`] with dedicated storage for the underlay ports.
 pub struct TxPostbox {
@@ -81,16 +86,19 @@ impl TxPostbox {
         }
     }
 
+    /// Append a `MsgBlk` to the chain of a local (loopback) port.
     #[inline]
     pub fn post_local(&mut self, key: FastKey, pkt: MsgBlk) {
         self.local_ports.post(key, pkt);
     }
 
+    /// Access the underlying `Postbox` for delivery via `DevMap`.
     #[inline]
     pub fn postbox(&mut self) -> &mut Postbox {
         &mut self.local_ports
     }
 
+    /// Append a `MsgBlk` to the chain of an underlay NIC.
     #[inline]
     pub fn post_underlay(
         &mut self,
@@ -109,6 +117,7 @@ impl TxPostbox {
         }
     }
 
+    /// Extract the message chain for underlay NIC `idx`.
     #[inline]
     pub fn drain_underlay(&mut self, idx: usize) -> Option<UnderlayChain> {
         let chain = &mut self.underlay[idx];
@@ -129,6 +138,7 @@ impl Default for TxPostbox {
     }
 }
 
+/// A `MsgBlkChain` with a shared fanout hint.
 pub struct UnderlayChain {
     /// The message chain in question.
     pub msgs: MsgBlkChain,

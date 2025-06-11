@@ -379,6 +379,9 @@ impl XdeDev {
     }
 }
 
+unsafe impl Send for XdeDev {}
+unsafe impl Sync for XdeDev {}
+
 struct PerEntryState {
     devs: Arc<DevMap>,
 }
@@ -1796,10 +1799,6 @@ unsafe extern "C" fn xde_mc_tx(
     // delivery to perform.
     let mut entry_state = None;
 
-    // TODO: In future we may want to batch packets for further tx
-    // by the mch they're being targeted to. E.g., either build a list
-    // of chains (u1, u2, port0, port1, ...), or hold tx until another
-    // packet breaks the run targeting the same dest.
     while let Some(pkt) = chain.pop_front() {
         xde_mc_tx_one(src_dev, pkt, &mut tx_postbox, &mut entry_state);
     }

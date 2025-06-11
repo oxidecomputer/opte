@@ -96,6 +96,11 @@ struct MsgBlkChainInner {
 // practically XDE will always assume it has a chain from MAC.
 pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 
+// SAFETY: We ensure that chain-modifying operations require a `&mut`.
+// Moreover, `mblk_t`s contain no e.g. thread-local state.
+unsafe impl Send for MsgBlkChain {}
+unsafe impl Sync for MsgBlkChain {}
+
 impl MsgBlkChain {
     /// Create an empty packet chain.
     pub const fn empty() -> Self {

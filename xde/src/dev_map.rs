@@ -43,8 +43,6 @@ pub struct DevMap {
     names: BTreeMap<String, Val>,
 }
 
-// NOTE: should we have a Weak variant?
-
 impl Default for DevMap {
     fn default() -> Self {
         Self::new()
@@ -108,9 +106,13 @@ impl DevMap {
         self.devs.is_empty()
     }
 
+    /// Drains all `MsgBlk` chains in a given postbox and attempts to deliver
+    /// them to a matching XDE port.
+    ///
+    /// Any chains without a matching port are dropped.
     #[inline]
-    pub fn deliver_all(&self, mailbox: &mut Postbox) {
-        for (k, v) in mailbox.drain() {
+    pub fn deliver_all(&self, postbox: &mut Postbox) {
+        for (k, v) in postbox.drain() {
             if let Some(port) = self.devs.get(&k) {
                 port.deliver(v);
             }
