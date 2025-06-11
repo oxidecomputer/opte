@@ -182,8 +182,6 @@ unsafe extern "C" {
         dst_port: uintptr_t,
     );
     pub safe fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
-    pub safe fn __dtrace_probe_rx(mp: uintptr_t);
-    pub safe fn __dtrace_probe_tx(mp: uintptr_t);
 }
 
 fn bad_packet_parse_probe(
@@ -1782,7 +1780,6 @@ unsafe extern "C" fn xde_mc_tx(
     //     We *will* still need to remain careful here and `xde_rx` as
     //     pointers are `Copy`.
     // ================================================================
-    __dtrace_probe_tx(mp_chain as uintptr_t);
     let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
             Some(src_dev.port.name_cstr()),
@@ -2225,8 +2222,6 @@ unsafe extern "C" fn xde_rx(
     out_count: *mut c_uint,
     out_len: *mut usize,
 ) -> *mut mblk_t {
-    __dtrace_probe_rx(mp_chain as uintptr_t);
-
     // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
     // corresponding to the underlay port we're receiving on (derived from
     // `DlsStream`). Being here in the callback means the `MacSiphon` hasn't
@@ -2328,7 +2323,7 @@ fn xde_rx_one(
             // can examine the packet on failure.
             //
             // We don't know the port yet, thus the None.
-            opte::engine::dbg!("Tx bad packet: {:?}", e);
+            opte::engine::dbg!("Rx bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
             return Some(pkt);
