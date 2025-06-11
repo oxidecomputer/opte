@@ -16,6 +16,7 @@
     "llvm-target": "x86_64-none-none",
     "max-atomic-width": 64,
     "no-default-libraries": true,
+    "function-sections": false,
     "os": "illumos",
     "panic-strategy": "abort",
     "relax-elf-relocations": false,
