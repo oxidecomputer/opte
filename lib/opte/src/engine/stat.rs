@@ -55,8 +55,8 @@ pub struct FlowStat {
     /// The other half of this flow.
     pub partner: InnerFlowId,
     /// `TableStat`s to whom we must return our own `stats`.
-    pub parents: Vec<Arc<TableStat>>,
-    /// The cached list of IDs of root `TableStat` entries.
+    pub parents: Box<[StatParent]>,
+    /// The cached list of IDs of reachable `RootStat` entries.
     pub bases: BTreeSet<Uuid>,
 
     /// Actual stats associated with this flow.
@@ -101,17 +101,102 @@ impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
     }
 }
 
-pub struct TableStat {
-    pub id: Option<Uuid>,
+#[derive(Clone, Debug)]
+pub enum StatParent {
+    Root(Arc<RootStat>),
+    Intermadiate(Arc<IntermediateStat>),
+}
 
-    pub parents: Vec<Arc<TableStat>>,
-    pub children: KRwLock<Vec<Weak<dyn FoldStat>>>,
+impl From<Arc<RootStat>> for StatParent {
+    fn from(value: Arc<RootStat>) -> Self {
+        Self::Root(value)
+    }
+}
+
+impl From<Arc<IntermediateStat>> for StatParent {
+    fn from(value: Arc<IntermediateStat>) -> Self {
+        Self::Intermadiate(value)
+    }
+}
+
+impl StatParent {
+    fn parents(&self) -> &[StatParent] {
+        match self {
+            Self::Root(_) => &[],
+            Self::Intermadiate(i) => &i.parents,
+        }
+    }
+
+    fn global_id(&self) -> StatId {
+        self.inner().stats.id()
+    }
+
+    fn root_id(&self) -> Option<&Uuid> {
+        match self {
+            Self::Root(r) => Some(&r.id),
+            Self::Intermadiate(_) => None,
+        }
+    }
+
+    fn inner(&self) -> &TableStat {
+        match self {
+            Self::Root(r) => &r.body,
+            Self::Intermadiate(i) => &i.body,
+        }
+    }
+
+    /// Allow a packet which will track local stats via a UFT entry.
+    pub fn allow(&self) {
+        self.inner().allow();
+    }
+
+    /// Allow a packet (at a given timestamp) which will track local stats via
+    /// a UFT entry.
+    pub fn allow_at(&self, time: Moment) {
+        self.inner().allow_at(time);
+    }
+
+    /// Record an action for a packet which will ultimately be dropped or
+    /// hairpinned.
+    pub fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
+        self.inner().act(action, pkt_size, direction);
+    }
+
+    /// Record an action for a packet (at a given time) which will ultimately
+    /// be dropped or hairpinned.
+    pub fn act_at(
+        &self,
+        action: Action,
+        pkt_size: u64,
+        direction: Direction,
+        time: Moment,
+    ) {
+        self.inner().act_at(action, pkt_size, direction, time);
+    }
+}
+
+#[derive(Debug)]
+pub struct RootStat {
+    pub id: Uuid,
+    body: TableStat,
+}
+
+#[derive(Debug)]
+pub struct IntermediateStat {
+    pub parents: Box<[StatParent]>,
+    body: TableStat,
+}
+
+struct TableStat {
+    /// A list of other stat-related objects who name this table
+    /// stat as one of its parents.
+    children: KRwLock<Vec<Weak<dyn FoldStat>>>,
 
     /// The actual stats!
-    pub stats: FullCounter,
+    stats: FullCounter,
 
     /// When was this flow last updated?
-    pub last_hit: AtomicU64,
+    last_hit: AtomicU64,
 }
 
 impl core::fmt::Debug for TableStat {
@@ -121,27 +206,20 @@ impl core::fmt::Debug for TableStat {
 }
 
 impl TableStat {
-    /// Allow a packet which will track local stats via a UFT entry.
-    pub fn allow(&self) {
+    fn allow(&self) {
         self.allow_at(Moment::now());
     }
 
-    /// Allow a packet (at a given timestamp) which will track local stats via
-    /// a UFT entry.
-    pub fn allow_at(&self, time: Moment) {
+    fn allow_at(&self, time: Moment) {
         self.last_hit.store(time.raw(), Ordering::Relaxed);
         self.stats.allow.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record an action for a packet which will ultimately be dropped or
-    /// hairpinned.
-    pub fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
+    fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
         self.act_at(action, pkt_size, direction, Moment::now());
     }
 
-    /// Record an action for a packet (at a given time) which will ultimately
-    /// be dropped or hairpinned.
-    pub fn act_at(
+    fn act_at(
         &self,
         action: Action,
         pkt_size: u64,
@@ -278,10 +356,18 @@ impl FoldStat for FlowStat {
     }
 }
 
-impl FoldStat for TableStat {
+impl FoldStat for IntermediateStat {
     fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
-        if !visited.insert(self.stats.id()) {
-            self.stats.combine(into);
+        if !visited.insert(self.body.stats.id()) {
+            self.body.stats.combine(into);
+        }
+    }
+}
+
+impl FoldStat for RootStat {
+    fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
+        if !visited.insert(self.body.stats.id()) {
+            self.body.stats.combine(into);
         }
     }
 }
@@ -292,8 +378,8 @@ impl FoldStat for TableStat {
 #[derive(Default)]
 pub struct StatTree {
     next_id: u64,
-    roots: BTreeMap<Uuid, Arc<TableStat>>,
-    intermediate: Vec<Arc<TableStat>>,
+    roots: BTreeMap<Uuid, Arc<RootStat>>,
+    intermediate: Vec<Arc<IntermediateStat>>,
     flows: BTreeMap<InnerFlowId, Arc<FlowStat>>,
 }
 
@@ -301,19 +387,20 @@ impl StatTree {
     /// Gets or creates the root stat for a given UUID.
     ///
     /// Allocates a new UUID if none is provided.
-    pub fn root(&mut self, uuid: Option<Uuid>) -> Arc<TableStat> {
+    pub fn root(&mut self, uuid: Option<Uuid>) -> Arc<RootStat> {
         let uuid = uuid.unwrap_or_else(|| Uuid::from_u64_pair(0, self.next_id));
         let ids = &mut self.next_id;
 
         self.roots
             .entry(uuid)
-            .or_insert_with_key(|id| {
-                Arc::new(TableStat {
-                    id: Some(*id),
-                    parents: vec![],
-                    children: KRwLock::new(vec![]),
-                    stats: FullCounter::from_next_id(ids),
-                    last_hit: Moment::now().raw().into(),
+            .or_insert_with(|| {
+                Arc::new(RootStat {
+                    id: uuid,
+                    body: TableStat {
+                        children: KRwLock::new(vec![]),
+                        stats: FullCounter::from_next_id(ids),
+                        last_hit: Moment::now().raw().into(),
+                    },
                 })
             })
             .clone()
@@ -321,18 +408,19 @@ impl StatTree {
 
     pub fn new_intermediate(
         &mut self,
-        parents: Vec<Arc<TableStat>>,
-    ) -> Arc<TableStat> {
-        let out = Arc::new(TableStat {
-            id: None,
-            parents,
-            children: KRwLock::new(vec![]),
-            stats: FullCounter::from_next_id(&mut self.next_id),
-            last_hit: Moment::now().raw().into(),
+        parents: Vec<StatParent>,
+    ) -> Arc<IntermediateStat> {
+        let out = Arc::new(IntermediateStat {
+            parents: parents.into(),
+            body: TableStat {
+                children: KRwLock::new(vec![]),
+                stats: FullCounter::from_next_id(&mut self.next_id),
+                last_hit: Moment::now().raw().into(),
+            },
         });
 
         for parent in &out.parents {
-            let mut p_children = parent.children.write();
+            let mut p_children = parent.inner().children.write();
             let weak = Arc::downgrade(&out);
             p_children.push(weak);
         }
@@ -347,7 +435,7 @@ impl StatTree {
         flow_id: &InnerFlowId,
         partner_flow: &InnerFlowId,
         dir: Direction,
-        parents: Vec<Arc<TableStat>>,
+        parents: Vec<StatParent>,
     ) -> Arc<FlowStat> {
         if let Entry::Occupied(e) = self.flows.entry(*flow_id) {
             // TODO: what to do with (maybe new) parents & bases?!
@@ -356,6 +444,7 @@ impl StatTree {
             return e.get().clone();
         }
 
+        let parents = parents.into_boxed_slice();
         let bases = get_base_ids(&parents);
 
         let out = match self.flows.entry(*partner_flow) {
@@ -397,7 +486,7 @@ impl StatTree {
         const ROOT_EXPIRY_WINDOW: Ttl = Ttl::new_seconds(100);
 
         #[derive(Default, Eq, PartialEq)]
-        enum Hmm {
+        enum Liveness {
             #[default]
             NotSeen,
             SeenKeep,
@@ -405,13 +494,13 @@ impl StatTree {
         }
 
         #[derive(Default)]
-        struct Aa {
-            lhs: Hmm,
-            rhs: Hmm,
+        struct JointLive {
+            lhs: Liveness,
+            rhs: Liveness,
         }
 
         // Flows -- need to account for shared component between arc'd things.
-        let mut possibly_expired: BTreeMap<StatId, Aa> = BTreeMap::new();
+        let mut possibly_expired: BTreeMap<StatId, JointLive> = BTreeMap::new();
         for (k, v) in &self.flows {
             let t_hit =
                 Moment::from_raw_nanos(v.last_hit.load(Ordering::Relaxed));
@@ -421,23 +510,23 @@ impl StatTree {
             let el = possibly_expired.entry(base_id).or_default();
             match (v.dir, can_remove) {
                 (Direction::In, false) => {
-                    el.lhs = Hmm::SeenKeep;
+                    el.lhs = Liveness::SeenKeep;
                 }
                 (Direction::Out, false) => {
-                    el.rhs = Hmm::SeenKeep;
+                    el.rhs = Liveness::SeenKeep;
                 }
                 (Direction::In, true) => {
-                    el.lhs = Hmm::Seen(*k);
+                    el.lhs = Liveness::Seen(*k);
                 }
                 (Direction::Out, true) => {
-                    el.rhs = Hmm::Seen(*k);
+                    el.rhs = Liveness::Seen(*k);
                 }
             }
         }
         for v in possibly_expired.values() {
-            let cannot_remove = v.lhs == Hmm::SeenKeep
-                || v.rhs == Hmm::SeenKeep
-                || (v.lhs == Hmm::NotSeen && v.rhs == Hmm::NotSeen);
+            let cannot_remove = v.lhs == Liveness::SeenKeep
+                || v.rhs == Liveness::SeenKeep
+                || (v.lhs == Liveness::NotSeen && v.rhs == Liveness::NotSeen);
             if cannot_remove {
                 continue;
             }
@@ -445,7 +534,7 @@ impl StatTree {
             #[allow(clippy::mutable_key_type)]
             let mut parents: BTreeSet<ById> = Default::default();
             let mut base_stats = None;
-            if let Hmm::Seen(id) = v.lhs {
+            if let Liveness::Seen(id) = v.lhs {
                 if let Some(flow) = self.flows.remove(&id) {
                     let flow = Arc::into_inner(flow)
                         .expect("strong count 1 is enforced above");
@@ -455,7 +544,7 @@ impl StatTree {
                     base_stats = Some(flow.shared);
                 }
             }
-            if let Hmm::Seen(id) = v.rhs {
+            if let Liveness::Seen(id) = v.rhs {
                 if let Some(flow) = self.flows.remove(&id) {
                     let flow = Arc::into_inner(flow)
                         .expect("strong count 1 is enforced above");
@@ -470,7 +559,7 @@ impl StatTree {
             let base_stats =
                 base_stats.expect("should not have no parent here!!");
             for parent in parents {
-                base_stats.stats.combine(&parent.0.stats.packets);
+                base_stats.stats.combine(&parent.0.inner().stats.packets);
             }
         }
 
@@ -479,7 +568,7 @@ impl StatTree {
             // Time is... not relevant here. The LFTs are GONE.
             if Arc::strong_count(v) == 1 {
                 for p in &v.parents {
-                    v.stats.combine(&p.stats);
+                    v.body.stats.combine(&p.inner().stats);
                 }
                 false
             } else {
@@ -491,7 +580,7 @@ impl StatTree {
         // same ID come and go in adjacent control plane operations...
         self.roots.retain(|_, v| {
             let t_hit =
-                Moment::from_raw_nanos(v.last_hit.load(Ordering::Relaxed));
+                Moment::from_raw_nanos(v.body.last_hit.load(Ordering::Relaxed));
             Arc::strong_count(v) > 1
                 || !ROOT_EXPIRY_WINDOW.is_expired(t_hit, now)
         });
@@ -502,16 +591,19 @@ impl StatTree {
         let mut out = String::new();
         out.push_str("--Roots--\n");
         for (id, root) in &self.roots {
-            let d = ApiFullCounter::from(&root.stats);
-            out.push_str(&format!("\t{:?}/{id} -> {d:?}\n", root.stats.id()));
+            let d = ApiFullCounter::from(&root.body.stats);
+            out.push_str(&format!(
+                "\t{:?}/{id} -> {d:?}\n",
+                root.body.stats.id()
+            ));
         }
         out.push_str("----\n\n");
         out.push_str("--Ints--\n");
         for root in &self.intermediate {
-            let d = ApiFullCounter::from(&root.stats);
-            out.push_str(&format!("\t{:?} -> {d:?}\n", root.stats.id()));
+            let d = ApiFullCounter::from(&root.body.stats);
+            out.push_str(&format!("\t{:?} -> {d:?}\n", root.body.stats.id()));
             let parents: Vec<Option<Uuid>> =
-                root.parents.iter().map(|v| v.id).collect();
+                root.parents.iter().map(|v| v.root_id().copied()).collect();
             out.push_str(&format!("\t\tparents {parents:?}\n\n"));
         }
         out.push_str("----\n\n");
@@ -520,7 +612,7 @@ impl StatTree {
             // let d: ApiFlowStat<InnerFlowId> = stat.as_ref().into();
             let d: ApiPktCounter = (&stat.as_ref().shared.stats).into();
             let parents: Vec<_> =
-                stat.parents.iter().map(|v| v.stats.id()).collect();
+                stat.parents.iter().map(|v| v.global_id()).collect();
             out.push_str(&format!("\t{id}/{} ->\n", stat.dir));
             out.push_str(&format!("\t\t{:?} {d:?}\n", stat.shared.stats.id));
             out.push_str(&format!("\t\tparents {:?}\n", parents));
@@ -531,14 +623,14 @@ impl StatTree {
     }
 }
 
-fn get_base_ids(parents: &[Arc<TableStat>]) -> BTreeSet<Uuid> {
+fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
     let mut out = BTreeSet::new();
 
     let mut work_set = parents.to_vec();
     while let Some(el) = work_set.pop() {
-        work_set.extend_from_slice(&el.parents);
-        if let Some(id) = el.id {
-            out.insert(id);
+        work_set.extend_from_slice(el.parents());
+        if let Some(id) = el.root_id() {
+            out.insert(*id);
         }
     }
 
@@ -547,7 +639,7 @@ fn get_base_ids(parents: &[Arc<TableStat>]) -> BTreeSet<Uuid> {
 
 /// XXX holds stats as they arrive on a packet.
 pub struct FlowStatBuilder {
-    parents: Vec<Arc<TableStat>>,
+    parents: Vec<StatParent>,
     layer_end: usize,
 }
 
@@ -561,8 +653,8 @@ impl FlowStatBuilder {
     }
 
     /// Push a parent onto this flow.
-    pub fn push(&mut self, parent: Arc<TableStat>) {
-        self.parents.push(parent);
+    pub fn push(&mut self, parent: impl Into<StatParent>) {
+        self.parents.push(parent.into());
     }
 
     /// Mark all current parents as [`Action::Allow`].
@@ -577,7 +669,7 @@ impl FlowStatBuilder {
         pkt_size: u64,
         direction: Direction,
         create_flow: bool,
-    ) -> Option<Vec<Arc<TableStat>>> {
+    ) -> Option<Vec<StatParent>> {
         match action {
             Action::Allow if create_flow => {
                 self.parents.iter().for_each(|v| v.allow());
@@ -612,7 +704,7 @@ impl Default for FlowStatBuilder {
     }
 }
 
-struct ById(Arc<TableStat>);
+struct ById(StatParent);
 
 impl PartialOrd for ById {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
@@ -622,13 +714,13 @@ impl PartialOrd for ById {
 
 impl Ord for ById {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.0.stats.id().cmp(&other.0.stats.id())
+        self.0.global_id().cmp(&other.0.global_id())
     }
 }
 
 impl PartialEq for ById {
     fn eq(&self, other: &Self) -> bool {
-        self.0.stats.id() == other.0.stats.id()
+        self.0.global_id() == other.0.global_id()
     }
 }
 

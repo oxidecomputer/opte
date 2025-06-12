@@ -29,8 +29,9 @@ use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::ht_probe;
+use super::stat::IntermediateStat;
+use super::stat::RootStat;
 use super::stat::StatTree;
-use super::stat::TableStat;
 use crate::ExecCtx;
 use crate::ExecCtx2;
 use crate::LogLevel;
@@ -164,7 +165,7 @@ pub enum LftError {
 #[derive(Clone, Debug)]
 struct LftInEntry {
     action_desc: ActionDescEntry,
-    stat: Arc<TableStat>,
+    stat: Arc<IntermediateStat>,
 }
 
 impl Display for LftInEntry {
@@ -185,7 +186,7 @@ impl Dump for LftInEntry {
 struct LftOutEntry {
     in_flow_pair: InnerFlowId,
     action_desc: ActionDescEntry,
-    stat: Arc<TableStat>,
+    stat: Arc<IntermediateStat>,
 }
 
 impl LftOutEntry {
@@ -227,7 +228,7 @@ impl LayerFlowTable {
         action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
-        stat: Arc<TableStat>,
+        stat: Arc<IntermediateStat>,
     ) {
         // We add unchekced because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
@@ -368,10 +369,10 @@ enum EntryState {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
-    Clean(ActionDescEntry, Arc<TableStat>),
+    Clean(ActionDescEntry, Arc<IntermediateStat>),
     /// An existing flow table entry was found, but rule processing must be rerun
     /// to use the original action or invalidate the underlying entry.
-    Dirty(ActionDescEntry, Arc<TableStat>),
+    Dirty(ActionDescEntry, Arc<IntermediateStat>),
 }
 
 /// The default action of a layer.
@@ -538,10 +539,10 @@ pub struct Layer {
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
-    default_in_stat: Arc<TableStat>,
+    default_in_stat: Arc<RootStat>,
     default_out: DefaultAction,
     default_out_hits: u64,
-    default_out_stat: Arc<TableStat>,
+    default_out_stat: Arc<RootStat>,
     ft: LayerFlowTable,
     ft_cstr: CString,
     rules_in: RuleTable,
@@ -971,8 +972,9 @@ impl Layer {
                     });
                 }
 
-                let stat =
-                    ectx.stats.new_intermediate(vec![stat.take().unwrap()]);
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
                 pkt.meta_mut().stats.push(stat.clone());
 
                 // The outbound flow ID mirrors the inbound. Remember,
@@ -1134,8 +1136,9 @@ impl Layer {
                     }
                 }
 
-                let stat =
-                    ectx.stats.new_intermediate(vec![stat.take().unwrap()]);
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
                 pkt.meta_mut().stats.push(stat.clone());
 
                 // The outbound flow ID must be calculated _after_ the
@@ -1291,8 +1294,9 @@ impl Layer {
                     });
                 }
 
-                let stat =
-                    ectx.stats.new_intermediate(vec![stat.take().unwrap()]);
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
                 pkt.meta_mut().stats.push(stat.clone());
 
                 // The inbound flow ID must be calculated _after_ the
@@ -1417,8 +1421,9 @@ impl Layer {
                     });
                 }
 
-                let stat =
-                    ectx.stats.new_intermediate(vec![stat.take().unwrap()]);
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
                 pkt.meta_mut().stats.push(stat.clone());
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
@@ -1652,7 +1657,7 @@ struct RuleTableEntry {
     id: RuleId,
     hits: u64,
     rule: Rule<rule::Finalized>,
-    stat: Arc<TableStat>,
+    stat: Arc<RootStat>,
 }
 
 impl From<&RuleTableEntry> for RuleTableEntryDump {
