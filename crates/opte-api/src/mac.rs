@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use alloc::str::FromStr;
 use alloc::string::String;
@@ -95,8 +95,7 @@ impl FromStr for MacAddr {
         let octets: Vec<u8> = s
             .split(':')
             .map(|s| {
-                u8::from_str_radix(s, 16)
-                    .map_err(|_| format!("bad octet: {}", s))
+                u8::from_str_radix(s, 16).map_err(|_| format!("bad octet: {s}"))
             })
             .collect::<Result<Vec<u8>, _>>()?;
 
@@ -133,6 +132,6 @@ impl Display for MacAddr {
 // present it in a human-friendly manner.
 impl Debug for MacAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "MacAddr {{ inner: {} }}", self)
+        write!(f, "MacAddr {{ inner: {self} }}")
     }
 }

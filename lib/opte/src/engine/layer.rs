@@ -143,7 +143,7 @@ impl Display for LayerResult {
             Self::Allow => write!(f, "Allow"),
             Self::HandlePkt => write!(f, "Handle Packet"),
             Self::Deny { name, reason } => {
-                write!(f, "Deny: layer: {}, reason: {}", name, reason)
+                write!(f, "Deny: layer: {name}, reason: {reason}")
             }
             Self::Hairpin(_) => write!(f, "Hairpin"),
         }
@@ -353,13 +353,8 @@ impl LayerFlowTable {
         Self {
             count: 0,
             limit,
-            ft_in: FlowTable::new(port, &format!("{}_in", layer), limit, None),
-            ft_out: FlowTable::new(
-                port,
-                &format!("{}_out", layer),
-                limit,
-                None,
-            ),
+            ft_in: FlowTable::new(port, &format!("{layer}_in"), limit, None),
+            ft_out: FlowTable::new(port, &format!("{layer}_out"), limit, None),
         }
     }
 
@@ -432,7 +427,7 @@ impl Display for ActionDescEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::NoOp => write!(f, "no-op"),
-            Self::Desc(desc) => write!(f, "{}", desc),
+            Self::Desc(desc) => write!(f, "{desc}"),
         }
     }
 }
@@ -621,8 +616,8 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let dir_c = CString::new(format!("{}", dir)).unwrap();
-                let msg_c = CString::new(format!("{:?}", err)).unwrap();
+                let dir_c = CString::new(format!("{dir}")).unwrap();
+                let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__desc__fail(
                     self.port_c.as_ptr() as uintptr_t,
@@ -635,7 +630,7 @@ impl Layer {
                 let port_s = self.port_c.to_str().unwrap();
                 let name_s = self.name_c.to_str().unwrap();
                 let flow_s = flow.to_string();
-                let msg_s = format!("{:?}", err);
+                let msg_s = format!("{err:?}");
 
                 crate::opte_provider::gen__desc__fail!(
                     || (port_s, name_s, dir, flow_s, msg_s)
@@ -654,8 +649,8 @@ impl Layer {
     ) {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let dir_c = CString::new(format!("{}", dir)).unwrap();
-                let msg_c = CString::new(format!("{:?}", err)).unwrap();
+                let dir_c = CString::new(format!("{dir}")).unwrap();
+                let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__ht__fail(
                     self.port_c.as_ptr() as uintptr_t,
@@ -667,7 +662,7 @@ impl Layer {
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port_c.to_str().unwrap();
                 let flow_s = flow.to_string();
-                let err_s = format!("{:?}", err);
+                let err_s = format!("{err:?}");
 
                 crate::opte_provider::gen__ht__fail!(
                     || (port_s, &self.name, dir, flow_s, err_s)
@@ -729,7 +724,7 @@ impl Layer {
                     ),
                     Ok(v) => (LabelBlock::from_nested(v), None),
                     // TODO: Handle the error types in a zero-cost way.
-                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {:?}\0", e))),
+                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {e:?}\0"))),
                 };
 
                 // Truncation is captured *in* the LabelBlock.
@@ -765,8 +760,8 @@ impl Layer {
                 // XXX This would probably be better as separate probes;
                 // for now this does the trick.
                 let res_s = match res {
-                    Ok(v) => format!("{}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                    Ok(v) => format!("{v}"),
+                    Err(e) => format!("ERROR: {e:?}"),
                 };
                 crate::opte_provider::layer__process__return!(
                     || ((dir, port_s), &self.name, &flow_b_s, &flow_a_s, &res_s)
@@ -801,7 +796,7 @@ impl Layer {
         // generated from the LayerStats structure.
         let stats = KStatNamed::new(
             "xde",
-            &format!("{}_{}", port_name, name),
+            &format!("{port_name}_{name}"),
             LayerStats::new(),
         )
         .unwrap();
@@ -820,10 +815,10 @@ impl Layer {
             name_c,
             port_c,
             ft: LayerFlowTable::new(port_name, name, ft_limit),
-            ft_cstr: CString::new(format!("ft-{}", name)).unwrap(),
+            ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
             rules_in: RuleTable::new(port_name, name, Direction::In),
             rules_out: RuleTable::new(port_name, name, Direction::Out),
-            rt_cstr: CString::new(format!("rt-{}", name)).unwrap(),
+            rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
         }
     }
@@ -1518,8 +1513,7 @@ impl Layer {
         ectx.log.log(
             LogLevel::Note,
             &format!(
-                "failed to generate descriptor for stateful action: {} {:?}",
-                flow, err
+                "failed to generate descriptor for stateful action: {flow} {err:?}",
             ),
         );
         self.gen_desc_fail_probe(dir, flow, err);
@@ -1536,8 +1530,7 @@ impl Layer {
         ectx.log.log(
             LogLevel::Note,
             &format!(
-                "failed to generate HdrTransform for static action: {} {:?}",
-                flow, err
+                "failed to generate HdrTransform for static action: {flow} {err:?}",
             ),
         );
         self.gen_ht_fail_probe(dir, flow, err);

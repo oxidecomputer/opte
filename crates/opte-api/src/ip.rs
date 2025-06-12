@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use super::mac::MacAddr;
 use crate::DomainName;
@@ -348,8 +348,8 @@ impl Default for IpAddr {
 impl fmt::Display for IpAddr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            IpAddr::Ip4(ip4) => write!(f, "{}", ip4),
-            IpAddr::Ip6(ip6) => write!(f, "{}", ip6),
+            IpAddr::Ip4(ip4) => write!(f, "{ip4}"),
+            IpAddr::Ip6(ip6) => write!(f, "{ip6}"),
         }
     }
 }
@@ -402,7 +402,7 @@ impl Ipv4Addr {
     /// Return the address after applying the network mask.
     pub fn mask(mut self, mask: u8) -> Result<Self, String> {
         if mask > 32 {
-            return Err(format!("bad mask: {}", mask));
+            return Err(format!("bad mask: {mask}"));
         }
 
         if mask == 0 {
@@ -482,11 +482,11 @@ impl FromStr for Ipv4Addr {
     fn from_str(val: &str) -> result::Result<Self, Self::Err> {
         let octets: Vec<u8> = val
             .split('.')
-            .map(|s| s.parse().map_err(|e| format!("{}", e)))
+            .map(|s| s.parse().map_err(|e| format!("{e}")))
             .collect::<result::Result<Vec<u8>, _>>()?;
 
         if octets.len() != 4 {
-            return Err(format!("malformed ip: {}", val));
+            return Err(format!("malformed ip: {val}"));
         }
 
         // At the time of writing there is no TryFrom impl for Vec to
@@ -510,7 +510,7 @@ impl Display for Ipv4Addr {
 // present it in a human-friendly manner.
 impl Debug for Ipv4Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Ipv4Addr {{ inner: {} }}", self)
+        write!(f, "Ipv4Addr {{ inner: {self} }}")
     }
 }
 
@@ -648,7 +648,7 @@ impl Ipv6Addr {
     /// Return the address after applying the network mask.
     pub fn mask(mut self, mask: u8) -> Result<Self, String> {
         if mask > 128 {
-            return Err(format!("bad mask: {}", mask));
+            return Err(format!("bad mask: {mask}"));
         }
 
         if mask == 128 {
@@ -708,7 +708,7 @@ impl Ipv6Addr {
 impl fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let sip6 = smoltcp::wire::Ipv6Address(self.bytes());
-        write!(f, "{}", sip6)
+        write!(f, "{sip6}")
     }
 }
 
@@ -853,8 +853,8 @@ impl IpCidr {
 impl fmt::Display for IpCidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Ip4(ip4) => write!(f, "{}", ip4),
-            Self::Ip6(ip6) => write!(f, "{}", ip6),
+            Self::Ip4(ip4) => write!(f, "{ip4}"),
+            Self::Ip6(ip6) => write!(f, "{ip6}"),
         }
     }
 }
@@ -914,7 +914,7 @@ impl Ipv4PrefixLen {
 
     pub fn new(prefix_len: u8) -> Result<Self, String> {
         if prefix_len > 32 {
-            return Err(format!("bad IPv4 prefix length: {}", prefix_len));
+            return Err(format!("bad IPv4 prefix length: {prefix_len}"));
         }
 
         Ok(Self(prefix_len))
@@ -967,13 +967,13 @@ impl FromStr for Ipv4Cidr {
 
         let ip = match ip_s.parse() {
             Ok(v) => v,
-            Err(e) => return Err(format!("bad IP: {}", e)),
+            Err(e) => return Err(format!("bad IP: {e}")),
         };
 
         let raw = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(e) => {
-                return Err(format!("bad prefix length: {}", e));
+                return Err(format!("bad prefix length: {e}"));
             }
         };
 
@@ -1076,7 +1076,7 @@ impl core::cmp::PartialOrd for Ipv6Cidr {
 impl fmt::Display for Ipv6Cidr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (ip, prefix_len) = self.parts();
-        write!(f, "{}/{}", ip, prefix_len.val())
+        write!(f, "{ip}/{}", prefix_len.val())
     }
 }
 
@@ -1093,14 +1093,14 @@ impl FromStr for Ipv6Cidr {
         let ip = match ip_s.parse::<smoltcp::wire::Ipv6Address>() {
             Ok(v) => v.into(),
             Err(_) => {
-                return Err(format!("Bad IP address component: '{}'", ip_s));
+                return Err(format!("Bad IP address component: '{ip_s}'"));
             }
         };
 
         let prefix_len = match prefix_s.parse::<u8>() {
             Ok(v) => v,
             Err(e) => {
-                return Err(format!("bad prefix length: {}", e));
+                return Err(format!("bad prefix length: {e}"));
             }
         };
 
@@ -1128,7 +1128,7 @@ impl Ipv6PrefixLen {
 
     pub fn new(prefix_len: u8) -> result::Result<Self, String> {
         if prefix_len > 128 {
-            return Err(format!("bad IPv6 prefix length: {}", prefix_len));
+            return Err(format!("bad IPv6 prefix length: {prefix_len}"));
         }
 
         Ok(Self(prefix_len))

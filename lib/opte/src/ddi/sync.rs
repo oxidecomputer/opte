@@ -2,26 +2,33 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! Safe abstractions for synchronization primitives.
 //!
 //! TODO: This should be in its own crate, wrapping the illumos-ddi-dki
 //! crate. But for now just let it live here.
+use core::cell::UnsafeCell;
+use core::fmt;
 use core::ops::Deref;
 use core::ops::DerefMut;
+use core::time::Duration;
 
 cfg_if! {
     if #[cfg(all(not(feature = "std"), not(test)))] {
-        use core::cell::UnsafeCell;
         use core::ptr;
+        use core::ptr::NonNull;
         use illumos_sys_hdrs::{
-            kmutex_t, krw_t, krwlock_t, mutex_enter, mutex_exit,
-            mutex_destroy, mutex_init, rw_enter, rw_exit, rw_init,
-            rw_destroy
+            clock_t, cv_broadcast, cv_destroy, cv_init, cv_signal,
+            cv_reltimedwait, cv_reltimedwait_sig, cv_wait, cv_wait_sig,
+            kcv_type_t, kcondvar_t, kmutex_t, krw_t, krwlock_t, kthread_t,
+            mutex_enter, mutex_exit, mutex_destroy, mutex_init, mutex_tryenter,
+            rw_enter, rw_exit, rw_init, rw_destroy, threadp, time_res_t
         };
     } else {
+        use std::sync::Condvar;
         use std::sync::Mutex;
+        use std::thread::ThreadId;
     }
 }
 
@@ -142,6 +149,29 @@ impl<T> KMutex<T> {
         // Safety: ???.
         unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
+    }
+
+    /// Try to acquire the mutex guard to gain access to the underlying
+    /// value. If the guard is currently held, then this call will
+    /// return the [`LockWouldBlock`] error.
+    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockWouldBlock> {
+        let try_lock = unsafe { mutex_tryenter(self.mutex.0.get()) };
+        if try_lock != 0 {
+            Ok(KMutexGuard { lock: self })
+        } else {
+            Err(LockWouldBlock)
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct LockWouldBlock;
+
+impl core::error::Error for LockWouldBlock {}
+
+impl fmt::Display for LockWouldBlock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "try_lock failed because the operation would block")
     }
 }
 
@@ -271,15 +301,17 @@ impl From<KRwEnterType> for krw_t {
 
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> KRwLock<T> {
-    pub const fn new(val: T) -> Self {
-        let rwl = krwlock_t { _opaque: 0 };
-        KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
-    }
-
-    pub fn init(&mut self, typ: KRwLockType) {
+    pub fn new(val: T) -> Self {
+        let mut rwl = krwlock_t { _opaque: 0 };
         unsafe {
-            rw_init(self.rwl.get_mut(), ptr::null(), typ.into(), ptr::null());
+            rw_init(
+                &mut rwl,
+                ptr::null(),
+                KRwLockType::Driver.into(),
+                ptr::null(),
+            );
         }
+        KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
     }
 
     pub fn read(&self) -> KRwLockReadGuard<T> {
@@ -397,8 +429,6 @@ impl<T> KRwLock<T> {
         KRwLock { inner: std::sync::RwLock::new(val) }
     }
 
-    pub fn init(&mut self, _typ: KRwLockType) {}
-
     pub fn read(&self) -> KRwLockReadGuard<T> {
         let guard = self.inner.read().unwrap();
         KRwLockReadGuard { guard }
@@ -407,5 +437,346 @@ impl<T> KRwLock<T> {
     pub fn write(&self) -> KRwLockWriteGuard<T> {
         let guard = self.inner.write().unwrap();
         KRwLockWriteGuard { guard }
+    }
+}
+
+unsafe impl Send for KCondvar {}
+unsafe impl Sync for KCondvar {}
+
+/// Exposes the illumos condvar(9F) API in a safe manner.
+///
+/// On `std`, this falls back to the platform default standard library
+/// condition variable implementation.
+pub struct KCondvar {
+    #[cfg(all(not(feature = "std"), not(test)))]
+    cv: UnsafeCell<kcondvar_t>,
+
+    #[cfg(any(feature = "std", test))]
+    cv: Condvar,
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl KCondvar {
+    /// Create a new condition variable.
+    pub fn new() -> Self {
+        let mut cv = kcondvar_t { _opaque: 0 };
+
+        unsafe {
+            cv_init(
+                &mut cv,
+                ptr::null_mut(),
+                kcv_type_t::CV_DRIVER,
+                ptr::null_mut(),
+            );
+        }
+
+        Self { cv: UnsafeCell::new(cv) }
+    }
+
+    /// Wake up one thread blocked on this condvar.
+    pub fn notify_one(&self) {
+        unsafe { cv_signal(self.cv.get()) }
+    }
+
+    /// Wake up all threads currently blocked on this condvar.
+    pub fn notify_all(&self) {
+        unsafe { cv_broadcast(self.cv.get()) }
+    }
+
+    /// Block the current thread until this condition variable is notified.
+    ///
+    /// This thread will temporarily release `lock`, and reacquire it
+    /// when awoken. Wakeups may occur spuriously (i.e., without a call
+    /// to `notify_one` or `notify_all`).
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        unsafe { cv_wait(self.cv.get(), lock.lock.mutex.0.get()) }
+        lock
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// or the current thread receives a signal. Returns which of the two
+    /// was responsible.
+    ///
+    /// This is necessary when the thread(s) capable of notifying this CV
+    /// are susceptible to a SIGSTOP -- e.g., they do not hold a mutex/rwlock
+    /// or have entered an upcall.
+    ///
+    /// On `std`, this function behaves identically to `.wait()`.
+    pub fn wait_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> (KMutexGuard<'a, T>, WaitSigCause) {
+        let cause = match unsafe {
+            cv_wait_sig(self.cv.get(), lock.lock.mutex.0.get())
+        } {
+            0 => WaitSigCause::Signal,
+            a if a > 0 => WaitSigCause::Notify,
+            _ => panic!("illegal return value for cv_wait_sig"),
+        };
+        (lock, cause)
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// or a given timeout elapses. Returns which of the two was responsible.
+    pub fn wait_timeout<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+        dur: Duration,
+    ) -> (KMutexGuard<'a, T>, TimedWaitCause) {
+        let cause = match unsafe {
+            cv_reltimedwait(
+                self.cv.get(),
+                lock.lock.mutex.0.get(),
+                dur.as_nanos() as clock_t,
+                time_res_t::TR_NANOSEC,
+            )
+        } {
+            -1 => TimedWaitCause::Timeout,
+            a if a > 0 => TimedWaitCause::Notify,
+            _ => panic!("illegal return value for cv_reltimedwait"),
+        };
+        (lock, cause)
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// a given timeout elapses, or the current thread receives a signal.
+    /// Returns which of the three was responsible.
+    ///
+    /// On `std`, this function behaves identically to `.wait_timeout()`.
+    pub fn wait_timeout_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+        dur: Duration,
+    ) -> (KMutexGuard<'a, T>, TimedWaitSigCause) {
+        let cause = match unsafe {
+            cv_reltimedwait_sig(
+                self.cv.get(),
+                lock.lock.mutex.0.get(),
+                dur.as_nanos() as clock_t,
+                time_res_t::TR_NANOSEC,
+            )
+        } {
+            -1 => TimedWaitSigCause::Timeout,
+            0 => TimedWaitSigCause::Signal,
+            a if a > 0 => TimedWaitSigCause::Notify,
+            _ => panic!("illegal return value for cv_reltimedwait_sig"),
+        };
+        (lock, cause)
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl KCondvar {
+    /// Create a new condition variable.
+    pub fn new() -> Self {
+        Self { cv: Condvar::new() }
+    }
+
+    /// Wake up one thread blocked on this condvar.
+    pub fn notify_one(&self) {
+        self.cv.notify_one()
+    }
+
+    /// Wake up all threads currently blocked on this condvar.
+    pub fn notify_all(&self) {
+        self.cv.notify_all()
+    }
+
+    /// Block the current thread until this condition variable is notified.
+    ///
+    /// This thread will temporarily release `lock`, and reacquire it
+    /// when awoken. Wakeups may occur spuriously (i.e., without a call
+    /// to `notify_one` or `notify_all`).
+    pub fn wait<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> KMutexGuard<'a, T> {
+        KMutexGuard { guard: self.cv.wait(lock.guard).unwrap() }
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// or the current thread receives a signal. Returns which of the two
+    /// was responsible.
+    ///
+    /// This is necessary when the thread(s) capable of notifying this CV
+    /// are susceptible to a SIGSTOP -- e.g., they do not hold a mutex/rwlock
+    /// or have entered an upcall.
+    ///
+    /// On `std`, this function behaves identically to `.wait()`.
+    pub fn wait_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+    ) -> (KMutexGuard<'a, T>, WaitSigCause) {
+        (self.wait(lock), WaitSigCause::Notify)
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// or a given timeout elapses. Returns which of the two was responsible.
+    pub fn wait_timeout<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+        dur: Duration,
+    ) -> (KMutexGuard<'a, T>, TimedWaitCause) {
+        let (guard, cause) = self.cv.wait_timeout(lock.guard, dur).unwrap();
+        let cause = if !cause.timed_out() {
+            TimedWaitCause::Notify
+        } else {
+            TimedWaitCause::Timeout
+        };
+        (KMutexGuard { guard }, cause)
+    }
+
+    /// Block the current thread until this condition variable is notified,
+    /// a given timeout elapses, or the current thread receives a signal.
+    /// Returns which of the three was responsible.
+    ///
+    /// On `std`, this function behaves identically to `.wait_timeout()`.
+    pub fn wait_timeout_sig<'a, T: 'a>(
+        &self,
+        lock: KMutexGuard<'a, T>,
+        dur: Duration,
+    ) -> (KMutexGuard<'a, T>, TimedWaitSigCause) {
+        let (lock, cause) = self.wait_timeout(lock, dur);
+
+        let cause = match cause {
+            TimedWaitCause::Notify => TimedWaitSigCause::Notify,
+            TimedWaitCause::Timeout => TimedWaitSigCause::Timeout,
+        };
+
+        (lock, cause)
+    }
+}
+
+impl Default for KCondvar {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(all(not(feature = "std"), not(test)))]
+impl Drop for KCondvar {
+    fn drop(&mut self) {
+        unsafe { cv_destroy(self.cv.get()) };
+    }
+}
+
+pub enum WaitSigCause {
+    Notify,
+    Signal,
+}
+
+pub enum TimedWaitCause {
+    Notify,
+    Timeout,
+}
+
+pub enum TimedWaitSigCause {
+    Notify,
+    Signal,
+    Timeout,
+}
+
+/// A mutual exclusion mechanism which loans out access to a single
+/// internal token. This is used to ensure at most one thread is present
+/// in a critical section *without actively holding a [`KMutex`]*.
+///
+/// This is necessary for some kernel-level operations which will upcall or
+/// enter some other context in which it is unsafe to hold a [`KMutex`] or
+/// [`KRwLock`]. Any functions attached to the token `T` should denote whether
+/// these restrictions apply.
+pub struct TokenLock<T> {
+    // In future, this could be arbitrary (i.e., taking user-held
+    // context like a file descriptor). Similarly this could allow
+    // for re-entrancy, but this is tricky to square with `&mut` access
+    // to the inner `T`.
+    #[cfg(all(not(feature = "std"), not(test)))]
+    holder: KMutex<Option<NonNull<kthread_t>>>,
+    #[cfg(any(feature = "std", test))]
+    holder: KMutex<Option<ThreadId>>,
+    cv: KCondvar,
+    inner: UnsafeCell<T>,
+}
+
+impl<T> TokenLock<T> {
+    pub fn new(token: T) -> Self {
+        let holder = KMutex::new(None);
+        let cv = KCondvar::new();
+
+        Self { holder, cv, inner: UnsafeCell::new(token) }
+    }
+
+    pub fn lock(&self) -> TokenGuard<'_, T> {
+        let mut thread_lock = self.holder.lock();
+
+        while thread_lock.is_some() {
+            // Here, we expect that there is a very real possibility
+            // that the kthread in `thread_lock` is, itself, susceptible
+            // to being `STOPPED` (and thus deadlocking us) if we cannot
+            // also handle a SIGSTOP. We don't care whether we were awoken
+            // by the signal or the CV, only that our thread can also stop
+            // to allow a fork of the caller to complete.
+            thread_lock = self.cv.wait_sig(thread_lock).0;
+        }
+
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let curthread = unsafe {
+            NonNull::new(threadp())
+                .expect("current thread *must* be a valid pointer")
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let curthread = std::thread::current().id();
+
+        *thread_lock = Some(curthread);
+
+        TokenGuard { lock: self }
+    }
+}
+
+pub struct TokenGuard<'a, T> {
+    lock: &'a TokenLock<T>,
+}
+
+impl<T> Deref for TokenGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: Only the thread indicated by `parent.holder`
+        // can have a `Token`, thus we are safe to take a shared ref
+        // (no other writers).
+        unsafe { &*self.lock.inner.get() }
+    }
+}
+
+impl<T> DerefMut for TokenGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // SAFETY: Only the thread indicated by `parent.holder`
+        // can have a `Token`, thus there are no other writers.
+        // Rust has also guaranteed this is the only &mut to the Token
+        // itself, so no other readers.
+        unsafe { &mut *self.lock.inner.get() }
+    }
+}
+
+impl<T> Drop for TokenGuard<'_, T> {
+    fn drop(&mut self) {
+        let mut thread_lock = self.lock.holder.lock();
+        let lock_thread = thread_lock.take();
+
+        self.lock.cv.notify_all();
+
+        // Sanity checking -- same thread at exit.
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let curthread = unsafe {
+            NonNull::new(threadp())
+                .expect("current thread *must* be a valid pointer")
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let curthread = std::thread::current().id();
+        assert_eq!(Some(curthread), lock_thread);
     }
 }

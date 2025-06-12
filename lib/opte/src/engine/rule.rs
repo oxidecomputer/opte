@@ -782,7 +782,7 @@ pub enum GenBtError {
 
 impl From<smoltcp::wire::Error> for GenBtError {
     fn from(e: smoltcp::wire::Error) -> Self {
-        Self::ParseBody(format!("{}", e))
+        Self::ParseBody(format!("{e}"))
     }
 }
 
@@ -917,10 +917,10 @@ impl fmt::Display for Action {
             Self::StatefulAllow => write!(f, "Stateful Allow"),
             Self::Deny => write!(f, "Deny"),
             Self::HandlePacket => write!(f, "Handle Packet"),
-            Self::Meta(a) => write!(f, "Meta: {}", a),
-            Self::Static(a) => write!(f, "Static: {}", a),
-            Self::Stateful(a) => write!(f, "Stateful: {}", a),
-            Self::Hairpin(a) => write!(f, "Hairpin: {}", a),
+            Self::Meta(a) => write!(f, "Meta: {a}"),
+            Self::Static(a) => write!(f, "Static: {a}"),
+            Self::Stateful(a) => write!(f, "Stateful: {a}"),
+            Self::Hairpin(a) => write!(f, "Hairpin: {a}"),
         }
     }
 }

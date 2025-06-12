@@ -68,7 +68,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
-use crate::ddi::sync::KRwLockType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
@@ -264,7 +263,7 @@ impl From<kstat::Error> for PortCreateError {
 impl Display for PortCreateError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::InitStats(e) => write!(f, "{}", e),
+            Self::InitStats(e) => write!(f, "{e}"),
         }
     }
 }
@@ -318,7 +317,7 @@ impl PortBuilder {
 
         Err(OpteError::BadLayerPos {
             layer: new_layer.name().to_string(),
-            pos: format!("{:?}", pos),
+            pos: format!("{pos:?}"),
         })
     }
 
@@ -360,9 +359,6 @@ impl PortBuilder {
             flow_stats: self.flow_stats,
         };
 
-        let mut data = KRwLock::new(data);
-        data.init(KRwLockType::Driver);
-
         Ok(Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
@@ -371,7 +367,7 @@ impl PortBuilder {
             epoch: AtomicU64::new(1),
             stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             net,
-            data,
+            data: KRwLock::new(data),
         })
     }
 
@@ -525,7 +521,7 @@ impl Display for PortState {
             Paused => "paused",
             Restored => "restored",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -2115,7 +2111,7 @@ impl<N: NetworkImpl> Port<N> {
                     ),
                     Ok(v) => (LabelBlock::from_nested(v), None),
                     // TODO: Handle the error types in a zero-cost way.
-                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {:?}\0", e))),
+                    Err(e) => (Ok(LabelBlock::new()), Some(format!("ERROR: {e:?}\0"))),
                 };
 
                 // Truncation is captured *in* the LabelBlock.
@@ -2157,8 +2153,8 @@ impl<N: NetworkImpl> Port<N> {
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
                 let res_str = match res {
-                    Ok(v) => format!("{:?}", v),
-                    Err(e) => format!("ERROR: {:?}", e),
+                    Ok(v) => format!("{v:?}"),
+                    Err(e) => format!("ERROR: {e:?}"),
                 };
                 let _ = path;
 
@@ -2912,7 +2908,7 @@ impl<N: NetworkImpl> Port<N> {
                     }
                 }
 
-                panic!("layer not found: {}", name);
+                panic!("layer not found: {name}");
             }
         }
     }
@@ -2925,7 +2921,7 @@ impl<N: NetworkImpl> Port<N> {
             .iter()
             .find(|layer| layer.name() == layer_name)
             .map(|layer| layer.num_rules(dir))
-            .unwrap_or_else(|| panic!("layer not found: {}", layer_name))
+            .unwrap_or_else(|| panic!("layer not found: {layer_name}"))
     }
 }
 
@@ -3069,7 +3065,7 @@ impl Display for TcpFlowEntryStateInner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.inbound_ufid {
             None => write!(f, "None {}", self.tcp_state),
-            Some(ufid) => write!(f, "{} {}", ufid, self.tcp_state),
+            Some(ufid) => write!(f, "{ufid} {}", self.tcp_state),
         }
     }
 }

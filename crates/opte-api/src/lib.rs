@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 #![no_std]
 #![deny(unreachable_patterns)]
@@ -71,7 +71,7 @@ impl core::str::FromStr for Direction {
         match s.to_ascii_lowercase().as_str() {
             "in" => Ok(Direction::In),
             "out" => Ok(Direction::Out),
-            _ => Err(format!("invalid direction: {}", s)),
+            _ => Err(format!("invalid direction: {s}")),
         }
     }
 }
@@ -83,7 +83,7 @@ impl Display for Direction {
             Direction::Out => "OUT",
         };
 
-        write!(f, "{}", dirstr)
+        write!(f, "{dirstr}")
     }
 }
 

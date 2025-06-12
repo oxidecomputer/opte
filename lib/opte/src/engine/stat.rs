@@ -8,7 +8,6 @@
 
 use crate::api::InnerFlowId;
 use crate::ddi::sync::KRwLock;
-use crate::ddi::sync::KRwLockType;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::Ttl;
 use alloc::collections::BTreeMap;
@@ -116,7 +115,7 @@ pub struct TableStat {
 }
 
 impl core::fmt::Debug for TableStat {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         todo!()
     }
 }
@@ -309,13 +308,10 @@ impl StatTree {
         self.roots
             .entry(uuid)
             .or_insert_with_key(|id| {
-                let mut children = KRwLock::new(vec![]);
-                children.init(KRwLockType::Driver);
-
                 Arc::new(TableStat {
                     id: Some(*id),
                     parents: vec![],
-                    children,
+                    children: KRwLock::new(vec![]),
                     stats: FullCounter::from_next_id(ids),
                     last_hit: Moment::now().raw().into(),
                 })
@@ -327,13 +323,10 @@ impl StatTree {
         &mut self,
         parents: Vec<Arc<TableStat>>,
     ) -> Arc<TableStat> {
-        let mut children = KRwLock::new(vec![]);
-        children.init(KRwLockType::Driver);
-
         let out = Arc::new(TableStat {
             id: None,
             parents,
-            children,
+            children: KRwLock::new(vec![]),
             stats: FullCounter::from_next_id(&mut self.next_id),
             last_hit: Moment::now().raw().into(),
         });

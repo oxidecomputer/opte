@@ -202,7 +202,7 @@ mod opte_provider {
 ///
 /// Logging levels are provided by [`LogLevel`]. These levels will map
 /// to the underlying provider with varying degrees of success.
-pub trait LogProvider {
+pub trait LogProvider: Send + Sync {
     /// Log a message at the specified level.
     fn log(&self, level: LogLevel, msg: &str);
 }
@@ -221,7 +221,7 @@ impl Display for LogLevel {
             Self::Warn => "[WARN]",
             Self::Error => "[ERROR]",
         };
-        write!(f, "{}", level_s)
+        write!(f, "{level_s}")
     }
 }
 
@@ -232,7 +232,7 @@ pub struct PrintlnLog {}
 #[cfg(any(feature = "std", test))]
 impl LogProvider for PrintlnLog {
     fn log(&self, level: LogLevel, msg: &str) {
-        println!("{} {}", level, msg);
+        println!("{level} {msg}");
     }
 }
 

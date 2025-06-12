@@ -11,6 +11,7 @@ use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use illumos_sys_hdrs::c_int;
@@ -133,7 +134,7 @@ impl OpteCmdIoctl {
             match postcard::from_bytes(resp) {
                 Ok(cmd_err) => Some(cmd_err),
                 Err(deser_err) => {
-                    Some(OpteError::DeserCmdErr(format!("{}", deser_err)))
+                    Some(OpteError::DeserCmdErr(deser_err.to_string()))
                 }
             }
         } else {

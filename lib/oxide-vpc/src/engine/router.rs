@@ -122,7 +122,7 @@ impl ActionMetaValue for RouterTargetInternal {
                     Ok(Self::InternetGateway(Some(ig)))
                 }
 
-                _ => Err(format!("bad router target: {}", s)),
+                _ => Err(format!("bad router target: {s}")),
             },
         }
     }
@@ -130,13 +130,13 @@ impl ActionMetaValue for RouterTargetInternal {
     fn as_meta(&self) -> String {
         match self {
             Self::InternetGateway(ip) => match ip {
-                Some(ip) => format!("ig={}", ip),
+                Some(ip) => format!("ig={ip}"),
                 None => String::from("ig"),
             },
-            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={}", ip4),
-            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={}", ip6),
-            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={}", cidr4),
-            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => format!("sub6={}", cidr6),
+            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={ip4}"),
+            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={ip6}"),
+            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={cidr4}"),
+            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => format!("sub6={cidr6}"),
         }
     }
 }
@@ -144,11 +144,11 @@ impl ActionMetaValue for RouterTargetInternal {
 impl fmt::Display for RouterTargetInternal {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = match self {
-            Self::InternetGateway(addr) => format!("IG({:?})", addr),
-            Self::Ip(addr) => format!("IP: {}", addr),
-            Self::VpcSubnet(sub) => format!("Subnet: {}", sub),
+            Self::InternetGateway(addr) => format!("IG({addr:?})"),
+            Self::Ip(addr) => format!("IP: {addr}"),
+            Self::VpcSubnet(sub) => format!("Subnet: {sub}"),
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -167,7 +167,7 @@ impl ActionMetaValue for RouterTargetClass {
             "ig" => Ok(Self::InternetGateway),
             "ip" => Ok(Self::Ip),
             "subnet" => Ok(Self::VpcSubnet),
-            _ => Err(format!("bad router target class: {}", s)),
+            _ => Err(format!("bad router target class: {s}")),
         }
     }
 
