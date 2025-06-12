@@ -697,12 +697,14 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
     }
 }
 
+// TODO: this is just sufficient for a demo. Develop the actual interface.
 #[unsafe(no_mangle)]
 fn flow_stats_hdlr(
     env: &mut IoctlEnvelope,
 ) -> Result<oxide_vpc::api::DumpFlowStatsResp, OpteError> {
     let req: oxide_vpc::api::DumpUftReq = env.copy_in_req()?;
-    let devs = xde_devs().read();
+    let state = get_xde_state();
+    let devs = state.devs.read();
     match devs.get_by_name(&req.port_name) {
         Some(dev) => dev
             .port
