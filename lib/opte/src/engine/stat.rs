@@ -10,6 +10,7 @@ use crate::api::InnerFlowId;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::Ttl;
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
