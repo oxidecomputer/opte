@@ -104,7 +104,7 @@ impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
 #[derive(Clone, Debug)]
 pub enum StatParent {
     Root(Arc<RootStat>),
-    Intermadiate(Arc<IntermediateStat>),
+    Intermediate(Arc<IntermediateStat>),
 }
 
 impl From<Arc<RootStat>> for StatParent {
@@ -115,7 +115,7 @@ impl From<Arc<RootStat>> for StatParent {
 
 impl From<Arc<IntermediateStat>> for StatParent {
     fn from(value: Arc<IntermediateStat>) -> Self {
-        Self::Intermadiate(value)
+        Self::Intermediate(value)
     }
 }
 
@@ -123,7 +123,7 @@ impl StatParent {
     fn parents(&self) -> &[StatParent] {
         match self {
             Self::Root(_) => &[],
-            Self::Intermadiate(i) => &i.parents,
+            Self::Intermediate(i) => &i.parents,
         }
     }
 
@@ -134,14 +134,14 @@ impl StatParent {
     fn root_id(&self) -> Option<&Uuid> {
         match self {
             Self::Root(r) => Some(&r.id),
-            Self::Intermadiate(_) => None,
+            Self::Intermediate(_) => None,
         }
     }
 
     fn inner(&self) -> &TableStat {
         match self {
             Self::Root(r) => &r.body,
-            Self::Intermadiate(i) => &i.body,
+            Self::Intermediate(i) => &i.body,
         }
     }
 
@@ -173,6 +173,30 @@ impl StatParent {
     ) {
         self.inner().act_at(action, pkt_size, direction, time);
     }
+
+    /// Add a weak child reference to this stat object.
+    pub fn append_child(&self, child: impl Into<StatChild>) {
+        let mut p_children = self.inner().children.write();
+        p_children.push(child.into());
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum StatChild {
+    Intermediate(Weak<IntermediateStat>),
+    Flow(Weak<FlowStat>),
+}
+
+impl From<&Arc<IntermediateStat>> for StatChild {
+    fn from(value: &Arc<IntermediateStat>) -> Self {
+        Self::Intermediate(Arc::downgrade(value))
+    }
+}
+
+impl From<&Arc<FlowStat>> for StatChild {
+    fn from(value: &Arc<FlowStat>) -> Self {
+        Self::Flow(Arc::downgrade(value))
+    }
 }
 
 #[derive(Debug)]
@@ -190,7 +214,7 @@ pub struct IntermediateStat {
 struct TableStat {
     /// A list of other stat-related objects who name this table
     /// stat as one of its parents.
-    children: KRwLock<Vec<Weak<dyn FoldStat>>>,
+    children: KRwLock<Vec<StatChild>>,
 
     /// The actual stats!
     stats: FullCounter,
@@ -420,9 +444,7 @@ impl StatTree {
         });
 
         for parent in &out.parents {
-            let mut p_children = parent.inner().children.write();
-            let weak = Arc::downgrade(&out);
-            p_children.push(weak);
+            parent.append_child(&out);
         }
 
         self.intermediate.push(out.clone());
@@ -474,6 +496,10 @@ impl StatTree {
                 })
             }
         };
+
+        for parent in &out.parents {
+            parent.append_child(&out);
+        }
 
         // Proven a miss on flow_id already
         let _ = self.flows.insert(*flow_id, out.clone());
