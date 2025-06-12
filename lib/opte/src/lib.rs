@@ -31,6 +31,8 @@ extern crate self as opte;
 use alloc::boxed::Box;
 use core::fmt;
 use core::fmt::Display;
+#[cfg(any(feature = "engine", test))]
+use engine::stat::StatTree;
 
 pub use ingot;
 
@@ -200,7 +202,7 @@ mod opte_provider {
 ///
 /// Logging levels are provided by [`LogLevel`]. These levels will map
 /// to the underlying provider with varying degrees of success.
-pub trait LogProvider {
+pub trait LogProvider: Send + Sync {
     /// Log a message at the specified level.
     fn log(&self, level: LogLevel, msg: &str);
 }
@@ -255,4 +257,10 @@ impl LogProvider for KernelLog {
 
 pub struct ExecCtx {
     pub log: Box<dyn LogProvider>,
+}
+
+#[cfg(any(feature = "engine", test))]
+pub(crate) struct ExecCtx2<'a> {
+    pub user_ctx: &'a ExecCtx,
+    pub stats: &'a mut StatTree,
 }

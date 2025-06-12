@@ -44,11 +44,15 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::TransformFlags;
+use super::stat::Action as StatAction;
+use super::stat::FlowStat;
+use super::stat::StatTree;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
 use crate::ExecCtx;
+use crate::ExecCtx2;
 use crate::api::DumpLayerResp;
 use crate::api::DumpTcpFlowsResp;
 use crate::api::DumpUftResp;
@@ -197,6 +201,16 @@ enum InternalProcessResult {
     Hairpin(MsgBlk),
 }
 
+impl InternalProcessResult {
+    fn stat_action(&self) -> StatAction {
+        match self {
+            Self::Modified => StatAction::Allow,
+            Self::Drop { .. } => StatAction::Deny,
+            Self::Hairpin(..) => StatAction::Hairpin,
+        }
+    }
+}
+
 impl From<HdlPktAction> for InternalProcessResult {
     fn from(hpa: HdlPktAction) -> Self {
         match hpa {
@@ -231,7 +245,8 @@ pub struct PortBuilder {
     // probes.
     name_cstr: CString,
     mac: MacAddr,
-    layers: KMutex<Vec<Layer>>,
+    layers: Vec<Layer>,
+    flow_stats: StatTree,
 }
 
 #[derive(Clone, Debug)]
@@ -266,36 +281,34 @@ impl PortBuilder {
     /// a packet from the guest. The last is the last to see a packet
     /// before it is delivered to the guest.
     pub fn add_layer(
-        &self,
+        &mut self,
         new_layer: Layer,
         pos: Pos,
     ) -> result::Result<(), OpteError> {
-        let mut lock = self.layers.lock();
-
         match pos {
             Pos::Last => {
-                lock.push(new_layer);
+                self.layers.push(new_layer);
                 return Ok(());
             }
 
             Pos::First => {
-                lock.insert(0, new_layer);
+                self.layers.insert(0, new_layer);
                 return Ok(());
             }
 
             Pos::Before(name) => {
-                for (i, layer) in lock.iter().enumerate() {
+                for (i, layer) in self.layers.iter().enumerate() {
                     if layer.name() == name {
-                        lock.insert(i, new_layer);
+                        self.layers.insert(i, new_layer);
                         return Ok(());
                     }
                 }
             }
 
             Pos::After(name) => {
-                for (i, layer) in lock.iter().enumerate() {
+                for (i, layer) in self.layers.iter().enumerate() {
                     if layer.name() == name {
-                        lock.insert(i + 1, new_layer);
+                        self.layers.insert(i + 1, new_layer);
                         return Ok(());
                     }
                 }
@@ -311,14 +324,14 @@ impl PortBuilder {
     /// Add a new `Rule` to the layer named by `layer`, if such a
     /// layer exists. Otherwise, return an error.
     pub fn add_rule(
-        &self,
+        &mut self,
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> result::Result<(), OpteError> {
-        for layer in &mut *self.layers.lock() {
+        for layer in &mut self.layers {
             if layer.name() == layer_name {
-                layer.add_rule(dir, rule);
+                layer.add_rule(dir, rule, &mut self.flow_stats);
                 return Ok(());
             }
         }
@@ -334,9 +347,7 @@ impl PortBuilder {
     ) -> result::Result<Port<N>, PortCreateError> {
         let data = PortData {
             state: PortState::Ready,
-            // At this point the layer pipeline is immutable, thus we
-            // move the layers out of the mutex.
-            layers: self.layers.into_inner(),
+            layers: self.layers,
             uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None),
             uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None),
             tcp_flows: FlowTable::new(
@@ -345,6 +356,7 @@ impl PortBuilder {
                 tcp_limit,
                 Some(Box::<TcpExpiry>::default()),
             ),
+            flow_stats: self.flow_stats,
         };
 
         Ok(Port {
@@ -363,7 +375,7 @@ impl PortBuilder {
     /// [`Layer`] at the given index. If the layer does not exist, or
     /// has no action at that index, then `None` is returned.
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
-        for l in &*self.layers.lock() {
+        for l in &self.layers {
             if l.name() == layer {
                 return l.action(idx);
             }
@@ -375,9 +387,8 @@ impl PortBuilder {
     /// List each [`Layer`] under this port.
     pub fn list_layers(&self) -> ListLayersResp {
         let mut tmp = vec![];
-        let lock = self.layers.lock();
 
-        for layer in lock.iter() {
+        for layer in self.layers.iter() {
             tmp.push(LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
@@ -407,21 +418,25 @@ impl PortBuilder {
             name_cstr,
             mac,
             ectx,
-            layers: KMutex::new(Vec::new()),
+            layers: vec![],
+            flow_stats: Default::default(),
         }
     }
 
     /// Remove the [`Layer`] registered under `name`, if such a layer
     /// exists.
-    pub fn remove_layer(&self, name: &str) {
-        let mut lock = self.layers.lock();
-
-        for (i, layer) in lock.iter().enumerate() {
+    pub fn remove_layer(&mut self, name: &str) {
+        for (i, layer) in self.layers.iter().enumerate() {
             if layer.name() == name {
-                let _ = lock.remove(i);
+                let _ = self.layers.remove(i);
                 return;
             }
         }
+    }
+
+    /// Provide access to the inner [`StatTree`].
+    pub fn stats_mut(&mut self) -> &mut StatTree {
+        &mut self.flow_stats
     }
 }
 
@@ -547,6 +562,8 @@ pub struct UftEntry<Id> {
     /// Cached reference to a flow's TCP state, if applicable.
     /// This allows us to maintain up-to-date TCP flow table info
     tcp_flow: Option<Arc<FlowEntry<TcpFlowEntryState>>>,
+
+    stat: Arc<FlowStat>,
 }
 
 impl<Id> Dump for UftEntry<Id> {
@@ -579,7 +596,8 @@ impl<Id> Display for UftEntry<Id> {
 
 impl<Id> fmt::Debug for UftEntry<Id> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let UftEntry { pair: _pair, xforms, l4_hash, epoch, tcp_flow } = self;
+        let UftEntry { pair: _pair, xforms, l4_hash, epoch, tcp_flow, stat } =
+            self;
 
         f.debug_struct("UftEntry")
             .field("pair", &"<lock>")
@@ -587,6 +605,10 @@ impl<Id> fmt::Debug for UftEntry<Id> {
             .field("l4_hash", l4_hash)
             .field("epoch", epoch)
             .field("tcp_flow", tcp_flow)
+            .field(
+                "stats",
+                &crate::api::FlowStat::<InnerFlowId>::from(stat.as_ref()),
+            )
             .finish()
     }
 }
@@ -684,6 +706,8 @@ struct PortData {
     // that we know which inbound UFT/FT entries to retire upon
     // connection termination.
     tcp_flows: FlowTable<TcpFlowEntryState>,
+
+    flow_stats: StatTree,
 }
 
 /// A virtual switch port.
@@ -881,10 +905,12 @@ impl<N: NetworkImpl> Port<N> {
         let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        let PortData { layers, flow_stats, .. } = &mut (*data);
+
+        for layer in layers {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
-                layer.add_rule(dir, rule);
+                layer.add_rule(dir, rule, flow_stats);
                 return Ok(());
             }
         }
@@ -992,6 +1018,17 @@ impl<N: NetworkImpl> Port<N> {
         )?;
 
         Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
+    }
+
+    /// XXX TEST METHOD
+    pub fn dump_flow_stats(&self) -> Result<String> {
+        let data = self.data.read();
+        check_state!(
+            data.state,
+            [PortState::Running, PortState::Paused, PortState::Restored]
+        )?;
+
+        Ok(data.flow_stats.dump())
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
@@ -1105,6 +1142,8 @@ impl<N: NetworkImpl> Port<N> {
         //      set TIME_WAIT_EXPIRE_TTL or another state-specific timer lower
         //      than 60s, we'll need to specifically expire the matching UFTs.
         let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
+
+        data.flow_stats.expire(now);
         Ok(())
     }
 
@@ -1233,6 +1272,7 @@ impl<N: NetworkImpl> Port<N> {
         let process_start = Moment::now();
         let flow_before = pkt.flow();
         let mblk_addr = pkt.mblk_addr();
+        let pkt_len = pkt.len() as u64;
 
         // Packet processing is split into a few mechanisms based on
         // expected speed, based on actions and the size of required metadata:
@@ -1334,6 +1374,8 @@ impl<N: NetworkImpl> Port<N> {
                 // The Fast Path.
                 drop(lock.take());
                 let xforms = &entry.state().xforms;
+                entry.state().stat.hit_at(pkt_len, process_start);
+
                 let out = if xforms.compiled.is_some() {
                     FastPathDecision::CompiledUft(entry)
                 } else {
@@ -1399,7 +1441,7 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_c_str(),
                         tcp,
                         dir,
-                        pkt.len() as u64,
+                        pkt_len,
                         ufid_in,
                     ) {
                         Ok(TcpState::Closed) => Some(Arc::clone(tcp_flow)),
@@ -1666,10 +1708,12 @@ impl<N: NetworkImpl> Port<N> {
         let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        let PortData { layers, flow_stats, .. } = &mut (*data);
+
+        for layer in layers {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
-                layer.set_rules(in_rules, out_rules);
+                layer.set_rules(in_rules, out_rules, flow_stats);
                 return Ok(());
             }
         }
@@ -1687,10 +1731,12 @@ impl<N: NetworkImpl> Port<N> {
         let mut data = self.data.write();
         check_state!(data.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        let PortData { layers, flow_stats, .. } = &mut (*data);
+
+        for layer in layers {
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
-                layer.set_rules_soft(in_rules, out_rules);
+                layer.set_rules_soft(in_rules, out_rules, flow_stats);
                 return Ok(());
             }
         }
@@ -1977,11 +2023,13 @@ impl<N: NetworkImpl> Port<N> {
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
+        let mut ectx =
+            ExecCtx2 { user_ctx: &self.ectx, stats: &mut data.flow_stats };
+
         match dir {
             Direction::Out => {
                 for layer in &mut data.layers {
-                    let res =
-                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
+                    let res = layer.process(&mut ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -1995,8 +2043,7 @@ impl<N: NetworkImpl> Port<N> {
 
             Direction::In => {
                 for layer in data.layers.iter_mut().rev() {
-                    let res =
-                        layer.process(&self.ectx, dir, pkt, xforms, ameta);
+                    let res = layer.process(&mut ectx, dir, pkt, xforms, ameta);
 
                     match res {
                         Ok(LayerResult::Allow) => (),
@@ -2326,36 +2373,48 @@ impl<N: NetworkImpl> Port<N> {
         self.stats.vals.in_uft_miss.incr(1);
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
-        match res {
+
+        let (ipr, create_flow) = match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
                 // entry.
-                if *ufid_in == FLOW_ID_DEFAULT {
-                    return Ok(InternalProcessResult::Modified);
-                }
+                (InternalProcessResult::Modified, *ufid_in != FLOW_ID_DEFAULT)
             }
 
-            Ok(LayerResult::Deny { name, reason }) => {
-                return Ok(InternalProcessResult::Drop {
+            Ok(LayerResult::Deny { name, reason }) => (
+                InternalProcessResult::Drop {
                     reason: DropReason::Layer { name, reason },
-                });
-            }
+                },
+                false,
+            ),
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                return Ok(InternalProcessResult::Hairpin(hppkt));
+                (InternalProcessResult::Hairpin(hppkt), false)
             }
 
-            Ok(LayerResult::HandlePkt) => {
-                return Ok(InternalProcessResult::from(self.net.handle_pkt(
+            Ok(LayerResult::HandlePkt) => (
+                InternalProcessResult::from(self.net.handle_pkt(
                     In,
                     pkt,
                     &data.uft_in,
                     &data.uft_out,
-                )?));
-            }
+                )?),
+                false,
+            ),
 
+            // TODO: Errors as a decision?!
             Err(e) => return Err(ProcessError::Layer(e)),
-        }
+        };
+
+        let pkt_len = pkt.len() as u64;
+        let Some(stat_parents) = pkt.meta_mut().stats.terminate(
+            ipr.stat_action(),
+            pkt_len,
+            In,
+            create_flow,
+        ) else {
+            return Ok(ipr);
+        };
 
         let mut flags = TransformFlags::empty();
         if pkt.checksums_dirty() {
@@ -2366,12 +2425,16 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         let ufid_out = pkt.flow().mirror();
+        let stat =
+            data.flow_stats.new_flow(ufid_in, &ufid_out, In, stat_parents);
+        stat.hit(pkt_len);
         let mut hte = UftEntry {
             pair: KMutex::new(Some(ufid_out)),
             xforms: xforms.compile(flags),
             epoch,
             l4_hash: ufid_in.crc32(),
             tcp_flow: None,
+            stat,
         };
 
         // Keep around the comment on the `None` arm
@@ -2401,12 +2464,7 @@ impl<N: NetworkImpl> Port<N> {
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp(
-                data,
-                pkt.meta(),
-                ufid_in,
-                pkt.len() as u64,
-            ) {
+            match self.process_in_tcp(data, pkt.meta(), ufid_in, pkt_len) {
                 Ok(TcpMaybeClosed::Closed { .. }) => {
                     Ok(InternalProcessResult::Modified)
                 }
@@ -2531,6 +2589,8 @@ impl<N: NetworkImpl> Port<N> {
         self.stats.vals.out_uft_miss.incr(1);
         let mut tcp_closed = false;
 
+        let pkt_len = pkt.len() as u64;
+
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         let tcp_flow = if pkt.meta().is_inner_tcp() {
@@ -2538,7 +2598,7 @@ impl<N: NetworkImpl> Port<N> {
                 data,
                 pkt.flow(),
                 pkt.meta(),
-                pkt.len() as u64,
+                pkt_len,
             ) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                     tcp_closed = true;
@@ -2597,46 +2657,76 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
+        let (ipr, create_flow) = match res {
+            Ok(LayerResult::Allow) => {
+                // If there is no flow ID, then do not create a UFT
+                // entry.
+                (
+                    InternalProcessResult::Modified,
+                    flow_before != FLOW_ID_DEFAULT && !tcp_closed,
+                )
+            }
+
+            Ok(LayerResult::Deny { name, reason }) => (
+                InternalProcessResult::Drop {
+                    reason: DropReason::Layer { name, reason },
+                },
+                false,
+            ),
+
+            Ok(LayerResult::Hairpin(hppkt)) => {
+                (InternalProcessResult::Hairpin(hppkt), false)
+            }
+
+            Ok(LayerResult::HandlePkt) => (
+                InternalProcessResult::from(self.net.handle_pkt(
+                    Out,
+                    pkt,
+                    &data.uft_in,
+                    &data.uft_out,
+                )?),
+                false,
+            ),
+
+            // TODO: Errors as a decision?!
+            Err(e) => return Err(ProcessError::Layer(e)),
+        };
+
+        let Some(stat_parents) = pkt.meta_mut().stats.terminate(
+            ipr.stat_action(),
+            pkt_len,
+            Out,
+            create_flow,
+        ) else {
+            return Ok(ipr);
+        };
+
+        let ufid_out = pkt.flow().mirror();
+        let stat = data.flow_stats.new_flow(
+            &flow_before,
+            &ufid_out,
+            Out,
+            stat_parents,
+        );
+        stat.hit(pkt_len);
+
         let hte = UftEntry {
             pair: KMutex::new(None),
             xforms: xforms.compile(flags),
             epoch,
             l4_hash: flow_before.crc32(),
             tcp_flow,
+            stat,
         };
 
-        match res {
-            Ok(LayerResult::Allow) => {
-                // If there is no Flow ID, then there is no UFT entry.
-                if flow_before == FLOW_ID_DEFAULT || tcp_closed {
-                    return Ok(InternalProcessResult::Modified);
-                }
-                match data.uft_out.add(flow_before, hte) {
-                    Ok(_) => Ok(InternalProcessResult::Modified),
-                    Err(OpteError::MaxCapacity(limit)) => {
-                        Err(ProcessError::FlowTableFull { kind: "UFT", limit })
-                    }
-                    Err(_) => unreachable!(
-                        "Cannot return other errors from FlowTable::add"
-                    ),
-                }
+        match data.uft_out.add(flow_before, hte) {
+            Ok(_) => Ok(InternalProcessResult::Modified),
+            Err(OpteError::MaxCapacity(limit)) => {
+                Err(ProcessError::FlowTableFull { kind: "UFT", limit })
             }
-
-            Ok(LayerResult::Hairpin(hppkt)) => {
-                Ok(InternalProcessResult::Hairpin(hppkt))
+            Err(_) => {
+                unreachable!("Cannot return other errors from FlowTable::add")
             }
-
-            Ok(LayerResult::Deny { name, reason }) => {
-                Ok(InternalProcessResult::Drop {
-                    reason: DropReason::Layer { name, reason },
-                })
-            }
-
-            Ok(LayerResult::HandlePkt) => Ok(InternalProcessResult::from(
-                self.net.handle_pkt(Out, pkt, &data.uft_in, &data.uft_out)?,
-            )),
-
-            Err(e) => Err(ProcessError::Layer(e)),
         }
     }
 
