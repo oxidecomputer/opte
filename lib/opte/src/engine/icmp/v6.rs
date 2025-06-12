@@ -106,9 +106,7 @@ impl HairpinAction for Icmpv6EchoReply {
             ]),
         ];
 
-        let data_preds = vec![];
-
-        (hdr_preds, data_preds)
+        (hdr_preds, vec![])
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
@@ -233,9 +231,7 @@ impl HairpinAction for RouterAdvertisement {
             ]),
         ];
 
-        let data_preds = vec![];
-
-        (hdr_preds, data_preds)
+        (hdr_preds, vec![])
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
@@ -553,9 +549,7 @@ impl HairpinAction for NeighborAdvertisement {
             ]),
         ];
 
-        let data_preds = vec![];
-
-        (hdr_preds, data_preds)
+        (hdr_preds, vec![])
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {

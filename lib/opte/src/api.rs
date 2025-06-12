@@ -232,6 +232,12 @@ impl InnerFlowId {
         }
     }
 
+    /// Computes the CRC32 hash of this flow-key.
+    ///
+    /// This value can be used for load-balancing purposes, or as a
+    /// fanout hint to the underlying stack. (Re-)computing this value
+    /// takes some work, even for the ~40B of this struct -- these should
+    /// be cached where possible in the dataplane.
     #[cfg(feature = "engine")]
     pub fn crc32(&self) -> u32 {
         let mut hasher = Hasher::new();

@@ -201,20 +201,14 @@ pub fn print_lft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &ActionDescEntryDump,
 ) -> std::io::Result<()> {
-    let sport_o;
-    let dport_o;
     let (sport, dport) = match flow_id.l4_info() {
         Some(L4Info::Ports(p)) => {
-            sport_o = p.src_port.to_string();
-            dport_o = p.dst_port.to_string();
-            (sport_o.as_str(), dport_o.as_str())
+            (p.src_port.to_string(), p.dst_port.to_string())
         }
         Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
-            sport_o = format!("{:#04x}/{:#04x}", p.ty, p.code);
-            dport_o = p.id.to_string();
-            (sport_o.as_str(), dport_o.as_str())
+            (format!("{:#04x}/{:#04x}", p.ty, p.code), p.id.to_string())
         }
-        None => ("N/A", "N/A"),
+        None => ("N/A".into(), "N/A".into()),
     };
 
     writeln!(
@@ -241,20 +235,14 @@ pub fn print_uft_flow(
     flow_id: &InnerFlowId,
     flow_entry: &UftEntryDump,
 ) -> std::io::Result<()> {
-    let sport_o;
-    let dport_o;
     let (sport, dport) = match flow_id.l4_info() {
         Some(L4Info::Ports(p)) => {
-            sport_o = p.src_port.to_string();
-            dport_o = p.dst_port.to_string();
-            (sport_o.as_str(), dport_o.as_str())
+            (p.src_port.to_string(), p.dst_port.to_string())
         }
         Some(L4Info::Icmpv4(p)) | Some(L4Info::Icmpv6(p)) => {
-            sport_o = format!("{:#04x}/{:#04x}", p.ty, p.code);
-            dport_o = p.id.to_string();
-            (sport_o.as_str(), dport_o.as_str())
+            (format!("{:#04x}/{:#04x}", p.ty, p.code), p.id.to_string())
         }
-        None => ("N/A", "N/A"),
+        None => ("N/A".into(), "N/A".into()),
     };
 
     writeln!(

@@ -47,9 +47,7 @@ impl HairpinAction for IcmpEchoReply {
             ]),
         ];
 
-        let data_preds = vec![];
-
-        (hdr_preds, data_preds)
+        (hdr_preds, vec![])
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
