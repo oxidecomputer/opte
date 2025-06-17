@@ -289,7 +289,8 @@ fn get_xde_state() -> &'static XdeState {
 
 impl XdeState {
     fn new() -> Self {
-        let ectx = Arc::new(Providers { log: Box::new(opte::KernelLog) });
+        let ectx =
+            Arc::new(Providers { log: Box::new(opte::provider::KernelLog) });
         let dev_map = Arc::new(KRwLock::new(DevMap::default()));
         let devs = ReadOnlyDevMap::new(dev_map.clone());
 
