@@ -257,7 +257,6 @@ fn oxide_net_builder(
     v2p: Arc<Virt2Phys>,
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
-    #[allow(clippy::arc_with_non_send_sync)]
     let ectx =
         Arc::new(Providers { log: Box::new(opte::provider::PrintlnLog) });
     let name_cstr = std::ffi::CString::new(name).unwrap();

@@ -29,7 +29,7 @@ use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::ht_probe;
-use super::stat::IntermediateStat;
+use super::stat::InternalStat;
 use super::stat::RootStat;
 use super::stat::StatTree;
 use crate::api::DumpLayerResp;
@@ -165,7 +165,7 @@ pub enum LftError {
 #[derive(Clone, Debug)]
 struct LftInEntry {
     action_desc: ActionDescEntry,
-    stat: Arc<IntermediateStat>,
+    stat: Arc<InternalStat>,
 }
 
 impl Display for LftInEntry {
@@ -186,7 +186,7 @@ impl Dump for LftInEntry {
 struct LftOutEntry {
     in_flow_pair: InnerFlowId,
     action_desc: ActionDescEntry,
-    stat: Arc<IntermediateStat>,
+    stat: Arc<InternalStat>,
 }
 
 impl LftOutEntry {
@@ -228,9 +228,9 @@ impl LayerFlowTable {
         action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
-        stat: Arc<IntermediateStat>,
+        stat: Arc<InternalStat>,
     ) {
-        // We add unchekced because the limit is now enforced by
+        // We add unchecked because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
         let in_entry =
             LftInEntry { action_desc: action_desc.clone(), stat: stat.clone() };
@@ -369,10 +369,10 @@ enum EntryState {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
-    Clean(ActionDescEntry, Arc<IntermediateStat>),
+    Clean(ActionDescEntry, Arc<InternalStat>),
     /// An existing flow table entry was found, but rule processing must be rerun
     /// to use the original action or invalidate the underlying entry.
-    Dirty(ActionDescEntry, Arc<IntermediateStat>),
+    Dirty(ActionDescEntry, Arc<InternalStat>),
 }
 
 /// The default action of a layer.

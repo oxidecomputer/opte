@@ -27,7 +27,8 @@ use opte_api::PacketCounter as ApiPktCounter;
 use opte_api::TcpState;
 use uuid::Uuid;
 
-// TODO DELETION ON FLOW CLOSE [and holding onto 'dead flows']
+// TODO READOUT OF STAT FROM GIVEN ROOT(S).
+// TODO restrict most of this to pub(crate)?
 
 /// Opaque identifier for tracking unique stat objects.
 #[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Debug)]
@@ -50,6 +51,8 @@ pub enum Action {
     Hairpin,
 }
 
+/// Packet counters and additional information associated with an accepted
+/// flow's 5-tuple.
 pub struct FlowStat {
     /// The direction of this flow half.
     pub dir: Direction,
@@ -68,26 +71,31 @@ pub struct FlowStat {
 }
 
 impl FlowStat {
+    /// Record an packet matching this flow and direction.
     pub fn hit(&self, pkt_size: u64) {
         self.hit_at(pkt_size, Moment::now());
     }
 
+    /// Record an packet matching this flow and direction, using
+    /// an existing timestamp.
     pub fn hit_at(&self, pkt_size: u64, time: Moment) {
         self.last_hit.store(time.raw(), Ordering::Relaxed);
         self.shared.stats.hit(self.dir, pkt_size);
     }
 }
 
+/// Packet counters shared by both halves of a flow. Each 5-tuple references
+/// this struct through a [`FlowStat`].
 pub struct SharedFlowStat {
-    /// Actual stats associated with this flow.
+    /// Counters associated with this flow.
     pub stats: PacketCounter,
 
-    /// Tcp?
+    /// Estimated TCP state from monitoring a flow.
     ///
-    /// Yeah this needs some rework wrt today...
+    /// XXX: TODO
     pub tcp: Option<TcpState>,
 
-    /// パケットはどちらにきましたか。
+    /// The direction this flow was opened on.
     pub first_dir: Direction,
 }
 
@@ -102,10 +110,11 @@ impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
     }
 }
 
+/// Stat objects which can be a parent to a non-root node.
 #[derive(Clone, Debug)]
 pub enum StatParent {
     Root(Arc<RootStat>),
-    Intermediate(Arc<IntermediateStat>),
+    Internal(Arc<InternalStat>),
 }
 
 impl From<Arc<RootStat>> for StatParent {
@@ -114,9 +123,9 @@ impl From<Arc<RootStat>> for StatParent {
     }
 }
 
-impl From<Arc<IntermediateStat>> for StatParent {
-    fn from(value: Arc<IntermediateStat>) -> Self {
-        Self::Intermediate(value)
+impl From<Arc<InternalStat>> for StatParent {
+    fn from(value: Arc<InternalStat>) -> Self {
+        Self::Internal(value)
     }
 }
 
@@ -124,7 +133,7 @@ impl StatParent {
     fn parents(&self) -> &[StatParent] {
         match self {
             Self::Root(_) => &[],
-            Self::Intermediate(i) => &i.parents,
+            Self::Internal(i) => &i.parents,
         }
     }
 
@@ -135,14 +144,14 @@ impl StatParent {
     fn root_id(&self) -> Option<&Uuid> {
         match self {
             Self::Root(r) => Some(&r.id),
-            Self::Intermediate(_) => None,
+            Self::Internal(_) => None,
         }
     }
 
     fn inner(&self) -> &TableStat {
         match self {
             Self::Root(r) => &r.body,
-            Self::Intermediate(i) => &i.body,
+            Self::Internal(i) => &i.body,
         }
     }
 
@@ -182,15 +191,16 @@ impl StatParent {
     }
 }
 
+/// Stat objects which can be a child to a non-leaf node.
 #[derive(Clone, Debug)]
 pub enum StatChild {
-    Intermediate(Weak<IntermediateStat>),
+    Internal(Weak<InternalStat>),
     Flow(Weak<FlowStat>),
 }
 
-impl From<&Arc<IntermediateStat>> for StatChild {
-    fn from(value: &Arc<IntermediateStat>) -> Self {
-        Self::Intermediate(Arc::downgrade(value))
+impl From<&Arc<InternalStat>> for StatChild {
+    fn from(value: &Arc<InternalStat>) -> Self {
+        Self::Internal(Arc::downgrade(value))
     }
 }
 
@@ -200,27 +210,31 @@ impl From<&Arc<FlowStat>> for StatChild {
     }
 }
 
+/// Long-lived counters associated with a rule or control-plane relevant
+/// object.
 #[derive(Debug)]
 pub struct RootStat {
     pub id: Uuid,
     body: TableStat,
 }
 
+/// Temporary counters associated with an LFT entry.
 #[derive(Debug)]
-pub struct IntermediateStat {
+pub struct InternalStat {
     pub parents: Box<[StatParent]>,
     body: TableStat,
 }
 
+/// Shared components on non-flow stats.
 struct TableStat {
     /// A list of other stat-related objects who name this table
     /// stat as one of its parents.
     children: KRwLock<Vec<StatChild>>,
 
-    /// The actual stats!
+    /// The actual stats
     stats: FullCounter,
 
-    /// When was this flow last updated?
+    /// When was a hit last recorded?
     last_hit: AtomicU64,
 }
 
@@ -262,6 +276,9 @@ impl TableStat {
     }
 }
 
+/// Packet count/byte counters.
+///
+/// Base component of any counter set in OPTE.
 pub struct PacketCounter {
     pub id: StatId,
     pub created_at: Moment,
@@ -325,6 +342,7 @@ impl From<&PacketCounter> for ApiPktCounter {
     }
 }
 
+/// Counts of actions taken/packets encountered by a rule.
 pub struct FullCounter {
     pub allow: AtomicU64,
     pub deny: AtomicU64,
@@ -369,6 +387,18 @@ impl From<&FullCounter> for ApiFullCounter {
     }
 }
 
+impl From<&RootStat> for ApiFullCounter {
+    fn from(val: &RootStat) -> Self {
+        (&val.body.stats).into()
+    }
+}
+
+impl From<&InternalStat> for ApiFullCounter {
+    fn from(val: &InternalStat) -> Self {
+        (&val.body.stats).into()
+    }
+}
+
 pub trait FoldStat: Send + Sync {
     fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>);
 }
@@ -381,7 +411,7 @@ impl FoldStat for FlowStat {
     }
 }
 
-impl FoldStat for IntermediateStat {
+impl FoldStat for InternalStat {
     fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
         if !visited.insert(self.body.stats.id()) {
             self.body.stats.combine(into);
@@ -397,14 +427,14 @@ impl FoldStat for RootStat {
     }
 }
 
-/// Tracking/handling of all stats.
+/// Manager of all stat/counter objects within a port.
 ///
-/// ?? Describe?
+///
 #[derive(Default)]
 pub struct StatTree {
     next_id: u64,
     roots: BTreeMap<Uuid, Arc<RootStat>>,
-    intermediate: Vec<Arc<IntermediateStat>>,
+    internal: Vec<Arc<InternalStat>>,
     flows: BTreeMap<InnerFlowId, Arc<FlowStat>>,
 }
 
@@ -431,11 +461,12 @@ impl StatTree {
             .clone()
     }
 
+    /// Creates a new internal node from a given set of parents.
     pub fn new_intermediate(
         &mut self,
         parents: Vec<StatParent>,
-    ) -> Arc<IntermediateStat> {
-        let out = Arc::new(IntermediateStat {
+    ) -> Arc<InternalStat> {
+        let out = Arc::new(InternalStat {
             parents: parents.into(),
             body: TableStat {
                 children: KRwLock::new(vec![]),
@@ -448,11 +479,12 @@ impl StatTree {
             parent.append_child(&out);
         }
 
-        self.intermediate.push(out.clone());
+        self.internal.push(out.clone());
 
         out
     }
 
+    /// Gets or creates the flow stat
     pub fn new_flow(
         &mut self,
         flow_id: &InnerFlowId,
@@ -502,11 +534,13 @@ impl StatTree {
             parent.append_child(&out);
         }
 
-        // Proven a miss on flow_id already
+        // We have proven a miss on flow_id already
         let _ = self.flows.insert(*flow_id, out.clone());
         out
     }
 
+    /// Remove all stat entries which have grown stale, folding packet/decision
+    /// counters into registered parents.
     pub fn expire(&mut self, now: Moment) {
         const EXPIRY_WINDOW: Ttl = Ttl::new_seconds(10);
         // Root removal and re-entry? Don't want any gaps.
@@ -590,8 +624,8 @@ impl StatTree {
             }
         }
 
-        // Intermediates.
-        self.intermediate.retain(|v| {
+        // Internal/branch nodes.
+        self.internal.retain(|v| {
             // Time is... not relevant here. The LFTs are GONE.
             if Arc::strong_count(v) == 1 {
                 for p in &v.parents {
@@ -626,7 +660,7 @@ impl StatTree {
         }
         out.push_str("----\n\n");
         out.push_str("--Ints--\n");
-        for root in &self.intermediate {
+        for root in &self.internal {
             let d = ApiFullCounter::from(&root.body.stats);
             out.push_str(&format!("\t{:?} -> {d:?}\n", root.body.stats.id()));
             let parents: Vec<Option<Uuid>> =
@@ -650,6 +684,7 @@ impl StatTree {
     }
 }
 
+/// Return the underlying stats of decision-making rules which allowed a flow.
 fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
     let mut out = BTreeSet::new();
 
@@ -664,7 +699,8 @@ fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
     out
 }
 
-/// XXX holds stats as they arrive on a packet.
+/// Collects stats as a packet is processed, keeping track of the boundary
+/// of the most recent layer.
 pub struct FlowStatBuilder {
     parents: Vec<StatParent>,
     layer_end: usize,
@@ -731,6 +767,7 @@ impl Default for FlowStatBuilder {
     }
 }
 
+/// Utility newtype for tracking visited nodes.
 struct ById(StatParent);
 
 impl PartialOrd for ById {
@@ -752,3 +789,97 @@ impl PartialEq for ById {
 }
 
 impl Eq for ById {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::AddrPair;
+    use ingot::ip::IpProtocol;
+    use opte_api::Ipv4Addr;
+
+    const ROOT_0: Uuid = Uuid::from_u64_pair(1234, 0);
+    const ROOT_1: Uuid = Uuid::from_u64_pair(1234, 1);
+    const ROOT_2: Uuid = Uuid::from_u64_pair(1234, 2);
+    const ROOT_3: Uuid = Uuid::from_u64_pair(1234, 3);
+
+    const FLOW_OUT: InnerFlowId = InnerFlowId {
+        proto: IpProtocol::UDP.0,
+        addrs: AddrPair::V4 {
+            src: Ipv4Addr::from_const([10, 0, 0, 1]),
+            dst: Ipv4Addr::from_const([1, 1, 1, 1]),
+        },
+        proto_info: [12345, 53],
+    };
+
+    const FLOW_IN: InnerFlowId = InnerFlowId {
+        proto: IpProtocol::UDP.0,
+        addrs: AddrPair::V4 {
+            dst: Ipv4Addr::from_const([10, 0, 0, 1]),
+            src: Ipv4Addr::from_const([1, 1, 1, 1]),
+        },
+        proto_info: [53, 12345],
+    };
+
+    #[test]
+    fn flow_stat_deny() {
+        // Assert that all (non-terminal) layers are counted as an 'accept'.
+        // All stats in the last layer instead increment the terminal action.
+        let mut tree = StatTree::default();
+
+        let r0 = tree.root(Some(ROOT_0));
+        let r1 = tree.root(Some(ROOT_1));
+        let r2 = tree.root(Some(ROOT_2));
+        let r3 = tree.root(Some(ROOT_3));
+
+        let i0 = tree.new_intermediate(vec![r0.into()]);
+        let i1 = tree.new_intermediate(vec![r2.into()]);
+
+        let mut fb = FlowStatBuilder::new();
+        fb.push(i0.clone());
+        fb.new_layer();
+        fb.push(r1.clone());
+        fb.new_layer();
+        fb.push(i1.clone());
+        fb.push(r3.clone());
+
+        assert!(
+            fb.terminate(Action::Deny, 128, Direction::Out, false).is_none()
+        );
+        let snap_i0: ApiFullCounter = i0.as_ref().into();
+        assert_eq!(snap_i0.allow, 1);
+        assert_eq!(snap_i0.deny, 0);
+        assert_eq!(snap_i0.packets.pkts_out, 1);
+        assert_eq!(snap_i0.packets.bytes_out, 128);
+
+        let snap_r1: ApiFullCounter = r1.as_ref().into();
+        assert_eq!(snap_i0.allow, 1);
+        assert_eq!(snap_r1.deny, 0);
+        assert_eq!(snap_r1.packets.pkts_out, 1);
+        assert_eq!(snap_r1.packets.bytes_out, 128);
+
+        let snap_i1: ApiFullCounter = i1.as_ref().into();
+        assert_eq!(snap_i1.allow, 0);
+        assert_eq!(snap_i1.deny, 1);
+        assert_eq!(snap_i1.packets.pkts_out, 1);
+        assert_eq!(snap_i1.packets.bytes_out, 128);
+
+        let snap_r3: ApiFullCounter = r3.as_ref().into();
+        assert_eq!(snap_r3.allow, 0);
+        assert_eq!(snap_r3.deny, 1);
+        assert_eq!(snap_r3.packets.pkts_out, 1);
+        assert_eq!(snap_r3.packets.bytes_out, 128);
+
+        // Does this work with only one layer?
+        let mut fb = FlowStatBuilder::new();
+        fb.push(i0.clone());
+        assert!(
+            fb.terminate(Action::Deny, 64, Direction::Out, false).is_none()
+        );
+
+        let snap_i0: ApiFullCounter = i0.as_ref().into();
+        assert_eq!(snap_i0.allow, 1);
+        assert_eq!(snap_i0.deny, 1);
+        assert_eq!(snap_i0.packets.pkts_out, 2);
+        assert_eq!(snap_i0.packets.bytes_out, 192);
+    }
+}
