@@ -63,7 +63,6 @@ use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use ingot::udp::Udp;
-use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
 use opte::api::CmdOk;
@@ -108,6 +107,7 @@ use opte::engine::parse::ValidUlp;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
+use opte::provider::Providers;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -248,7 +248,7 @@ pub struct xde_underlay_port {
 
 struct XdeState {
     management_lock: TokenLock<XdeMgmt>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
     devs: ReadOnlyDevMap,
@@ -289,7 +289,7 @@ fn get_xde_state() -> &'static XdeState {
 
 impl XdeState {
     fn new() -> Self {
-        let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
+        let ectx = Arc::new(Providers { log: Box::new(opte::KernelLog) });
         let dev_map = Arc::new(KRwLock::new(DevMap::default()));
         let devs = ReadOnlyDevMap::new(dev_map.clone());
 
@@ -2089,7 +2089,7 @@ fn new_port(
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();

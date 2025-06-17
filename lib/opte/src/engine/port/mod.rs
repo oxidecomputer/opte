@@ -6,6 +6,7 @@
 
 //! A virtual switch port.
 
+use super::ExecCtx;
 use super::HdlPktAction;
 use super::LightweightMeta;
 use super::NetworkImpl;
@@ -51,8 +52,6 @@ use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
 use super::tcp_state::TcpFlowStateError;
-use crate::ExecCtx;
-use crate::ExecCtx2;
 use crate::api::DumpLayerResp;
 use crate::api::DumpTcpFlowsResp;
 use crate::api::DumpUftResp;
@@ -73,6 +72,7 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
+use crate::provider::Providers;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -239,7 +239,7 @@ pub enum DropReason {
 /// Only the port builder may add or remove layers. Once you have a
 /// [`Port`] the list of layers is immutable.
 pub struct PortBuilder {
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     name: String,
     // Cache the CString version of the name for use with DTrace
     // probes.
@@ -411,7 +411,7 @@ impl PortBuilder {
         name: &str,
         name_cstr: CString,
         mac: MacAddr,
-        ectx: Arc<ExecCtx>,
+        ectx: Arc<Providers>,
     ) -> Self {
         PortBuilder {
             name: name.to_string(),
@@ -762,11 +762,13 @@ struct PortData {
 ///
 /// ### Execution Context
 ///
-/// The `ExecCtx` provides implementations of specific features that
-/// are valid for the given context the port is running in.
+/// The `Providers` struct offers implementations of specific features that
+/// are valid for the given context the port is running in (kernel, userland, ...).
+/// This is combined with views of port specific fields in `ExecCtx`, which allows
+/// layer/rule execution to access shared stats.
 pub struct Port<N: NetworkImpl> {
     epoch: AtomicU64,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     name: String,
     // Cache the CString version of the name for use with DTrace
     // probes.
@@ -2024,7 +2026,7 @@ impl<N: NetworkImpl> Port<N> {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         let mut ectx =
-            ExecCtx2 { user_ctx: &self.ectx, stats: &mut data.flow_stats };
+            ExecCtx { user_ctx: &self.ectx, stats: &mut data.flow_stats };
 
         match dir {
             Direction::Out => {

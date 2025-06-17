@@ -5,8 +5,7 @@
 // Copyright 2025 Oxide Computer Company
 
 //! The engine in OPTE.
-//!
-//! All code under this namespace is guarded by the `engine` feature flag.
+
 pub mod arp;
 pub mod checksum;
 pub mod dhcp;
@@ -36,6 +35,7 @@ pub mod tcp_state;
 pub mod udp;
 
 use crate::ddi::mblk::MsgBlk;
+use crate::provider::Providers;
 use checksum::Checksum;
 use ingot::tcp::TcpRef;
 use ingot::types::IntoBufPointer;
@@ -48,6 +48,7 @@ use packet::Packet;
 use packet::Pullup;
 use parse::ValidNoEncap;
 use rule::CompiledTransform;
+use stat::StatTree;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
@@ -140,6 +141,13 @@ use crate::engine::flow_table::FlowTable;
 use crate::engine::packet::InnerFlowId;
 use crate::engine::packet::ParseError;
 use crate::engine::port::UftEntry;
+
+/// Context containing platform-specific providers and shared elements from a
+/// [`port::Port`], used within layer and action execution.
+pub struct ExecCtx<'a> {
+    pub user_ctx: &'a Providers,
+    pub stats: &'a mut StatTree,
+}
 
 /// The action to take for a single packet, based on the processing of
 /// the [`NetworkImpl::handle_pkt()`] callback.

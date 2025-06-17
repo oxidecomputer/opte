@@ -16,7 +16,6 @@ pub mod pcap;
 pub mod port_state;
 
 // Let's make our lives easier and pub use a bunch of stuff.
-pub use opte::ExecCtx;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
@@ -63,6 +62,7 @@ pub use opte::ingot::types::Emit;
 pub use opte::ingot::types::EmitDoesNotRelyOnBufContents;
 pub use opte::ingot::types::HeaderLen;
 pub use opte::ingot::udp::Udp;
+pub use opte::provider::Providers;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
 pub use oxide_vpc::api::DhcpCfg;
@@ -258,7 +258,8 @@ fn oxide_net_builder(
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
-    let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
+    let ectx =
+        Arc::new(Providers { log: Box::new(opte::provider::PrintlnLog) });
     let name_cstr = std::ffi::CString::new(name).unwrap();
     let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
 

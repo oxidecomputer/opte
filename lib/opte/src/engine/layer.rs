@@ -32,9 +32,6 @@ use super::rule::ht_probe;
 use super::stat::IntermediateStat;
 use super::stat::RootStat;
 use super::stat::StatTree;
-use crate::ExecCtx;
-use crate::ExecCtx2;
-use crate::LogLevel;
 use crate::api::DumpLayerResp;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -44,6 +41,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::ExecCtx;
+use crate::provider::LogLevel;
+use crate::provider::Providers;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -840,7 +840,7 @@ impl Layer {
 
     pub(crate) fn process(
         &mut self,
-        ectx: &mut ExecCtx2,
+        ectx: &mut ExecCtx,
         dir: Direction,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
@@ -859,7 +859,7 @@ impl Layer {
 
     fn process_in(
         &mut self,
-        ectx: &mut ExecCtx2,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -933,7 +933,7 @@ impl Layer {
 
     fn process_in_rules(
         &mut self,
-        ectx: &mut ExecCtx2,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1181,7 +1181,7 @@ impl Layer {
 
     fn process_out(
         &mut self,
-        ectx: &mut ExecCtx2,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1255,7 +1255,7 @@ impl Layer {
 
     fn process_out_rules(
         &mut self,
-        ectx: &mut ExecCtx2,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1509,7 +1509,7 @@ impl Layer {
 
     fn record_gen_desc_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenDescError,
@@ -1526,7 +1526,7 @@ impl Layer {
 
     fn record_gen_ht_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenHtError,
