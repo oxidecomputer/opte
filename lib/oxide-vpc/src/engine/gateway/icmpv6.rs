@@ -16,7 +16,7 @@ use opte::engine::icmp::v6::Icmpv6EchoReply;
 use opte::engine::icmp::v6::NeighborAdvertisement;
 use opte::engine::icmp::v6::RouterAdvertisement;
 use opte::engine::layer::Layer;
-use opte::engine::predicate::DataPredicate;
+use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 use opte::engine::stat::StatTree;
@@ -93,18 +93,18 @@ pub fn setup(
     });
 
     // Filter any uncaught in/out-bound NDP traffic.
-    let pred = DataPredicate::Icmpv6MsgType(
+    let pred = Predicate::Icmpv6MsgType(vec![
         (Icmpv6Message::RouterSolicit.into()..=Icmpv6Message::Redirect.into())
             .into(),
-    );
+    ]);
     let in_pred = pred.clone();
 
     let mut ndp_filter = Rule::new(next_out_prio, Action::Deny);
-    ndp_filter.add_data_predicate(pred);
+    ndp_filter.add_predicate(pred);
     layer.add_rule(Direction::Out, ndp_filter.finalize(), stats);
 
     let mut ndp_filter = Rule::new(1, Action::Deny);
-    ndp_filter.add_data_predicate(in_pred);
+    ndp_filter.add_predicate(in_pred);
     layer.add_rule(Direction::In, ndp_filter.finalize(), stats);
 
     Ok(())

@@ -567,7 +567,7 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
     if n_rows > 1 {
         // This is required over a plain \n to preserve column alignment
         // between all ports.
-        writeln!(t, "\t\t\t\t\t\t\t\t",)?;
+        writeln!(t, "\t\t\t\t\t\t\t\t")?;
     }
 
     Ok(())
