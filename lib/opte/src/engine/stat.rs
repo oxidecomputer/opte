@@ -157,19 +157,22 @@ impl StatParent {
 
     /// Allow a packet which will track local stats via a UFT entry.
     pub fn allow(&self) {
-        self.inner().allow();
+        self.allow_at(Moment::now());
     }
 
     /// Allow a packet (at a given timestamp) which will track local stats via
     /// a UFT entry.
     pub fn allow_at(&self, time: Moment) {
-        self.inner().allow_at(time);
+        if let Self::Root(r) = self {
+            r.record_hit(time);
+        }
+        self.inner().allow();
     }
 
     /// Record an action for a packet which will ultimately be dropped or
     /// hairpinned.
     pub fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
-        self.inner().act(action, pkt_size, direction);
+        self.act_at(action, pkt_size, direction, Moment::now());
     }
 
     /// Record an action for a packet (at a given time) which will ultimately
@@ -181,7 +184,10 @@ impl StatParent {
         direction: Direction,
         time: Moment,
     ) {
-        self.inner().act_at(action, pkt_size, direction, time);
+        if let Self::Root(r) = self {
+            r.record_hit(time);
+        }
+        self.inner().act(action, pkt_size, direction);
     }
 
     /// Add a weak child reference to this stat object.
@@ -210,12 +216,31 @@ impl From<&Arc<FlowStat>> for StatChild {
     }
 }
 
+impl StatChild {
+    /// Returns whether any strong references to this child node remain.
+    fn is_alive(&self) -> bool {
+        match self {
+            Self::Internal(i) => i.strong_count() != 0,
+            Self::Flow(i) => i.strong_count() != 0,
+        }
+    }
+}
+
 /// Long-lived counters associated with a rule or control-plane relevant
 /// object.
 #[derive(Debug)]
 pub struct RootStat {
+    /// The control-plane ID associated with these counters.
     pub id: Uuid,
+    /// When was a hit last recorded?
+    pub last_hit: AtomicU64,
     body: TableStat,
+}
+
+impl RootStat {
+    fn record_hit(&self, time: Moment) {
+        self.last_hit.store(time.raw(), Ordering::Relaxed);
+    }
 }
 
 /// Temporary counters associated with an LFT entry.
@@ -231,48 +256,32 @@ struct TableStat {
     /// stat as one of its parents.
     children: KRwLock<Vec<StatChild>>,
 
-    /// The actual stats
+    /// The actual stats.
     stats: FullCounter,
-
-    /// When was a hit last recorded?
-    last_hit: AtomicU64,
 }
 
 impl core::fmt::Debug for TableStat {
-    fn fmt(&self, _f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TableStat")
+            .field("children", &"<lock>")
+            .field("stats", &ApiFullCounter::from(&self.stats))
+            .finish()
     }
 }
 
 impl TableStat {
     fn allow(&self) {
-        self.allow_at(Moment::now());
-    }
-
-    fn allow_at(&self, time: Moment) {
-        self.last_hit.store(time.raw(), Ordering::Relaxed);
         self.stats.allow.fetch_add(1, Ordering::Relaxed);
     }
 
     fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
-        self.act_at(action, pkt_size, direction, Moment::now());
-    }
-
-    fn act_at(
-        &self,
-        action: Action,
-        pkt_size: u64,
-        direction: Direction,
-        time: Moment,
-    ) {
-        self.last_hit.store(time.raw(), Ordering::Relaxed);
         self.stats.packets.hit(direction, pkt_size);
-        let stat = match action {
+        match action {
             Action::Allow => &self.stats.allow,
             Action::Deny => &self.stats.deny,
             Action::Hairpin => &self.stats.hairpin,
-        };
-        stat.fetch_add(1, Ordering::Relaxed);
+        }
+        .fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -361,7 +370,7 @@ impl FullCounter {
     }
 
     fn combine(&self, into: &Self) {
-        into.packets.combine(&self.packets);
+        self.packets.combine(&into.packets);
         into.allow
             .fetch_add(self.allow.load(Ordering::Relaxed), Ordering::Relaxed);
         into.deny
@@ -451,10 +460,10 @@ impl StatTree {
             .or_insert_with(|| {
                 Arc::new(RootStat {
                     id: uuid,
+                    last_hit: Moment::now().raw().into(),
                     body: TableStat {
                         children: KRwLock::new(vec![]),
                         stats: FullCounter::from_next_id(ids),
-                        last_hit: Moment::now().raw().into(),
                     },
                 })
             })
@@ -471,7 +480,6 @@ impl StatTree {
             body: TableStat {
                 children: KRwLock::new(vec![]),
                 stats: FullCounter::from_next_id(&mut self.next_id),
-                last_hit: Moment::now().raw().into(),
             },
         });
 
@@ -496,6 +504,16 @@ impl StatTree {
             // TODO: what to do with (maybe new) parents & bases?!
             //       I *think* these should win out, insert, and preserve
             //       the old stats. Need to think about it.
+            //
+            // I think what may be needed is a 'last synced' stat set for a
+            // flow, so that we can save out the delta from that if 'parents'
+            // changes. E.g.:
+            // EPOCH 0 -- flow has parents a, b', d
+            //         -- flow exists for ~2min actively
+            // EPOCH 1 -- firewall rule change occurs
+            //         -- flow *now* has parents a, c, d
+            //         -- flow closes, but b' and c should receive the packet
+            //            byte/counts split at the epoch 0->1 transition.
             return e.get().clone();
         }
 
@@ -560,7 +578,12 @@ impl StatTree {
             rhs: Liveness,
         }
 
-        // Flows -- need to account for shared component between arc'd things.
+        //
+        // Flows -- we need to account for shared component between arc'd halves
+        // of each, hence the liveness tracking. At a high level, we can expire
+        // a flow if one half exists (but is stale), or both halves exist and
+        // *both* are stale.
+        //
         let mut possibly_expired: BTreeMap<StatId, JointLive> = BTreeMap::new();
         for (k, v) in &self.flows {
             let t_hit =
@@ -584,6 +607,7 @@ impl StatTree {
                 }
             }
         }
+
         for v in possibly_expired.values() {
             let cannot_remove = v.lhs == Liveness::SeenKeep
                 || v.rhs == Liveness::SeenKeep
@@ -624,9 +648,13 @@ impl StatTree {
             }
         }
 
+        //
         // Internal/branch nodes.
+        //
         self.internal.retain(|v| {
-            // Time is... not relevant here. The LFTs are GONE.
+            // Internal nodes do not have/use a last_hit time, as their
+            // lifetimes are tied exclusively to LFT entries (we do not
+            // re-query them, either).
             if Arc::strong_count(v) == 1 {
                 for p in &v.parents {
                     v.body.stats.combine(&p.inner().stats);
@@ -637,13 +665,27 @@ impl StatTree {
             }
         });
 
+        //
         // Roots may need to be held onto for some time in case rules with the
         // same ID come and go in adjacent control plane operations...
+        //
         self.roots.retain(|_, v| {
             let t_hit =
-                Moment::from_raw_nanos(v.body.last_hit.load(Ordering::Relaxed));
+                Moment::from_raw_nanos(v.last_hit.load(Ordering::Relaxed));
             Arc::strong_count(v) > 1
                 || !ROOT_EXPIRY_WINDOW.is_expired(t_hit, now)
+        });
+
+        //
+        // Reap any child references.
+        //
+        self.internal.iter().for_each(|el| {
+            let mut children = el.body.children.write();
+            children.retain(|c| c.is_alive());
+        });
+        self.roots.values().for_each(|el| {
+            let mut children = el.body.children.write();
+            children.retain(|c| c.is_alive());
         });
     }
 
@@ -701,6 +743,9 @@ fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
 
 /// Collects stats as a packet is processed, keeping track of the boundary
 /// of the most recent layer.
+///
+/// TODO: there are soundness rules to prevent double-counting if different
+/// expiries occur at different times. Codify these.
 pub struct FlowStatBuilder {
     parents: Vec<StatParent>,
     layer_end: usize,
@@ -733,27 +778,28 @@ impl FlowStatBuilder {
         direction: Direction,
         create_flow: bool,
     ) -> Option<Vec<StatParent>> {
+        let now = Moment::now();
         match action {
             Action::Allow if create_flow => {
-                self.parents.iter().for_each(|v| v.allow());
+                self.parents.iter().for_each(|v| v.allow_at(now));
                 // TODO: should *take*?
                 Some(self.parents.clone())
             }
             Action::Allow => {
                 self.parents
                     .iter()
-                    .for_each(|v| v.act(action, pkt_size, direction));
+                    .for_each(|v| v.act_at(action, pkt_size, direction, now));
                 None
             }
             Action::Deny | Action::Hairpin => {
                 let (accepted, last_layer) =
                     self.parents.split_at(self.layer_end);
-                accepted
-                    .iter()
-                    .for_each(|v| v.act(Action::Allow, pkt_size, direction));
+                accepted.iter().for_each(|v| {
+                    v.act_at(Action::Allow, pkt_size, direction, now)
+                });
                 last_layer
                     .iter()
-                    .for_each(|v| v.act(action, pkt_size, direction));
+                    .for_each(|v| v.act_at(action, pkt_size, direction, now));
 
                 None
             }
@@ -792,6 +838,8 @@ impl Eq for ById {}
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+
     use super::*;
     use crate::api::AddrPair;
     use ingot::ip::IpProtocol;
@@ -881,5 +929,141 @@ mod tests {
         assert_eq!(snap_i0.deny, 1);
         assert_eq!(snap_i0.packets.pkts_out, 2);
         assert_eq!(snap_i0.packets.bytes_out, 192);
+    }
+
+    #[test]
+    fn flow_lifecycle() {
+        let mut tree = StatTree::default();
+
+        let r0 = tree.root(Some(ROOT_0));
+        let r1 = tree.root(Some(ROOT_1));
+        let r2 = tree.root(Some(ROOT_2));
+        let r3 = tree.root(Some(ROOT_3));
+
+        let i0 = tree.new_intermediate(vec![r0.clone().into()]);
+        let i1 = tree.new_intermediate(vec![r1.clone().into()]);
+
+        let p_sz = 64;
+        let f_out = {
+            let mut fb = FlowStatBuilder::new();
+            fb.push(i0.clone());
+            fb.push(r3.clone());
+            tree.new_flow(
+                &FLOW_OUT,
+                &FLOW_IN,
+                Direction::Out,
+                fb.terminate(Action::Allow, p_sz, Direction::Out, true)
+                    .unwrap(),
+            )
+        };
+        f_out.hit(p_sz);
+
+        let f_in = {
+            let mut fb = FlowStatBuilder::new();
+            fb.push(i0.clone());
+            fb.push(i1.clone());
+            fb.push(r2.clone());
+            tree.new_flow(
+                &FLOW_IN,
+                &FLOW_OUT,
+                Direction::In,
+                fb.terminate(Action::Allow, p_sz, Direction::In, true).unwrap(),
+            )
+        };
+        f_in.hit(p_sz);
+
+        // These should refer to the same block of packet counters.
+        assert!(Arc::ptr_eq(&f_out.shared, &f_in.shared));
+
+        // Suppose some more packets come in 5 seconds later.
+        let t_0 = Moment::now() + Duration::from_secs(5);
+        f_in.hit_at(150, t_0);
+        f_in.hit_at(100, t_0);
+        f_in.hit_at(230, t_0);
+
+        // The UFT has been cleared out -- eviction, protocol finish, etc.
+        drop(f_in);
+        drop(f_out);
+
+        // Perform expiry. Suppose we're doing so just after that update,
+        // then nothing should change.
+        let t_1 = t_0 + Duration::from_secs(1);
+        tree.expire(t_1);
+        assert!(tree.flows.contains_key(&FLOW_IN));
+        assert!(tree.flows.contains_key(&FLOW_OUT));
+        assert_eq!(tree.internal.len(), 2);
+
+        // Both halves of a flow must be stale for expiry to proceed.
+        tree.expire(t_1 + Duration::from_secs(5));
+        assert!(tree.flows.contains_key(&FLOW_IN));
+        assert!(tree.flows.contains_key(&FLOW_OUT));
+        assert_eq!(tree.internal.len(), 2);
+
+        // Perform an expiry for real. Suppose that the LFT i1 has been removed
+        // from its layer table -- its stats will have been given to r1.
+        let t_2 = t_1 + Duration::from_secs(10);
+        drop(i1);
+        tree.expire(t_2);
+        assert!(!tree.flows.contains_key(&FLOW_IN));
+        assert!(!tree.flows.contains_key(&FLOW_OUT));
+        assert_eq!(tree.internal.len(), 1);
+
+        let r0c = ApiFullCounter::from(r0.as_ref());
+        assert_eq!(r0c.allow, 0);
+        assert_eq!(r0c.packets.pkts_in, 0);
+        assert_eq!(r0c.packets.pkts_out, 0);
+        assert_eq!(r0c.packets.bytes_in, 0);
+        assert_eq!(r0c.packets.bytes_out, 0);
+
+        let i0c = ApiFullCounter::from(i0.as_ref());
+        assert_eq!(i0c.allow, 2);
+        assert_eq!(i0c.packets.pkts_in, 4);
+        assert_eq!(i0c.packets.pkts_out, 1);
+        assert_eq!(i0c.packets.bytes_in, 544);
+        assert_eq!(i0c.packets.bytes_out, 64);
+
+        for el in [
+            ApiFullCounter::from(r1.as_ref()),
+            ApiFullCounter::from(r2.as_ref()),
+            ApiFullCounter::from(r3.as_ref()),
+        ] {
+            assert_eq!(el.allow, 1);
+            assert_eq!(el.packets.pkts_in, 4);
+            assert_eq!(el.packets.pkts_out, 1);
+            assert_eq!(el.packets.bytes_in, 544);
+            assert_eq!(el.packets.bytes_out, 64);
+        }
+
+        // Now the LFT entry bound to r0 has gone away, and some other flows
+        // have written into the root stat. Expect that i0's stats have been
+        // folded into it.
+        let t_3 = t_2 + Duration::from_secs(10);
+        drop(i0);
+        r0.body.act(Action::Allow, 1001, Direction::In);
+        r0.body.act(Action::Allow, 1002, Direction::Out);
+        r0.body.act(Action::Deny, 64, Direction::Out);
+        r0.body.act(Action::Deny, 129, Direction::In);
+        r0.body.act(Action::Hairpin, 32, Direction::Out);
+        tree.expire(t_3);
+
+        let r0c = ApiFullCounter::from(r0.as_ref());
+        assert_eq!(r0c.allow, 4);
+        assert_eq!(r0c.deny, 2);
+        assert_eq!(r0c.hairpin, 1);
+        assert_eq!(r0c.packets.pkts_in, 6);
+        assert_eq!(r0c.packets.pkts_out, 4);
+        assert_eq!(r0c.packets.bytes_in, 1674);
+        assert_eq!(r0c.packets.bytes_out, 1162);
+
+        // Children should be empty on all roots.
+        for el in [r0, r1, r2, r3] {
+            let children = el.body.children.read();
+            assert!(children.is_empty());
+        }
+    }
+
+    #[test]
+    fn root_counters() {
+        todo!()
     }
 }

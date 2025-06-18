@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 pub struct FlowStat<FlowId> {
     pub partner: FlowId,
     pub dir: Direction,
@@ -20,7 +20,7 @@ pub struct FlowStat<FlowId> {
     pub stats: PacketCounter,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PacketCounter {
     pub created_at: u64,
     pub pkts_in: u64,
@@ -29,7 +29,7 @@ pub struct PacketCounter {
     pub bytes_out: u64,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq)]
 pub struct FullCounter {
     pub allow: u64,
     pub deny: u64,
