@@ -221,7 +221,35 @@ impl StatChild {
     fn is_alive(&self) -> bool {
         match self {
             Self::Internal(i) => i.strong_count() != 0,
-            Self::Flow(i) => i.strong_count() != 0,
+            Self::Flow(f) => f.strong_count() != 0,
+        }
+    }
+
+    fn upgrade(&self) -> Option<StrongStatChild> {
+        match self {
+            Self::Internal(i) => i.upgrade().map(StrongStatChild::Internal),
+            Self::Flow(f) => f.upgrade().map(StrongStatChild::Flow),
+        }
+    }
+}
+
+enum StrongStatChild {
+    Internal(Arc<InternalStat>),
+    Flow(Arc<FlowStat>),
+}
+
+impl StrongStatChild {
+    fn global_id(&self) -> StatId {
+        match self {
+            Self::Internal(i) => i.body.stats.id(),
+            Self::Flow(f) => f.shared.stats.id,
+        }
+    }
+
+    fn combine_api(&self, into: &mut ApiFullCounter) {
+        match self {
+            Self::Internal(i) => i.body.stats.combine_api(into),
+            Self::Flow(f) => f.shared.stats.combine_api(&mut into.packets),
         }
     }
 }
@@ -240,6 +268,33 @@ pub struct RootStat {
 impl RootStat {
     fn record_hit(&self, time: Moment) {
         self.last_hit.store(time.raw(), Ordering::Relaxed);
+    }
+
+    fn combined_stats(&self) -> ApiFullCounter {
+        let mut visited = BTreeSet::new();
+
+        let mut scratch = ApiFullCounter::from(&self.body.stats);
+        let mut to_visit = {
+            let children = self.body.children.read();
+            children.clone()
+        };
+
+        while let Some(node) = to_visit.pop() {
+            let Some(inode) = node.upgrade() else { continue };
+            let id = inode.global_id();
+            if !visited.insert(id) {
+                continue;
+            }
+
+            inode.combine_api(&mut scratch);
+
+            if let StrongStatChild::Internal(i) = inode {
+                let children = i.body.children.read();
+                to_visit.extend_from_slice(&children);
+            }
+        }
+
+        scratch
     }
 }
 
@@ -337,6 +392,13 @@ impl PacketCounter {
             Ordering::Relaxed,
         );
     }
+
+    fn combine_api(&self, into: &mut ApiPktCounter) {
+        into.pkts_in += self.pkts_in.load(Ordering::Relaxed);
+        into.bytes_in += self.bytes_in.load(Ordering::Relaxed);
+        into.pkts_out += self.pkts_out.load(Ordering::Relaxed);
+        into.bytes_out += self.bytes_out.load(Ordering::Relaxed);
+    }
 }
 
 impl From<&PacketCounter> for ApiPktCounter {
@@ -379,6 +441,13 @@ impl FullCounter {
             .fetch_add(self.hairpin.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
+    fn combine_api(&self, into: &mut ApiFullCounter) {
+        self.packets.combine_api(&mut into.packets);
+        into.allow += self.allow.load(Ordering::Relaxed);
+        into.deny += self.deny.load(Ordering::Relaxed);
+        into.hairpin += self.hairpin.load(Ordering::Relaxed);
+    }
+
     #[inline]
     fn id(&self) -> StatId {
         self.packets.id
@@ -405,34 +474,6 @@ impl From<&RootStat> for ApiFullCounter {
 impl From<&InternalStat> for ApiFullCounter {
     fn from(val: &InternalStat) -> Self {
         (&val.body.stats).into()
-    }
-}
-
-pub trait FoldStat: Send + Sync {
-    fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>);
-}
-
-impl FoldStat for FlowStat {
-    fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
-        if !visited.insert(self.shared.stats.id) {
-            self.shared.stats.combine(&into.packets);
-        }
-    }
-}
-
-impl FoldStat for InternalStat {
-    fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
-        if !visited.insert(self.body.stats.id()) {
-            self.body.stats.combine(into);
-        }
-    }
-}
-
-impl FoldStat for RootStat {
-    fn fold(&self, into: &FullCounter, visited: &mut BTreeSet<StatId>) {
-        if !visited.insert(self.body.stats.id()) {
-            self.body.stats.combine(into);
-        }
     }
 }
 
@@ -689,6 +730,24 @@ impl StatTree {
         });
     }
 
+    /// Return a snapshot of collated stats for a given root.
+    ///
+    /// This will include the values of all downstream children,
+    /// but may be susceptible to partial reads between individual counters.
+    pub fn root_stat(&self, id: &Uuid) -> Option<ApiFullCounter> {
+        self.roots.get(id).map(|v| RootStat::combined_stats(v))
+    }
+
+    /// Return a snapshot of collated stats for all present roots.
+    ///
+    /// This will include the values of all downstream children,
+    /// but may be susceptible to partial reads between individual counters.
+    pub fn all_root_stats(
+        &self,
+    ) -> impl Iterator<Item = (&Uuid, ApiFullCounter)> {
+        self.roots.iter().map(|(k, v)| (k, v.combined_stats()))
+    }
+
     // TEMP
     pub fn dump(&self) -> String {
         let mut out = String::new();
@@ -868,6 +927,24 @@ mod tests {
         proto_info: [53, 12345],
     };
 
+    const FLOW_OUT_2: InnerFlowId = InnerFlowId {
+        proto: IpProtocol::TCP.0,
+        addrs: AddrPair::V4 {
+            src: Ipv4Addr::from_const([10, 0, 0, 1]),
+            dst: Ipv4Addr::from_const([1, 1, 1, 1]),
+        },
+        proto_info: [23456, 80],
+    };
+
+    const FLOW_IN_2: InnerFlowId = InnerFlowId {
+        proto: IpProtocol::TCP.0,
+        addrs: AddrPair::V4 {
+            dst: Ipv4Addr::from_const([10, 0, 0, 1]),
+            src: Ipv4Addr::from_const([1, 1, 1, 1]),
+        },
+        proto_info: [80, 23456],
+    };
+
     #[test]
     fn flow_stat_deny() {
         // Assert that all (non-terminal) layers are counted as an 'accept'.
@@ -957,6 +1034,7 @@ mod tests {
             )
         };
         f_out.hit(p_sz);
+        assert_eq!(f_out.bases, vec![r0.id, r3.id].into_iter().collect());
 
         let f_in = {
             let mut fb = FlowStatBuilder::new();
@@ -971,6 +1049,7 @@ mod tests {
             )
         };
         f_in.hit(p_sz);
+        assert_eq!(f_in.bases, vec![r0.id, r1.id, r2.id].into_iter().collect());
 
         // These should refer to the same block of packet counters.
         assert!(Arc::ptr_eq(&f_out.shared, &f_in.shared));
@@ -1064,6 +1143,110 @@ mod tests {
 
     #[test]
     fn root_counters() {
-        todo!()
+        let mut tree = StatTree::default();
+
+        let r0 = tree.root(Some(ROOT_0));
+        let r1 = tree.root(Some(ROOT_1));
+        let r2 = tree.root(Some(ROOT_2));
+        let r3 = tree.root(Some(ROOT_3));
+
+        let i0 = tree.new_intermediate(vec![r0.clone().into()]);
+        let i1 = tree.new_intermediate(vec![r1.clone().into()]);
+
+        let f0_out = {
+            let mut fb = FlowStatBuilder::new();
+            fb.push(i0.clone());
+            tree.new_flow(
+                &FLOW_OUT,
+                &FLOW_IN,
+                Direction::Out,
+                fb.terminate(Action::Allow, 72, Direction::Out, true).unwrap(),
+            )
+        };
+        f0_out.hit(72);
+
+        let f0_in = {
+            let mut fb = FlowStatBuilder::new();
+            fb.push(i0.clone());
+            fb.push(i1.clone());
+            fb.push(r2.clone());
+            tree.new_flow(
+                &FLOW_IN,
+                &FLOW_OUT,
+                Direction::In,
+                fb.terminate(Action::Allow, 72, Direction::In, true).unwrap(),
+            )
+        };
+        f0_in.hit(72);
+
+        let f1_out = {
+            let mut fb = FlowStatBuilder::new();
+            fb.push(i0.clone());
+            fb.push(r2.clone());
+            fb.push(r3.clone());
+            tree.new_flow(
+                &FLOW_OUT_2,
+                &FLOW_IN_2,
+                Direction::Out,
+                fb.terminate(Action::Allow, 72, Direction::Out, true).unwrap(),
+            )
+        };
+        f1_out.hit(72);
+
+        let t0 = Moment::now();
+        let t1 = t0 + Duration::from_secs(7);
+
+        f0_out.hit(72);
+        f0_out.hit(72);
+        f0_out.hit(1500);
+        f0_out.hit(1500);
+        f0_out.hit(1500);
+
+        f0_in.hit(72);
+        f0_in.hit(60);
+        f0_in.hit(60);
+        f0_in.hit(60);
+
+        f1_out.hit_at(60, t1);
+        f1_out.hit_at(60, t1);
+        f1_out.hit_at(60, t1);
+
+        drop(i0);
+        drop(i1);
+
+        // Verify that flow stats remain correct as flows/internal nodes
+        // are expired.
+        for i in 0..=15 {
+            let checkpoint = t1 + Duration::from_secs(i);
+            tree.expire(checkpoint);
+
+            let r0_s = tree.root_stat(&ROOT_0).unwrap();
+            assert_eq!(r0_s.allow, 3, "t={i}");
+            assert_eq!(r0_s.packets.pkts_out, 10, "t={i}");
+            assert_eq!(r0_s.packets.bytes_out, 4968, "t={i}");
+            assert_eq!(r0_s.packets.pkts_in, 5, "t={i}");
+            assert_eq!(r0_s.packets.bytes_in, 324, "t={i}");
+
+            let r1_s = tree.root_stat(&ROOT_1).unwrap();
+            assert_eq!(r1_s.allow, 1, "t={i}");
+            assert_eq!(r1_s.packets.pkts_out, 6, "t={i}");
+            assert_eq!(r1_s.packets.bytes_out, 4716, "t={i}");
+            assert_eq!(r1_s.packets.pkts_in, 5, "t={i}");
+            assert_eq!(r1_s.packets.bytes_in, 324, "t={i}");
+
+            let r2_s = tree.root_stat(&ROOT_2).unwrap();
+            assert_eq!(r2_s.allow, 2, "t={i}");
+            assert_eq!(r2_s.packets.pkts_out, 10, "t={i}");
+            assert_eq!(r2_s.packets.bytes_out, 4968, "t={i}");
+            assert_eq!(r2_s.packets.pkts_in, 5, "t={i}");
+            assert_eq!(r2_s.packets.bytes_in, 324, "t={i}");
+
+            let r3_s = tree.root_stat(&ROOT_3).unwrap();
+            assert_eq!(r3_s.allow, 1, "t={i}");
+            assert_eq!(r3_s.packets.pkts_out, 4, "t={i}");
+            assert_eq!(r3_s.packets.bytes_out, 252, "t={i}");
+            assert_eq!(r3_s.packets.pkts_in, 0, "t={i}");
+            assert_eq!(r3_s.packets.bytes_in, 0, "t={i}");
+        }
     }
 }
