@@ -553,8 +553,9 @@ impl StatTree {
             //         -- flow exists for ~2min actively
             // EPOCH 1 -- firewall rule change occurs
             //         -- flow *now* has parents a, c, d
-            //         -- flow closes, but b' and c should receive the packet
-            //            byte/counts split at the epoch 0->1 transition.
+            //         -- flow closes
+            // In the above example, b' and c should receive the packet
+            // byte/counts split at the epoch 0->1 transition.
             return e.get().clone();
         }
 
@@ -897,10 +898,9 @@ impl Eq for ById {}
 
 #[cfg(test)]
 mod tests {
-    use core::time::Duration;
-
     use super::*;
     use crate::api::AddrPair;
+    use core::time::Duration;
     use ingot::ip::IpProtocol;
     use opte_api::Ipv4Addr;
 
