@@ -10,6 +10,7 @@ use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::criterion_group;
 use criterion::criterion_main;
+use opte::api::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte_bench::MeasurementInfo;
 use opte_bench::alloc::*;
@@ -24,6 +25,10 @@ use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
 use opte_bench::packet::ULP_SLOW_PATH;
 use opte_test_utils::*;
+use rand::Rng;
+use rand::SeedableRng;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::hint::black_box;
 
 // Top level runner. Specifies packet classes.
@@ -218,6 +223,148 @@ pub fn test_handle<M: MeasurementInfo + 'static>(
     );
 }
 
+pub fn maps(c: &mut Criterion) {
+    let seed = 0x1de0_2222_3333_4444;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+
+    // ~4mil entries ought to be enough.
+    const ELS_SHIFT: i32 = 22;
+    const MAX_ELS: usize = 1 << ELS_SHIFT;
+    let mut flow_ids: Vec<_> = (0..=MAX_ELS)
+        .map(|_| {
+            let is_tcp = rng.random();
+            InnerFlowId {
+                proto: if is_tcp {
+                    IngotIpProto::TCP.0
+                } else {
+                    IngotIpProto::UDP.0
+                },
+                addrs: opte::api::AddrPair::V4 {
+                    src: Ipv4Addr::from_const(rng.random()),
+                    dst: Ipv4Addr::from_const(rng.random()),
+                },
+                proto_info: rng.random(),
+            }
+        })
+        .collect();
+
+    let to_add = flow_ids.pop().unwrap();
+
+    let mut g = c.benchmark_group("hmaps/insert");
+    for i in 4..=ELS_SHIFT {
+        let n = 1usize << i;
+        g.bench_with_input(BenchmarkId::new("BTreeMap", n), &n, |b, &n| {
+            let map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<BTreeMap<_, _>>();
+            let mmap = RefCell::new(map);
+            b.iter_batched(
+                || {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.remove(&to_add);
+                },
+                |()| {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                },
+                criterion::BatchSize::LargeInput,
+            );
+        });
+
+        // let mut map = flow_ids[..n].iter().copied().map(|a| (a, Arc::new(()))).collect::<hashbrown::HashMap<_, _>>();
+        g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
+            let map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<hashbrown::HashMap<_, _>>();
+            let mmap = RefCell::new(map);
+            b.iter_batched_ref(
+                || {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.remove(&to_add);
+                },
+                |()| {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        g.bench_with_input(BenchmarkId::new("HashMap", n), &n, |b, &n| {
+            let map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<std::collections::HashMap<_, _>>();
+            let mmap = RefCell::new(map);
+            b.iter_batched(
+                || {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.remove(&to_add);
+                },
+                |()| {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                },
+                criterion::BatchSize::LargeInput,
+            );
+        });
+    }
+
+    g.finish();
+
+    let mut g = c.benchmark_group("hmaps/get");
+    for i in 4..=ELS_SHIFT {
+        let n = 1usize << i;
+        g.bench_with_input(BenchmarkId::new("BTreeMap", n), &n, |b, &n| {
+            let mut map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<BTreeMap<_, _>>();
+            map.insert(to_add, Arc::new(()));
+            let mmap = RefCell::new(map);
+            b.iter(|| {
+                let mmap = mmap.borrow_mut();
+                core::hint::black_box(mmap.get(&to_add));
+            });
+        });
+
+        g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
+            let mut map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<hashbrown::HashMap<_, _>>();
+            map.insert(to_add, Arc::new(()));
+            let mmap = RefCell::new(map);
+            b.iter(|| {
+                let mmap = mmap.borrow_mut();
+                core::hint::black_box(mmap.get(&to_add));
+            });
+        });
+
+        g.bench_with_input(BenchmarkId::new("HashMap", n), &n, |b, &n| {
+            let mut map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<std::collections::HashMap<_, _>>();
+            map.insert(to_add, Arc::new(()));
+            let mmap = RefCell::new(map);
+            b.iter(|| {
+                let mmap = mmap.borrow_mut();
+                core::hint::black_box(mmap.get(&to_add));
+            });
+        });
+    }
+}
+
+criterion_group!(micro, maps);
 criterion_group!(wall, parse_and_process);
 criterion_group!(
     name = alloc;
@@ -229,4 +376,4 @@ criterion_group!(
     config = new_crit(BytesAlloced);
     targets = process_only
 );
-criterion_main!(wall, alloc, byte_alloc);
+criterion_main!(wall, alloc, byte_alloc, micro);
