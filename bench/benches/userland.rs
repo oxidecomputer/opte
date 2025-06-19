@@ -273,7 +273,6 @@ pub fn maps(c: &mut Criterion) {
             );
         });
 
-        // let mut map = flow_ids[..n].iter().copied().map(|a| (a, Arc::new(()))).collect::<hashbrown::HashMap<_, _>>();
         g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
@@ -327,10 +326,8 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<BTreeMap<_, _>>();
             map.insert(to_add, Arc::new(()));
-            let mmap = RefCell::new(map);
             b.iter(|| {
-                let mmap = mmap.borrow_mut();
-                core::hint::black_box(mmap.get(&to_add));
+                core::hint::black_box(map.get(&to_add));
             });
         });
 
@@ -341,10 +338,8 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<hashbrown::HashMap<_, _>>();
             map.insert(to_add, Arc::new(()));
-            let mmap = RefCell::new(map);
             b.iter(|| {
-                let mmap = mmap.borrow_mut();
-                core::hint::black_box(mmap.get(&to_add));
+                core::hint::black_box(map.get(&to_add));
             });
         });
 
@@ -355,10 +350,8 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<std::collections::HashMap<_, _>>();
             map.insert(to_add, Arc::new(()));
-            let mmap = RefCell::new(map);
             b.iter(|| {
-                let mmap = mmap.borrow_mut();
-                core::hint::black_box(mmap.get(&to_add));
+                core::hint::black_box(map.get(&to_add));
             });
         });
     }
