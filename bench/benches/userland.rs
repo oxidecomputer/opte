@@ -8,6 +8,7 @@
 
 use criterion::BenchmarkId;
 use criterion::Criterion;
+use criterion::PlotConfiguration;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use opte::api::InnerFlowId;
@@ -27,9 +28,11 @@ use opte_bench::packet::ULP_SLOW_PATH;
 use opte_test_utils::*;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::seq::SliceRandom;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::hint::black_box;
+use std::sync::atomic::AtomicU64;
 
 // Top level runner. Specifies packet classes.
 //
@@ -230,7 +233,7 @@ pub fn maps(c: &mut Criterion) {
     // ~4mil entries ought to be enough.
     const ELS_SHIFT: i32 = 22;
     const MAX_ELS: usize = 1 << ELS_SHIFT;
-    let mut flow_ids: Vec<_> = (0..=MAX_ELS)
+    let flow_ids: Vec<_> = (0..=MAX_ELS)
         .map(|_| {
             let is_tcp = rng.random();
             InnerFlowId {
@@ -248,11 +251,27 @@ pub fn maps(c: &mut Criterion) {
         })
         .collect();
 
-    let to_add = flow_ids.pop().unwrap();
-
-    let mut g = c.benchmark_group("hmaps/insert");
+    // Make sure we have the same random element insert/delete order per test.
+    let mut shuffle_sets = vec![];
     for i in 4..=ELS_SHIFT {
         let n = 1usize << i;
+        let mut set: Vec<_> = flow_ids[..n].iter().copied().collect();
+        set.shuffle(&mut rng);
+        shuffle_sets.push(set);
+    }
+
+    let mut shuffled = flow_ids.clone();
+    shuffled.shuffle(&mut rng);
+
+    let mut g = c.benchmark_group("hmaps/insert");
+    g.plot_config(
+        PlotConfiguration::default()
+            .summary_scale(criterion::AxisScale::Logarithmic),
+    );
+    for i in 4..=ELS_SHIFT {
+        let n = 1usize << i;
+        let add_list = &shuffle_sets[(i - 4) as usize];
+
         g.bench_with_input(BenchmarkId::new("BTreeMap", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
@@ -260,16 +279,24 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<BTreeMap<_, _>>();
             let mmap = RefCell::new(map);
+            let i = AtomicU64::new(0);
+
             b.iter_batched(
                 || {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.remove(&to_add);
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    let last_idx = (raw_idx.wrapping_sub(1) as usize) % n;
+                    mmap.insert(add_list[last_idx], Arc::new(()));
+                    mmap.remove(&add_list[my_idx]);
+                    add_list[my_idx]
                 },
-                |()| {
+                |my_idx| {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                    mmap.insert(core::hint::black_box(my_idx), Arc::new(()));
                 },
-                criterion::BatchSize::LargeInput,
+                criterion::BatchSize::SmallInput,
             );
         });
 
@@ -280,14 +307,22 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<hashbrown::HashMap<_, _>>();
             let mmap = RefCell::new(map);
-            b.iter_batched_ref(
+            let i = AtomicU64::new(0);
+
+            b.iter_batched(
                 || {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.remove(&to_add);
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    let last_idx = (raw_idx.wrapping_sub(1) as usize) % n;
+                    mmap.insert(add_list[last_idx], Arc::new(()));
+                    mmap.remove(&add_list[my_idx]);
+                    add_list[my_idx]
                 },
-                |()| {
+                |my_idx| {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                    mmap.insert(core::hint::black_box(my_idx), Arc::new(()));
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -300,16 +335,24 @@ pub fn maps(c: &mut Criterion) {
                 .map(|a| (a, Arc::new(())))
                 .collect::<std::collections::HashMap<_, _>>();
             let mmap = RefCell::new(map);
+            let i = AtomicU64::new(0);
+
             b.iter_batched(
                 || {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.remove(&to_add);
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    let last_idx = (raw_idx.wrapping_sub(1) as usize) % n;
+                    mmap.insert(add_list[last_idx], Arc::new(()));
+                    mmap.remove(&add_list[my_idx]);
+                    add_list[my_idx]
                 },
-                |()| {
+                |my_idx| {
                     let mut mmap = mmap.borrow_mut();
-                    mmap.insert(core::hint::black_box(to_add), Arc::new(()));
+                    mmap.insert(core::hint::black_box(my_idx), Arc::new(()));
                 },
-                criterion::BatchSize::LargeInput,
+                criterion::BatchSize::SmallInput,
             );
         });
     }
@@ -317,44 +360,82 @@ pub fn maps(c: &mut Criterion) {
     g.finish();
 
     let mut g = c.benchmark_group("hmaps/get");
+    g.plot_config(
+        PlotConfiguration::default()
+            .summary_scale(criterion::AxisScale::Logarithmic),
+    );
     for i in 4..=ELS_SHIFT {
         let n = 1usize << i;
+        let add_list = &shuffle_sets[(i - 4) as usize];
+
         g.bench_with_input(BenchmarkId::new("BTreeMap", n), &n, |b, &n| {
-            let mut map = flow_ids[..n]
+            let map = flow_ids[..n]
                 .iter()
                 .copied()
                 .map(|a| (a, Arc::new(())))
                 .collect::<BTreeMap<_, _>>();
-            map.insert(to_add, Arc::new(()));
-            b.iter(|| {
-                core::hint::black_box(map.get(&to_add));
-            });
+            let i = AtomicU64::new(0);
+
+            b.iter_batched_ref(
+                || {
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    add_list[my_idx]
+                },
+                |my_idx| {
+                    core::hint::black_box(map.get(my_idx));
+                },
+                criterion::BatchSize::SmallInput,
+            );
         });
 
         g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
-            let mut map = flow_ids[..n]
+            let map = flow_ids[..n]
                 .iter()
                 .copied()
                 .map(|a| (a, Arc::new(())))
                 .collect::<hashbrown::HashMap<_, _>>();
-            map.insert(to_add, Arc::new(()));
-            b.iter(|| {
-                core::hint::black_box(map.get(&to_add));
-            });
+            let i = AtomicU64::new(0);
+
+            b.iter_batched_ref(
+                || {
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    add_list[my_idx]
+                },
+                |my_idx| {
+                    core::hint::black_box(map.get(my_idx));
+                },
+                criterion::BatchSize::SmallInput,
+            );
         });
 
         g.bench_with_input(BenchmarkId::new("HashMap", n), &n, |b, &n| {
-            let mut map = flow_ids[..n]
+            let map = flow_ids[..n]
                 .iter()
                 .copied()
                 .map(|a| (a, Arc::new(())))
                 .collect::<std::collections::HashMap<_, _>>();
-            map.insert(to_add, Arc::new(()));
-            b.iter(|| {
-                core::hint::black_box(map.get(&to_add));
-            });
+            let i = AtomicU64::new(0);
+
+            b.iter_batched_ref(
+                || {
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    add_list[my_idx]
+                },
+                |my_idx| {
+                    core::hint::black_box(map.get(my_idx));
+                },
+                criterion::BatchSize::SmallInput,
+            );
         });
     }
+
+    g.finish();
 }
 
 criterion_group!(micro, maps);
