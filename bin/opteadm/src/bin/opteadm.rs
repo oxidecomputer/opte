@@ -46,6 +46,7 @@ use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
@@ -640,6 +641,7 @@ fn main() -> anyhow::Result<()> {
                 filters: filters.into(),
                 action,
                 priority,
+                stat_id: None,
             };
             hdl.add_firewall_rule(&AddFwRuleReq { port_name: port, rule })?;
         }
@@ -775,16 +777,16 @@ fn main() -> anyhow::Result<()> {
         Command::AddRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                AddRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = AddRouterEntryReq { port_name: port, route };
             hdl.add_router_entry(&req)?;
         }
 
         Command::DelRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                DelRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = DelRouterEntryReq { port_name: port, route };
             if let DelRouterEntryResp::NotFound = hdl.del_router_entry(&req)? {
                 anyhow::bail!(
                     "could not delete entry -- no matching rule found"

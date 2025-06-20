@@ -2287,7 +2287,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::add_entry(&dev.port, req.dest, req.target, req.class)
+    router::add_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -2301,7 +2301,7 @@ fn del_router_entry_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::del_entry(&dev.port, req.dest, req.target, req.class)
+    router::del_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -2313,7 +2313,7 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::add_fw_rule(&dev.port, &req)?;
+    firewall::add_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -2326,7 +2326,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::rem_fw_rule(&dev.port, &req)?;
+    firewall::rem_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -2339,7 +2339,7 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::set_fw_rules(&dev.port, &req)?;
+    firewall::set_fw_rules(&dev.port, req)?;
     Ok(NoResp::default())
 }
 

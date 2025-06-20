@@ -72,6 +72,7 @@ pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
 pub use oxide_vpc::api::PhysNet;
+use oxide_vpc::api::Route;
 pub use oxide_vpc::api::RouterClass;
 pub use oxide_vpc::api::RouterTarget;
 pub use oxide_vpc::api::SNat4Cfg;
@@ -372,9 +373,12 @@ pub fn oxide_net_setup2(
     // on same subnet.
     router::add_entry(
         &port,
-        IpCidr::Ip4(cfg.ipv4().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4(cfg.ipv4().vpc_subnet),
+            target: RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
 
@@ -457,7 +461,7 @@ fn set_default_fw_rules(pav: &mut PortAndVps, cfg: &VpcCfg) {
         format!("dir=in action=allow priority=65534 hosts=vni={}", cfg.vni,);
     firewall::set_fw_rules(
         &pav.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: pav.port.name().to_string(),
             rules: vec![
                 vpc_in.parse().unwrap(),

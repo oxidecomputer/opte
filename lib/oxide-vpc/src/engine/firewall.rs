@@ -75,42 +75,33 @@ pub fn setup(
 
 pub fn add_fw_rule(
     port: &Port<VpcNetwork>,
-    req: &AddFwRuleReq,
+    req: AddFwRuleReq,
 ) -> Result<(), OpteError> {
-    let action = match req.rule.action {
-        FirewallAction::Allow => Action::StatefulAllow,
-        FirewallAction::Deny => Action::Deny,
-    };
-
-    let rule = from_fw_rule(req.rule.clone(), action);
-    port.add_rule(FW_LAYER_NAME, req.rule.direction, rule)
+    let dir = req.rule.direction;
+    let rule = from_fw_rule(req.rule);
+    port.add_rule(FW_LAYER_NAME, dir, rule)
 }
 
 pub fn rem_fw_rule(
     port: &Port<VpcNetwork>,
-    req: &RemFwRuleReq,
+    req: RemFwRuleReq,
 ) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 
 pub fn set_fw_rules(
     port: &Port<VpcNetwork>,
-    req: &SetFwRulesReq,
+    req: SetFwRulesReq,
 ) -> Result<(), OpteError> {
     let mut in_rules = vec![];
     let mut out_rules = vec![];
 
-    for fwr in &req.rules {
-        let action = match fwr.action {
-            FirewallAction::Allow => Action::StatefulAllow,
-            FirewallAction::Deny => Action::Deny,
-        };
-
-        let rule = from_fw_rule(fwr.clone(), action);
-        if fwr.direction == Direction::In {
-            in_rules.push(rule);
-        } else {
-            out_rules.push(rule);
+    for fwr in req.rules {
+        let dir = fwr.direction;
+        let rule = from_fw_rule(fwr);
+        match dir {
+            Direction::In => in_rules.push(rule),
+            Direction::Out => out_rules.push(rule),
         }
     }
 
@@ -119,16 +110,23 @@ pub fn set_fw_rules(
 
 pub struct Firewall {}
 
-pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
-    let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
-    let proto_preds = fw_rule.filters.protocol().into_predicates();
-    let port_pred = fw_rule.filters.ports().into_predicate();
+pub fn from_fw_rule(fw_rule: FirewallRule) -> Rule<Finalized> {
+    let FirewallRule { direction, filters, action, priority, stat_id } =
+        fw_rule;
+
+    let action = match action {
+        FirewallAction::Allow => Action::StatefulAllow,
+        FirewallAction::Deny => Action::Deny,
+    };
+    let addr_pred = filters.hosts().into_predicate(direction);
+    let proto_preds = filters.protocol().into_predicates();
+    let port_pred = filters.ports().into_predicate();
 
     if addr_pred.is_none() && proto_preds.is_empty() && port_pred.is_none() {
-        return Rule::match_any(fw_rule.priority, action);
+        return Rule::match_any_with_id(priority, action, stat_id);
     }
 
-    let mut rule = Rule::new(fw_rule.priority, action);
+    let mut rule = Rule::new_with_id(priority, action, stat_id);
 
     rule.add_predicates(proto_preds);
 

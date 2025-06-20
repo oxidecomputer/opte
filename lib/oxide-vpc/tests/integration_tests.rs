@@ -57,6 +57,7 @@ use opte_test_utils as common;
 use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
+use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
 use pcap::*;
@@ -213,7 +214,7 @@ fn port_transition_pause() {
         "action=allow priority=10 dir=in protocol=tcp port=80".parse().unwrap();
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq { port_name: g1.port.name().to_string(), rule: fw_rule },
+        AddFwRuleReq { port_name: g1.port.name().to_string(), rule: fw_rule },
     )
     .unwrap();
     incr!(g1, ["epoch", "firewall.rules.in"]);
@@ -270,11 +271,14 @@ fn port_transition_pause() {
     assert!(matches!(
         router::del_entry(
             &g2.port,
-            IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
-            RouterTarget::VpcSubnet(IpCidr::Ip4(
-                g2_cfg.ipv4_cfg().unwrap().vpc_subnet
-            )),
-            RouterClass::System,
+            Route {
+                dest: IpCidr::Ip4(g2_cfg.ipv4_cfg().unwrap().vpc_subnet),
+                target: RouterTarget::VpcSubnet(IpCidr::Ip4(
+                    g2_cfg.ipv4_cfg().unwrap().vpc_subnet
+                )),
+                class: RouterClass::System,
+                stat_id: None,
+            }
         ),
         Err(OpteError::BadState(_))
     ));
@@ -287,7 +291,7 @@ fn port_transition_pause() {
     // This exercises Port::add_rule().
     let res = firewall::add_fw_rule(
         &g2.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g2.port.name().to_string(),
             rule: fw_rule.clone(),
         },
@@ -295,7 +299,7 @@ fn port_transition_pause() {
     assert!(matches!(res, Err(OpteError::BadState(_))));
     let res = firewall::set_fw_rules(
         &g2.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g2.port.name().to_string(),
             rules: vec![fw_rule],
         },
@@ -332,7 +336,7 @@ fn add_remove_fw_rule() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g1.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -343,7 +347,7 @@ fn add_remove_fw_rule() {
     // Remove the rule just added, by ID.
     firewall::rem_fw_rule(
         &g1.port,
-        &oxide_vpc::api::RemFwRuleReq {
+        oxide_vpc::api::RemFwRuleReq {
             port_name: g1.port.name().to_string(),
             dir: In,
             id: 0,
@@ -496,9 +500,14 @@ fn guest_to_guest_no_route() {
     // Make sure the router is configured to drop all packets.
     router::del_entry(
         &g1.port,
-        IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet)),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
+            target: RouterTarget::VpcSubnet(IpCidr::Ip4(
+                g1_cfg.ipv4().vpc_subnet,
+            )),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
@@ -547,7 +556,7 @@ fn guest_to_guest() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g2.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -716,7 +725,7 @@ fn guest_to_guest_diff_vpc_no_peer() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g2.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -757,9 +766,12 @@ fn guest_to_internet_ipv4() {
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -869,9 +881,12 @@ fn guest_to_internet_ipv6() {
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip6("::/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1049,17 +1064,23 @@ fn multi_external_ip_setup(
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip6("::/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -1068,7 +1089,7 @@ fn multi_external_ip_setup(
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g1.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -1671,17 +1692,23 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
     // Add router entries that allow g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip6("::/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -2565,9 +2592,12 @@ fn outbound_ndp_dropped() {
 
     router::add_entry(
         &g1.port,
-        IpCidr::Ip6(ipv6.vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip6(ipv6.vpc_subnet)),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip6(ipv6.vpc_subnet),
+            target: RouterTarget::VpcSubnet(IpCidr::Ip6(ipv6.vpc_subnet)),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -2575,9 +2605,12 @@ fn outbound_ndp_dropped() {
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip6("::/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip6("::/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["router.rules.out", "epoch"]);
@@ -3078,9 +3111,12 @@ fn uft_lft_invalidation_out() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3097,7 +3133,7 @@ fn uft_lft_invalidation_out() {
     let any_out = "dir=out action=deny priority=65535 protocol=any";
     firewall::set_fw_rules(
         &g1.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g1.port.name().to_string(),
             rules: vec![any_out.parse().unwrap()],
         },
@@ -3168,9 +3204,12 @@ fn uft_lft_invalidation_in() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3221,7 +3260,7 @@ fn uft_lft_invalidation_in() {
     let any_out = "dir=out action=deny priority=65535 protocol=any";
     firewall::set_fw_rules(
         &g1.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g1.port.name().to_string(),
             rules: vec![any_out.parse().unwrap()],
         },
@@ -3486,9 +3525,12 @@ fn tcp_outbound() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3537,7 +3579,7 @@ fn early_tcp_invalidation() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g1.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -3548,9 +3590,12 @@ fn early_tcp_invalidation() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3737,9 +3782,12 @@ fn ephemeral_ip_preferred_over_snat_outbound() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -3829,9 +3877,12 @@ fn tcp_inbound() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4112,9 +4163,12 @@ fn no_panic_on_flow_table_full() {
     // Add router entry that allows g1 to route to internet.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(None),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4164,9 +4218,12 @@ fn intra_subnet_routes_with_custom() {
     let cidr = IpCidr::Ip4("172.30.4.0/22".parse().unwrap());
     router::add_entry(
         &g1.port,
-        cidr,
-        RouterTarget::VpcSubnet(cidr),
-        RouterClass::System,
+        Route {
+            dest: cidr,
+            target: RouterTarget::VpcSubnet(cidr),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4215,8 +4272,16 @@ fn intra_subnet_routes_with_custom() {
 
     // Suppose the user now installs a 'custom' route in the first subnet to
     // drop traffic towards the second subnet. This rule must take priority.
-    router::add_entry(&g1.port, cidr, RouterTarget::Drop, RouterClass::Custom)
-        .unwrap();
+    router::add_entry(
+        &g1.port,
+        Route {
+            dest: cidr,
+            target: RouterTarget::Drop,
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
+    )
+    .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     let mut pkt2_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
@@ -4246,8 +4311,16 @@ fn intra_subnet_routes_with_custom() {
     );
 
     // When the user removes this rule, traffic may flow again to subnet 2.
-    router::del_entry(&g1.port, cidr, RouterTarget::Drop, RouterClass::Custom)
-        .unwrap();
+    router::del_entry(
+        &g1.port,
+        Route {
+            dest: cidr,
+            target: RouterTarget::Drop,
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
+    )
+    .unwrap();
     update!(g1, ["incr:epoch", "decr:router.rules.out"]);
     let mut pkt3_m = gen_icmpv4_echo_req(
         g1_cfg.guest_mac,
@@ -4288,9 +4361,12 @@ fn port_as_router_target() {
     let dst_ip: Ipv4Addr = "192.168.0.1".parse().unwrap();
     router::add_entry(
         &g1.port,
-        cidr,
-        RouterTarget::Ip(g2_cfg.ipv4().private_ip.into()),
-        RouterClass::Custom,
+        Route {
+            dest: cidr,
+            target: RouterTarget::Ip(g2_cfg.ipv4().private_ip.into()),
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4451,9 +4527,12 @@ fn select_eip_conditioned_on_igw() {
     // Add default route.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-        RouterTarget::InternetGateway(Some(default_igw)),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(Some(default_igw)),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4461,33 +4540,45 @@ fn select_eip_conditioned_on_igw() {
     // Add custom inetgw routes.
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("1.1.1.0/24".parse().unwrap()),
-        RouterTarget::InternetGateway(Some(custom_igw0)),
-        RouterClass::Custom,
+        Route {
+            dest: IpCidr::Ip4("1.1.1.0/24".parse().unwrap()),
+            target: RouterTarget::InternetGateway(Some(custom_igw0)),
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("2.2.2.0/24".parse().unwrap()),
-        RouterTarget::InternetGateway(Some(custom_igw1)),
-        RouterClass::Custom,
+        Route {
+            dest: IpCidr::Ip4("2.2.2.0/24".parse().unwrap()),
+            target: RouterTarget::InternetGateway(Some(custom_igw1)),
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("3.3.3.0/24".parse().unwrap()),
-        RouterTarget::InternetGateway(Some(ipless_igw)),
-        RouterClass::Custom,
+        Route {
+            dest: IpCidr::Ip4("3.3.3.0/24".parse().unwrap()),
+            target: RouterTarget::InternetGateway(Some(ipless_igw)),
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
     router::add_entry(
         &g1.port,
-        IpCidr::Ip4("4.4.4.0/24".parse().unwrap()),
-        RouterTarget::InternetGateway(Some(all_ips_igw)),
-        RouterClass::Custom,
+        Route {
+            dest: IpCidr::Ip4("4.4.4.0/24".parse().unwrap()),
+            target: RouterTarget::InternetGateway(Some(all_ips_igw)),
+            class: RouterClass::Custom,
+            stat_id: None,
+        },
     )
     .unwrap();
     incr!(g1, ["epoch", "router.rules.out"]);
@@ -4739,7 +4830,7 @@ fn icmpv6_inner_has_nat_applied() {
     let rule = "dir=in action=allow priority=9 protocol=ICMP6";
     firewall::add_fw_rule(
         &g1.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g1.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
