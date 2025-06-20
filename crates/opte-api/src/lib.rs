@@ -28,6 +28,7 @@ pub mod encap;
 pub mod ip;
 pub mod mac;
 pub mod ndp;
+pub mod stat;
 pub mod tcp;
 pub mod ulp;
 
@@ -38,6 +39,7 @@ pub use encap::*;
 pub use ip::*;
 pub use mac::*;
 pub use ndp::*;
+pub use stat::*;
 pub use tcp::*;
 pub use ulp::*;
 
@@ -51,7 +53,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 37;
+pub const API_VERSION: u64 = 38;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;

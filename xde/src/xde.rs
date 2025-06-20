@@ -63,7 +63,6 @@ use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use ingot::udp::Udp;
-use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
 use opte::api::CmdOk;
@@ -108,6 +107,7 @@ use opte::engine::parse::ValidUlp;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
+use opte::provider::Providers;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -248,7 +248,7 @@ pub struct xde_underlay_port {
 
 struct XdeState {
     management_lock: TokenLock<XdeMgmt>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     vpc_map: Arc<overlay::VpcMappings>,
     v2b: Arc<overlay::Virt2Boundary>,
     devs: ReadOnlyDevMap,
@@ -289,7 +289,8 @@ fn get_xde_state() -> &'static XdeState {
 
 impl XdeState {
     fn new() -> Self {
-        let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
+        let ectx =
+            Arc::new(Providers { log: Box::new(opte::provider::KernelLog) });
         let dev_map = Arc::new(KRwLock::new(DevMap::default()));
         let devs = ReadOnlyDevMap::new(dev_map.clone());
 
@@ -688,6 +689,29 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = remove_cidr_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+
+        // TEMP
+        OpteCmd::DumpFlowStats => {
+            let resp = flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+    }
+}
+
+// TODO: this is just sufficient for a demo. Develop the actual interface.
+#[unsafe(no_mangle)]
+fn flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<oxide_vpc::api::DumpFlowStatsResp, OpteError> {
+    let req: oxide_vpc::api::DumpUftReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    match devs.get_by_name(&req.port_name) {
+        Some(dev) => dev
+            .port
+            .dump_flow_stats()
+            .map(|data| oxide_vpc::api::DumpFlowStatsResp { data }),
+        None => Err(OpteError::PortNotFound(req.port_name)),
     }
 }
 
@@ -2066,7 +2090,7 @@ fn new_port(
     vpc_map: Arc<overlay::VpcMappings>,
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
@@ -2084,10 +2108,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
-    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&mut pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2263,7 +2287,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::add_entry(&dev.port, req.dest, req.target, req.class)
+    router::add_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -2277,7 +2301,7 @@ fn del_router_entry_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::del_entry(&dev.port, req.dest, req.target, req.class)
+    router::del_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -2289,7 +2313,7 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::add_fw_rule(&dev.port, &req)?;
+    firewall::add_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -2302,7 +2326,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::rem_fw_rule(&dev.port, &req)?;
+    firewall::rem_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -2315,7 +2339,7 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::set_fw_rules(&dev.port, &req)?;
+    firewall::set_fw_rules(&dev.port, req)?;
     Ok(NoResp::default())
 }
 

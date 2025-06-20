@@ -17,6 +17,7 @@ use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::Packet;
+use super::port::PortBuilder;
 use super::port::Transforms;
 use super::port::meta::ActionMeta;
 use super::rule;
@@ -28,8 +29,9 @@ use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::ht_probe;
-use crate::ExecCtx;
-use crate::LogLevel;
+use super::stat::InternalStat;
+use super::stat::RootStat;
+use super::stat::StatTree;
 use crate::api::DumpLayerResp;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -39,6 +41,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::ExecCtx;
+use crate::provider::LogLevel;
+use crate::provider::Providers;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -56,6 +61,7 @@ use opte_api::Direction;
 use opte_api::RuleDump;
 use opte_api::RuleId;
 use opte_api::RuleTableEntryDump;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum LayerError {
@@ -157,9 +163,30 @@ pub enum LftError {
 }
 
 #[derive(Clone, Debug)]
+struct LftInEntry {
+    action_desc: ActionDescEntry,
+    stat: Arc<InternalStat>,
+}
+
+impl Display for LftInEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.action_desc)
+    }
+}
+
+impl Dump for LftInEntry {
+    type DumpVal = ActionDescEntryDump;
+
+    fn dump(&self, hits: u64) -> Self::DumpVal {
+        ActionDescEntryDump { hits, summary: self.to_string() }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct LftOutEntry {
     in_flow_pair: InnerFlowId,
     action_desc: ActionDescEntry,
+    stat: Arc<InternalStat>,
 }
 
 impl LftOutEntry {
@@ -185,7 +212,7 @@ impl Dump for LftOutEntry {
 struct LayerFlowTable {
     limit: NonZeroU32,
     count: u32,
-    ft_in: FlowTable<ActionDescEntry>,
+    ft_in: FlowTable<LftInEntry>,
     ft_out: FlowTable<LftOutEntry>,
 }
 
@@ -201,11 +228,15 @@ impl LayerFlowTable {
         action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
+        stat: Arc<InternalStat>,
     ) {
-        // We add unchekced because the limit is now enforced by
+        // We add unchecked because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
-        self.ft_in.add_unchecked(in_flow, action_desc.clone());
-        let out_entry = LftOutEntry { in_flow_pair: in_flow, action_desc };
+        let in_entry =
+            LftInEntry { action_desc: action_desc.clone(), stat: stat.clone() };
+        self.ft_in.add_unchecked(in_flow, in_entry);
+        let out_entry =
+            LftOutEntry { in_flow_pair: in_flow, action_desc, stat };
         self.ft_out.add_unchecked(out_flow, out_entry);
         self.count += 1;
     }
@@ -246,10 +277,12 @@ impl LayerFlowTable {
         match self.ft_in.get(flow) {
             Some(entry) => {
                 entry.hit();
+                let action = entry.state().action_desc.clone();
+                let stat = entry.state().stat.clone();
                 if entry.is_dirty() {
-                    EntryState::Dirty(entry.state().clone())
+                    EntryState::Dirty(action, stat)
                 } else {
-                    EntryState::Clean(entry.state().clone())
+                    EntryState::Clean(action, stat)
                 }
             }
 
@@ -262,10 +295,11 @@ impl LayerFlowTable {
             Some(entry) => {
                 entry.hit();
                 let action = entry.state().action_desc.clone();
+                let stat = entry.state().stat.clone();
                 if entry.is_dirty() {
-                    EntryState::Dirty(action)
+                    EntryState::Dirty(action, stat)
                 } else {
-                    EntryState::Clean(action)
+                    EntryState::Clean(action, stat)
                 }
             }
 
@@ -276,7 +310,7 @@ impl LayerFlowTable {
     fn remove_in(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<Arc<FlowEntry<ActionDescEntry>>> {
+    ) -> Option<Arc<FlowEntry<LftInEntry>>> {
         self.ft_in.remove(flow)
     }
 
@@ -331,14 +365,14 @@ impl LayerFlowTable {
 }
 
 /// The result of a flowtable lookup.
-pub enum EntryState {
+enum EntryState {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
-    Clean(ActionDescEntry),
+    Clean(ActionDescEntry, Arc<InternalStat>),
     /// An existing flow table entry was found, but rule processing must be rerun
     /// to use the original action or invalidate the underlying entry.
-    Dirty(ActionDescEntry),
+    Dirty(ActionDescEntry, Arc<InternalStat>),
 }
 
 /// The default action of a layer.
@@ -348,8 +382,9 @@ pub enum EntryState {
 /// reasonable to open this up to be any [`Action`], if such a use
 /// case were to present itself. For now, we stay conservative, and
 /// supply only what the current consumers need.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub enum DefaultAction {
+    #[default]
     Allow,
     StatefulAllow,
     Deny,
@@ -402,7 +437,7 @@ impl Display for ActionDescEntry {
 ///
 /// This describes the actions a layer's rules can take as well as the
 /// [`DefaultAction`] to take when a rule doesn't match.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LayerActions {
     /// The list of actions shared among the layer's rules. An action
     /// doesn't have to be shared, each rule is free to create its
@@ -414,9 +449,15 @@ pub struct LayerActions {
     /// direction.
     pub default_in: DefaultAction,
 
+    /// The stats ID to attach to the default-in action.
+    pub default_in_stat_id: Option<Uuid>,
+
     /// The default action to take if no rule matches in the outbound
     /// direction.
     pub default_out: DefaultAction,
+
+    /// The stats ID to attach to the default-in action.
+    pub default_out_stat_id: Option<Uuid>,
 }
 
 #[derive(KStatProvider)]
@@ -498,8 +539,10 @@ pub struct Layer {
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
+    default_in_stat: Arc<RootStat>,
     default_out: DefaultAction,
     default_out_hits: u64,
+    default_out_stat: Arc<RootStat>,
     ft: LayerFlowTable,
     ft_cstr: CString,
     rules_in: RuleTable,
@@ -513,15 +556,20 @@ impl Layer {
         self.actions.get(idx).cloned()
     }
 
-    pub fn add_rule(&mut self, dir: Direction, rule: Rule<Finalized>) {
+    pub fn add_rule(
+        &mut self,
+        dir: Direction,
+        rule: Rule<Finalized>,
+        stats: &mut StatTree,
+    ) {
         match dir {
             Direction::Out => {
-                self.rules_out.add(rule);
+                self.rules_out.add(rule, stats);
                 self.stats.vals.out_rules += 1;
             }
 
             Direction::In => {
-                self.rules_in.add(rule);
+                self.rules_in.add(rule, stats);
                 self.stats.vals.in_rules += 1;
             }
         }
@@ -732,18 +780,24 @@ impl Layer {
 
     pub fn new(
         name: &'static str,
-        port: &str,
+        port: &mut PortBuilder,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
-        let port_c = CString::new(port).unwrap();
+        let stats = port.stats_mut();
+        let default_in_stat = stats.root(actions.default_in_stat_id);
+        let default_out_stat = stats.root(actions.default_out_stat_id);
+
+        let port_name = port.name();
+
+        let port_c = CString::new(port_name).unwrap();
         let name_c = CString::new(name).unwrap();
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
         let stats = KStatNamed::new(
             "xde",
-            &format!("{port}_{name}"),
+            &format!("{port_name}_{name}"),
             LayerStats::new(),
         )
         .unwrap();
@@ -754,15 +808,17 @@ impl Layer {
             actions: actions.actions,
             default_in: actions.default_in,
             default_in_hits: 0,
+            default_in_stat,
             default_out: actions.default_out,
             default_out_hits: 0,
+            default_out_stat,
             name,
             name_c,
             port_c,
-            ft: LayerFlowTable::new(port, name, ft_limit),
+            ft: LayerFlowTable::new(port_name, name, ft_limit),
             ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
-            rules_in: RuleTable::new(port, name, Direction::In),
-            rules_out: RuleTable::new(port, name, Direction::Out),
+            rules_in: RuleTable::new(port_name, name, Direction::In),
+            rules_out: RuleTable::new(port_name, name, Direction::Out),
             rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
         }
@@ -784,18 +840,18 @@ impl Layer {
 
     pub(crate) fn process(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         dir: Direction,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
-        use Direction::*;
         let flow_before = *pkt.flow();
         self.layer_process_entry_probe(dir, pkt.flow());
+        pkt.meta_mut().stats.new_layer();
         let res = match dir {
-            Out => self.process_out(ectx, pkt, xforms, ameta),
-            In => self.process_in(ectx, pkt, xforms, ameta),
+            Direction::Out => self.process_out(ectx, pkt, xforms, ameta),
+            Direction::In => self.process_in(ectx, pkt, xforms, ameta),
         };
         self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
@@ -803,7 +859,7 @@ impl Layer {
 
     fn process_in(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -815,22 +871,26 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_in(&flow) {
-            EntryState::Dirty(ActionDescEntry::Desc(action))
+        let (action, stat) = match self.ft.get_in(&flow) {
+            EntryState::Dirty(ActionDescEntry::Desc(action), stat)
                 if action.is_valid() =>
             {
                 self.ft.mark_clean(Direction::In, &flow);
-                Some(ActionDescEntry::Desc(action))
+                (Some(ActionDescEntry::Desc(action)), Some(stat))
             }
-            EntryState::Dirty(_) => {
+            EntryState::Dirty(_, _) => {
                 // NoOps are included in this case as we can't ask the actor whether
                 // it remains valid: the simplest method to do so is to rerun lookup.
                 self.ft.remove_in(&flow);
-                None
+                (None, None)
             }
-            EntryState::Clean(action) => Some(action),
-            EntryState::None => None,
+            EntryState::Clean(action, stat) => (Some(action), Some(stat)),
+            EntryState::None => (None, None),
         };
+
+        if let Some(stat) = stat {
+            pkt.meta_mut().stats.push(stat);
+        }
 
         match action {
             Some(ActionDescEntry::NoOp) => {
@@ -873,7 +933,7 @@ impl Layer {
 
     fn process_in_rules(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -883,14 +943,22 @@ impl Layer {
         self.stats.vals.in_lft_miss += 1;
         let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
 
-        let action = if let Some(rule) = rule {
+        let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
-            rule.action()
+            (rule.rule.action(), rule.stat.clone())
         } else {
             self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
-            self.default_in.into()
+            (self.default_in.into(), self.default_in_stat.clone())
         };
+
+        // No LFT to account for.
+        // TODO: figure out how to have actions push on some IDs
+        // that then belong to the LFT.
+        let mut stat = Some(stat);
+        if !matches!(action, Action::StatefulAllow | Action::Stateful(_)) {
+            pkt.meta_mut().stats.push(stat.take().unwrap());
+        }
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -904,13 +972,18 @@ impl Layer {
                     });
                 }
 
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
+                pkt.meta_mut().stats.push(stat.clone());
+
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
                 // the traffic, and the "bottom" of the layer
                 // represents how the network sees the traffic.
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
-                self.ft.add_pair(desc, *pkt.flow(), flow_out);
+                self.ft.add_pair(desc, *pkt.flow(), flow_out, stat);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -954,7 +1027,12 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(ectx, In, pkt.flow(), &e);
+                        self.record_gen_ht_failure(
+                            ectx.user_ctx,
+                            In,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenHdrTransform {
                             layer: self.name,
                             err: e,
@@ -1014,6 +1092,8 @@ impl Layer {
                     });
                 }
 
+                // TODO: how on earth are we plumbing StatTree into here??
+
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
@@ -1027,7 +1107,12 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(ectx, In, pkt.flow(), &e);
+                        self.record_gen_desc_failure(
+                            ectx.user_ctx,
+                            In,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenDesc(e));
                     }
                 };
@@ -1051,6 +1136,11 @@ impl Layer {
                     }
                 }
 
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
+                pkt.meta_mut().stats.push(stat.clone());
+
                 // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
                 // (outbound) of layer represents how the client sees
@@ -1063,6 +1153,7 @@ impl Layer {
                     ActionDescEntry::Desc(desc),
                     flow_before,
                     flow_out,
+                    stat,
                 );
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
@@ -1090,7 +1181,7 @@ impl Layer {
 
     fn process_out(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1102,22 +1193,26 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_out(&flow) {
-            EntryState::Dirty(ActionDescEntry::Desc(action))
+        let (action, stat) = match self.ft.get_out(&flow) {
+            EntryState::Dirty(ActionDescEntry::Desc(action), stat)
                 if action.is_valid() =>
             {
                 self.ft.mark_clean(Direction::Out, &flow);
-                Some(ActionDescEntry::Desc(action))
+                (Some(ActionDescEntry::Desc(action)), Some(stat))
             }
-            EntryState::Dirty(_) => {
+            EntryState::Dirty(_, _) => {
                 // NoOps are included in this case as we can't ask the actor whether
                 // it remains valid: the simplest method to do so is to rerun lookup.
                 self.ft.remove_out(&flow);
-                None
+                (None, None)
             }
-            EntryState::Clean(action) => Some(action),
-            EntryState::None => None,
+            EntryState::Clean(action, stat) => (Some(action), Some(stat)),
+            EntryState::None => (None, None),
         };
+
+        if let Some(stat) = stat {
+            pkt.meta_mut().stats.push(stat);
+        }
 
         match action {
             Some(ActionDescEntry::NoOp) => {
@@ -1160,7 +1255,7 @@ impl Layer {
 
     fn process_out_rules(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1170,14 +1265,22 @@ impl Layer {
         self.stats.vals.out_lft_miss += 1;
         let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
 
-        let action = if let Some(rule) = rule {
+        let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
-            rule.action()
+            (rule.rule.action(), rule.stat.clone())
         } else {
             self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
-            self.default_out.into()
+            (self.default_out.into(), self.default_out_stat.clone())
         };
+
+        // No LFT to account for.
+        // TODO: figure out how to have actions push on some IDs
+        // that then belong to the LFT.
+        let mut stat = Some(stat);
+        if !matches!(action, Action::StatefulAllow | Action::Stateful(_)) {
+            pkt.meta_mut().stats.push(stat.take().unwrap());
+        }
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -1191,6 +1294,11 @@ impl Layer {
                     });
                 }
 
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
+                pkt.meta_mut().stats.push(stat.clone());
+
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
                 // (outbound) of layer represents how the client sees
@@ -1199,7 +1307,12 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_in = pkt.flow().mirror();
-                self.ft.add_pair(ActionDescEntry::NoOp, flow_in, *pkt.flow());
+                self.ft.add_pair(
+                    ActionDescEntry::NoOp,
+                    flow_in,
+                    *pkt.flow(),
+                    stat,
+                );
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -1243,7 +1356,12 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_ht_failure(ectx, Out, pkt.flow(), &e);
+                        self.record_gen_ht_failure(
+                            ectx.user_ctx,
+                            Out,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenHdrTransform {
                             layer: self.name,
                             err: e,
@@ -1303,6 +1421,11 @@ impl Layer {
                     });
                 }
 
+                let stat = ectx
+                    .stats
+                    .new_intermediate(vec![stat.take().unwrap().into()]);
+                pkt.meta_mut().stats.push(stat.clone());
+
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
@@ -1316,7 +1439,12 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(ectx, Out, pkt.flow(), &e);
+                        self.record_gen_desc_failure(
+                            ectx.user_ctx,
+                            Out,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenDesc(e));
                     }
                 };
@@ -1353,6 +1481,7 @@ impl Layer {
                     ActionDescEntry::Desc(desc),
                     flow_in,
                     flow_before,
+                    stat,
                 );
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
@@ -1380,7 +1509,7 @@ impl Layer {
 
     fn record_gen_desc_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenDescError,
@@ -1397,7 +1526,7 @@ impl Layer {
 
     fn record_gen_ht_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenHtError,
@@ -1485,9 +1614,10 @@ impl Layer {
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
         self.ft.clear();
-        self.set_rules_core(in_rules, out_rules);
+        self.set_rules_core(in_rules, out_rules, stats);
     }
 
     /// Set all rules at once without clearing the flow table.
@@ -1498,18 +1628,20 @@ impl Layer {
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
         self.ft.mark_dirty();
-        self.set_rules_core(in_rules, out_rules);
+        self.set_rules_core(in_rules, out_rules, stats);
     }
 
     fn set_rules_core(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
-        self.rules_in.set_rules(in_rules);
-        self.rules_out.set_rules(out_rules);
+        self.rules_in.set_rules(in_rules, stats);
+        self.rules_out.set_rules(out_rules, stats);
         self.stats.vals.set_rules_called += 1;
         self.stats.vals.in_rules.set(self.rules_in.num_rules() as u64);
         self.stats.vals.out_rules.set(self.rules_out.num_rules() as u64);
@@ -1525,6 +1657,7 @@ struct RuleTableEntry {
     id: RuleId,
     hits: u64,
     rule: Rule<rule::Finalized>,
+    stat: Arc<RootStat>,
 }
 
 impl From<&RuleTableEntry> for RuleTableEntryDump {
@@ -1554,15 +1687,18 @@ pub enum RuleRemoveErr {
 }
 
 impl RuleTable {
-    fn add(&mut self, rule: Rule<rule::Finalized>) {
+    fn add(&mut self, rule: Rule<rule::Finalized>, stats: &mut StatTree) {
+        let stat = stats.root(rule.stat_id().copied());
         match self.find_pos(&rule) {
             RulePlace::End => {
-                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0, rule, stat };
                 self.rules.push(rte);
             }
 
             RulePlace::Insert(idx) => {
-                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0, rule, stat };
                 self.rules.insert(idx, rte);
             }
         }
@@ -1582,7 +1718,7 @@ impl RuleTable {
         ifid: &InnerFlowId,
         pmeta: &MblkPacketData,
         ameta: &ActionMeta,
-    ) -> Option<&Rule<rule::Finalized>> {
+    ) -> Option<&RuleTableEntry> {
         for rte in self.rules.iter_mut() {
             if rte.rule.is_match(pmeta, ameta) {
                 rte.hits += 1;
@@ -1593,7 +1729,7 @@ impl RuleTable {
                     ifid,
                     &rte.rule,
                 );
-                return Some(&rte.rule);
+                return Some(rte);
             }
         }
 
@@ -1731,10 +1867,14 @@ impl RuleTable {
         }
     }
 
-    pub fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
+    pub fn set_rules(
+        &mut self,
+        new_rules: Vec<Rule<rule::Finalized>>,
+        stats: &mut StatTree,
+    ) {
         self.rules.clear();
         for r in new_rules {
-            self.add(r);
+            self.add(r, stats);
         }
     }
 }
@@ -1818,6 +1958,7 @@ mod test {
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
 
+        let mut stats = StatTree::default();
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);
         let mut rule = Rule::new(
             1,
@@ -1828,7 +1969,7 @@ mod test {
             Ipv4AddrMatch::Prefix(cidr),
         ]));
 
-        rule_table.add(rule.finalize());
+        rule_table.add(rule.finalize(), &mut stats);
 
         let mut test_pkt = MsgBlk::new_ethernet_pkt((
             Ethernet { ethertype: Ethertype::IPV4, ..Default::default() },

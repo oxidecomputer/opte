@@ -19,6 +19,7 @@ use opte::engine::layer::Layer;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use opte::engine::stat::StatTree;
 use smoltcp::wire::Icmpv6Message;
 
 // Add support for ICMPv6:
@@ -38,6 +39,7 @@ pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv6Cfg,
+    stats: &mut StatTree,
 ) -> Result<(), OpteError> {
     let dst_ip = Ipv6Addr::from_eui64(&cfg.gateway_mac);
     let hairpins = [
@@ -87,7 +89,7 @@ pub fn setup(
     hairpins.into_iter().enumerate().for_each(|(i, action)| {
         let priority = u16::try_from(i + 1).unwrap();
         let rule = Rule::new(priority, action);
-        layer.add_rule(Direction::Out, rule.finalize());
+        layer.add_rule(Direction::Out, rule.finalize(), stats);
     });
 
     // Filter any uncaught in/out-bound NDP traffic.
@@ -99,11 +101,11 @@ pub fn setup(
 
     let mut ndp_filter = Rule::new(next_out_prio, Action::Deny);
     ndp_filter.add_predicate(pred);
-    layer.add_rule(Direction::Out, ndp_filter.finalize());
+    layer.add_rule(Direction::Out, ndp_filter.finalize(), stats);
 
     let mut ndp_filter = Rule::new(1, Action::Deny);
     ndp_filter.add_predicate(in_pred);
-    layer.add_rule(Direction::In, ndp_filter.finalize());
+    layer.add_rule(Direction::In, ndp_filter.finalize(), stats);
 
     Ok(())
 }

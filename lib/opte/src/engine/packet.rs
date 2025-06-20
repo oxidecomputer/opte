@@ -34,6 +34,7 @@ use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
+use super::stat::FlowStatBuilder;
 pub use crate::api::AddrPair;
 pub use crate::api::FLOW_ID_DEFAULT;
 use crate::api::IcmpInfo;
@@ -460,6 +461,7 @@ pub struct PacketData<T: Read + Pullup> {
     pub(crate) headers: OpteMeta<T::Chunk>,
     initial_lens: Option<Box<InitialLayerLens>>,
     body: PktBodyWalker<T>,
+    pub(crate) stats: FlowStatBuilder,
 }
 
 impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
@@ -781,7 +783,12 @@ where
             .into(),
         );
         let body = PktBodyWalker::new(last_chunk, data);
-        let meta = Box::new(PacketData { headers, initial_lens, body });
+        let meta = Box::new(PacketData {
+            headers,
+            initial_lens,
+            body,
+            stats: FlowStatBuilder::new(),
+        });
 
         Packet {
             state: FullParsed {

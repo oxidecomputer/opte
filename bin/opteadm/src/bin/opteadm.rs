@@ -32,6 +32,7 @@ use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpFlowStatsResp;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
@@ -45,6 +46,7 @@ use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
@@ -275,6 +277,13 @@ enum Command {
         /// inbound or outbound traffic.
         #[arg(long = "dir")]
         direction: Option<Direction>,
+    },
+
+    /// XXX TEMP
+    DumpFlowStats {
+        /// The OPTE port to read...
+        #[arg(short)]
+        port: String,
     },
 }
 
@@ -632,6 +641,7 @@ fn main() -> anyhow::Result<()> {
                 filters: filters.into(),
                 action,
                 priority,
+                stat_id: None,
             };
             hdl.add_firewall_rule(&AddFwRuleReq { port_name: port, rule })?;
         }
@@ -767,16 +777,16 @@ fn main() -> anyhow::Result<()> {
         Command::AddRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                AddRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = AddRouterEntryReq { port_name: port, route };
             hdl.add_router_entry(&req)?;
         }
 
         Command::DelRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                DelRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = DelRouterEntryReq { port_name: port, route };
             if let DelRouterEntryResp::NotFound = hdl.del_router_entry(&req)? {
                 anyhow::bail!(
                     "could not delete entry -- no matching rule found"
@@ -858,6 +868,12 @@ fn main() -> anyhow::Result<()> {
                         });
                 })?;
             }
+        }
+
+        // XXX TEMP
+        Command::DumpFlowStats { port } => {
+            let DumpFlowStatsResp { data } = hdl.dump_flowstats(&port)?;
+            println!("{data}");
         }
     }
 
