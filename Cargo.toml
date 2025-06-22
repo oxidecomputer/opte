@@ -88,5 +88,3 @@ lto = "thin"
 [profile.release-lto]
 inherits = "release"
 lto = true
-codegen-units = 1
-
