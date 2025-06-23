@@ -9,8 +9,113 @@
 //! An illumos kernel driver that implements the mac provider
 //! interface, allowing one to run network implementations written in
 //! the OPTE framework.
-
-//#![allow(clippy::arc_with_non_send_sync)]
+//!
+//! The XDE driver registers a single minor as a central control device.
+//! Ports are created and administrated through ioctls made on this device,
+//! referencing the target port by name,
+//!
+//! ## Locking Theory Statement
+//! Locks in XDE are managed quite delicately, given that we have a central
+//! set of ports which all need to be accessed from various contexts.
+//! Practically, this means that we can be called into at various priorities,
+//! varying degrees of preemptability, and with or without affinity to a given
+//! CPU core:
+//!  * The datapath. Packets can arrive in XDE from several contexts, at which
+//!    point we're responsible for determining which port(s) are responsible
+//!    for processing a packet:
+//!     1. Packet transmit.
+//!       - Occurs from an arbitrary kthread (viona_tx, or IP stack of a zone).
+//!       - The port responsible for packet processing is well-known, and
+//!         is provided as the argument for `xde_mc_tx`.
+//!       - If any processed packet has an outer IPV6 destination belonging to
+//!         this system, then we perform loopback processing here rather than
+//!         going through MAC. This requires that we lookup a matching port, as
+//!         in packet receive.
+//!     2. Packet receive.
+//!       - Occurs from various places tied to the Rx queue that a packet arrived
+//!         on. This can be its interrupt context, its poll thread, a softring
+//!         worker, or one of its fanout threads. These are all bound to a CPU,
+//!         but we do not know *which*. They can generally assumed to be separate
+//!         CPUs on gimlet etc., but may overlap on machines with few cores.
+//!       - *May* occur from an arbitrary kthread via MAC loopback, but this is
+//!         not a pathway expected in the product. I.e., we should handle this
+//!         case *soundly* but not necessarily quickly.
+//!       - Packets may arrive for any arbitrary combination of ports. For each
+//!         packet, we must lookup a matching `XdeDev` based on its Geneve VNI
+//!         and inner MAC address using a `DevMap`.
+//!  * Administration ioctls (port add/delete, update of port rules).
+//!  * Cleanup tasks via `ddi_periodic`. Various entries in individual ports
+//!    and in XDE itself have a finite lifetime, and for these we need to walk
+//!    the set of *all ports*.
+//!
+//! XDE works within this context by maintaining a central canonical `DevMap`
+//! within `XdeState` (the DDI private info struct), and providing datapath
+//! entrypoints with copies derived from it. Most ioctls (and the cleanup task)
+//! use read access to the ground-truth `DevMap`, and those which perform
+//! structural/administrative changes (port removal/addition, underlay) use a
+//! `TokenLock` to control write access.
+//!
+//! Once we have a port, things become fairly simple. Today, each port has a
+//! central RWLock -- reads/writes are only held for the duration of packet
+//! processing, or as long as is required to insert new rules.
+//!
+//! ### `DevMap` views
+//! Ideally, we want the above interactions to have minimal impact on one another
+//! (e.g., insertion of a port should not lock out all use of the datapath).
+//! For this reason, we provide the datapath entrypoints with read-only shared
+//! copies of the central `DevMap`.
+//!  * For Rx entrypoints, we allocate a `Vec<KMutex<PerEntryState>>`. Each CPU
+//!    on the system has its own slot within this `Vec`, such that there should
+//!    never be lock contention unless a port is being added/removed. The CPU ID
+//!    is then used as an index into this table, and the lock is held until all
+//!    packets are delivered (as all packet deliveries require a live `XdeDev`).
+//!  * For Tx entrypoints, each `XdeDev` holds an RWLock around its copy of the
+//!    `DevMap`. When needed for delivery, the Rx pathway acquires the read lock.
+//!    We prefer an RwLock here over a Mutex[] given that we can be called from
+//!    multiple threads, and our callers are not expected to bound to a given CPU.
+//!    Most packet deliveries should go via the underlay.
+//!
+//! Holding the lock in both cases (rather than cloning out the `Arc`) has an
+//! inherent risk associated, but this is necessary to ensure that no Rx/Tx
+//! contexts will attempt to send a packet to a port which has been (or is being!)
+//! removed. Holding a read/lock on the `DevMap` in use ensures that any found
+//! port remains alive until any in-progress packet processing is complete.
+//!
+//! In the Rx case, loopback delivery or MAC->CPU oversubscription present some
+//! risk of contention. These are not expected paths in the product, but using
+//! them does not impact correctness.
+//!
+//! The remaining locking risks are double-locking a given Rx Mutex by the same
+//! thread, and re-entrant reads on a Tx RwLock without readers-starve-writers
+//! configured. The first such case results in a panic, but can only happen if
+//! we transit the NIC's Rx path twice in the same stack (i.e. Rx on NIC ->
+//! mac_rx on the OPTE port -> ... -> loopback delivery to underlay device).
+//! This should be impossible, given that any packet sent upstack by XDE must
+//! have a MAC address belonging to the OPTE port.
+//!
+//! The second exposes us to a deadlock if the ordering `read[xde_mc_tx] ->
+//! write[ioctl] -> read[xde_mc_tx]` occurs on one lock -- the latter read
+//! acquisition will block indefinitely. This is a possibility we need to
+//! consciously work around. Hairpin exchanges (e.g., ARP -> ICMP ping, DHCP)
+//! can lead to fairly deep stacks of the form `(ip) -> xde_mc_tx -> (ip) ->
+//! xde_mc_tx -> ...` when used with zones (this is not an issue with viona,
+//! which returns once packets are communicated to the guest). Thus, we *must*
+//! drop the read before delivering any hairpin packets.
+//!
+//! ### `TokenLock` and `DevMap` updates
+//! The `TokenLock` primitive provides us with logical mutual exclusion around
+//! the underlay and the ability to modify the canonical `DevMap` -- without
+//! holding a `KMutex`. Management operations made by OPTE *will* upcall -- we
+//! must resolve link names to IDs, and add/remove link information from DLS.
+//! Doing so makes an ioctl thread vulnerable to receiving signals, so other
+//! threads trying to take the management lock must be able to take, e.g.,
+//! a SIGSTOP.
+//!
+//! Whenever the central `DevMap` is modified, we iterate through each reachable
+//! `XdeDev` and underlay port, and for every instance of `PerEntryState` held
+//! (i.e., the cloned `DevMap`) we write()/lock() that entry, replace it with the
+//! new contents, and drop the lock. This ensures that port removal cannot fully
+//! proceed until the port is no longer usable from any Tx/Rx context.
 
 use crate::dev_map::DevMap;
 use crate::dev_map::FastKey;
@@ -360,10 +465,9 @@ pub struct XdeDev {
     // and reinsertion.
     routes: RouteCache,
 
-    // Each port has its own copy of XDE_DEVS.
-    // This is kept under an RwLock because we need to handle nested
-    // acquisition by the same thread (local zone delivery, zone DHCP
-    // handling) which will happily call back here mid `mac_rx`.
+    // Each port has its own copy of the `DevMap` held by `XdeState`.
+    // This is kept under an RwLock because we need to deliver
+    // from potentially one or more threads unbound to a particular CPU.
     port_map: KRwLock<PerEntryState>,
 }
 
@@ -382,8 +486,25 @@ impl XdeDev {
 unsafe impl Send for XdeDev {}
 unsafe impl Sync for XdeDev {}
 
+#[derive(Clone)]
 struct PerEntryState {
     devs: Arc<DevMap>,
+    // Sized such that (size_of(KMutex<PerEntryState>) % 64) == 0.
+    _pad: [u8; 48],
+}
+
+const PER_ENTRY_STATE_CACHE_SIZED: () =
+    if (size_of::<KMutex<PerEntryState>>() % 64) == 0 {
+    } else {
+        panic!("PerEntryState must be cache-line-sized when locked.")
+    };
+
+impl Default for PerEntryState {
+    #[allow(clippy::let_unit_value)]
+    fn default() -> Self {
+        _ = PER_ENTRY_STATE_CACHE_SIZED;
+        Self { devs: Arc::new(DevMap::new()), _pad: [0u8; 48] }
+    }
 }
 
 #[repr(C)]
@@ -840,7 +961,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2,
         underlay_capab,
         routes: RouteCache::default(),
-        port_map: KRwLock::new(PerEntryState { devs: Arc::new(DevMap::new()) }),
+        port_map: KRwLock::new(PerEntryState::default()),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -1272,8 +1393,7 @@ fn create_underlay_port(
     let cpus = ncpus();
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map
-            .push(KMutex::new(PerEntryState { devs: DevMap::new().into() }));
+        ports_map.push(KMutex::new(PerEntryState::default()));
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -1790,19 +1910,36 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     };
 
+    let mut hairpin_chain = MsgBlkChain::empty();
     let mut tx_postbox = TxPostbox::new();
 
     // We don't need to read-lock the port map unless we have local
     // delivery to perform.
+    //
+    // TODO: really think this one through. This might expose us to the
+    // risk of double read-locking at the same time as the tokenlock
+    // wants to make some globally mutable operation happen.
+    //
+    // Maybe we should clone out the `DevMap` at this instant.
     let mut entry_state = None;
 
     while let Some(pkt) = chain.pop_front() {
-        xde_mc_tx_one(src_dev, pkt, &mut tx_postbox, &mut entry_state);
+        xde_mc_tx_one(
+            src_dev,
+            pkt,
+            &mut tx_postbox,
+            &mut entry_state,
+            &mut hairpin_chain,
+        );
     }
 
     if let Some(entry_state) = entry_state {
         entry_state.devs.deliver_all(tx_postbox.postbox());
     }
+
+    // `entry_state` has been moved, making it safe to deliver hairpin
+    // packets (which may cause us to re-enter XDE in the same stack).
+    src_dev.deliver(hairpin_chain);
 
     if let Some(u_chain) = tx_postbox.drain_underlay(0) {
         src_dev.u1.stream.stream.tx_drop_on_no_desc(
@@ -1829,6 +1966,7 @@ fn xde_mc_tx_one<'a>(
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
     entry_state: &mut Option<KRwLockReadGuard<'a, PerEntryState>>,
+    hairpin_chain: &mut MsgBlkChain,
 ) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
@@ -2030,9 +2168,11 @@ fn xde_mc_tx_one<'a>(
         Ok(ProcessResult::Drop { .. }) => {}
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            // We already know the dest port, and there is limited value in
-            // trying to batch up ARP/ICMP replies.
-            src_dev.deliver(hpkt);
+            // From the theory statement, if we have a packet chain
+            // from above which contains a mixture of hairpin and local
+            // deliveries (`guest_loopback`) we can only deliver hairpin
+            // packets once `entry_state` is explicitly dropped.
+            hairpin_chain.append(hpkt);
         }
 
         Err(_) => {}
