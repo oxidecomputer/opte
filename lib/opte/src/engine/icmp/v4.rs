@@ -42,13 +42,12 @@ impl HairpinAction for IcmpEchoReply {
                 self.echo_dst_ip,
             )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::ICMP)]),
+            Predicate::IcmpMsgType(vec![
+                MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
+            ]),
         ];
 
-        let data_preds = vec![DataPredicate::IcmpMsgType(
-            MessageType::from(wire::Icmpv4Message::EchoRequest).into(),
-        )];
-
-        (hdr_preds, data_preds)
+        (hdr_preds, vec![])
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {

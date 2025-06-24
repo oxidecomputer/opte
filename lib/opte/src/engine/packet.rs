@@ -18,6 +18,7 @@ use super::headers::EncapPush;
 use super::headers::IpPush;
 use super::headers::SizeHoldingEncap;
 use super::headers::ValidEncapMeta;
+use super::icmp::QueryEcho;
 use super::ip::L3;
 use super::ip::L3Repr;
 use super::ip::v4::Ipv4Packet;
@@ -35,7 +36,9 @@ use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 pub use crate::api::AddrPair;
 pub use crate::api::FLOW_ID_DEFAULT;
+use crate::api::IcmpInfo;
 pub use crate::api::InnerFlowId;
+use crate::api::PortInfo;
 use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
@@ -648,21 +651,31 @@ impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
             None => (255, FLOW_ID_DEFAULT.addrs),
         };
 
-        let (src_port, dst_port) = meta
-            .inner_ulp()
-            .map(|ulp| {
-                (
-                    ulp.true_src_port()
-                        .or_else(|| ulp.pseudo_port())
-                        .unwrap_or(0),
-                    ulp.true_dst_port()
-                        .or_else(|| ulp.pseudo_port())
-                        .unwrap_or(0),
-                )
-            })
-            .unwrap_or((0, 0));
+        let proto_info = match meta.inner_ulp() {
+            Some(Ulp::Tcp(t)) => {
+                PortInfo { src_port: t.source(), dst_port: t.destination() }
+                    .into()
+            }
+            Some(Ulp::Udp(u)) => {
+                PortInfo { src_port: u.source(), dst_port: u.destination() }
+                    .into()
+            }
+            Some(Ulp::IcmpV4(v4)) => IcmpInfo {
+                ty: v4.ty().0,
+                code: v4.code(),
+                id: v4.echo_id().unwrap_or_default(),
+            }
+            .into(),
+            Some(Ulp::IcmpV6(v6)) => IcmpInfo {
+                ty: v6.ty().0,
+                code: v6.code(),
+                id: v6.echo_id().unwrap_or_default(),
+            }
+            .into(),
+            _ => Default::default(),
+        };
 
-        InnerFlowId { proto, addrs, src_port, dst_port }
+        InnerFlowId { proto, addrs, proto_info }
     }
 }
 
