@@ -7,6 +7,7 @@
 use crate::ip;
 use crate::sys;
 use crate::xde::DropRef;
+use crate::xde::UnderlayIndex;
 use crate::xde::XdeDev;
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
@@ -268,7 +269,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
 #[unsafe(no_mangle)]
-fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, u8> {
+fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -284,7 +285,7 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, u8> {
         let xmit_hint = l4_hash.unwrap_or(0);
         let mut generation_op = 0u32;
 
-        let mut underlay_idx = 0;
+        let mut underlay_idx = UnderlayIndex::U1;
 
         // Step (1): Lookup the IRE for the destination. This is going
         // to return one of the default gateway entries.
@@ -407,7 +408,7 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, u8> {
         // Switch to the 2nd underlay device if we determine the source mac
         // belongs to that device.
         if src == ustate.u2.mac {
-            underlay_idx = 1;
+            underlay_idx = UnderlayIndex::U2;
         }
 
         let src = EtherAddr::from(src);
@@ -615,7 +616,7 @@ pub struct RouteKey {
 pub struct CachedRoute {
     pub src: EtherAddr,
     pub dst: EtherAddr,
-    pub underlay_idx: u8,
+    pub underlay_idx: UnderlayIndex,
     pub timestamp: Moment,
 }
 
@@ -643,7 +644,7 @@ impl From<CachedRoute> for Route {
 pub struct Route {
     pub src: EtherAddr,
     pub dst: EtherAddr,
-    pub underlay_idx: u8,
+    pub underlay_idx: UnderlayIndex,
 }
 
 impl Route {
@@ -656,7 +657,7 @@ impl Route {
         }
     }
 
-    fn zero_addr(underlay_idx: u8) -> Route {
+    fn zero_addr(underlay_idx: UnderlayIndex) -> Route {
         Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_idx }
     }
 }

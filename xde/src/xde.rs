@@ -14,7 +14,7 @@
 //! Ports are created and administrated through ioctls made on this device,
 //! referencing the target port by name,
 //!
-//! ## Locking Theory Statement
+//! ## Locking Constraints
 //! Locks in XDE are managed quite delicately, given that we have a central
 //! set of ports which all need to be accessed from various contexts.
 //! Practically, this means that we can be called into at various priorities,
@@ -112,14 +112,14 @@
 //! a SIGSTOP.
 //!
 //! Whenever the central `DevMap` is modified, we iterate through each reachable
-//! `XdeDev` and underlay port, and for every instance of `PerEntryState` held
-//! (i.e., the cloned `DevMap`) we write()/lock() that entry, replace it with the
-//! new contents, and drop the lock. This ensures that port removal cannot fully
-//! proceed until the port is no longer usable from any Tx/Rx context.
+//! `XdeDev` and underlay port, and for every instance of the cloned `DevMap` we
+//! write()/lock() that entry, replace it with the new contents, and drop the
+//! lock. This ensures that port removal cannot fully proceed until the port is
+//! no longer usable from any Tx/Rx context.
 
 use crate::dev_map::DevMap;
-use crate::dev_map::FastKey;
 use crate::dev_map::ReadOnlyDevMap;
+use crate::dev_map::VniMac;
 use crate::dls;
 use crate::dls::DlsStream;
 use crate::dls::LinkId;
@@ -133,6 +133,7 @@ use crate::mac::MacSiphon;
 use crate::mac::MacTxFlags;
 use crate::mac::OffloadInfo;
 use crate::mac::TcpLsoFlags;
+use crate::mac::TxHint;
 use crate::mac::lso_basic_tcp_ipv4_t;
 use crate::mac::lso_basic_tcp_ipv6_t;
 use crate::mac::mac_capab_cso_t;
@@ -159,7 +160,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
-use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::ptr::addr_of;
@@ -468,7 +468,7 @@ pub struct XdeDev {
     // Each port has its own copy of the `DevMap` held by `XdeState`.
     // This is kept under an RwLock because we need to deliver
     // from potentially one or more threads unbound to a particular CPU.
-    port_map: KRwLock<PerEntryState>,
+    port_map: KRwLock<Arc<DevMap>>,
 }
 
 impl XdeDev {
@@ -486,31 +486,41 @@ impl XdeDev {
 unsafe impl Send for XdeDev {}
 unsafe impl Sync for XdeDev {}
 
-#[derive(Clone)]
+/// Index to one of the two underlay devices.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u8)]
+pub enum UnderlayIndex {
+    U1 = 0,
+    U2 = 1,
+}
+
+/// Padded `Arc<DevMap>`.
+///
+/// When retrieving a `DevMap` from an `UnderlayDev`, the per-CPU slots are
+/// stored as a contiguous block. We want to be sure that both the mutex and
+/// contained data have no synchronisation with another CPU (save for
+/// infrequent port adds/removals from an ioctl).
+#[repr(C)]
 struct PerEntryState {
-    devs: Arc<DevMap>,
-    // Sized such that (size_of(KMutex<PerEntryState>) % 64) == 0.
+    devs: KMutex<Arc<DevMap>>,
     _pad: [u8; 48],
 }
 
-const PER_ENTRY_STATE_CACHE_SIZED: () =
-    if (size_of::<KMutex<PerEntryState>>() % 64) == 0 {
-    } else {
-        panic!("PerEntryState must be cache-line-sized when locked.")
-    };
+const _: () = assert!(
+    size_of::<PerEntryState>().is_multiple_of(64),
+    concat!("PerEntryState must be cache-line-sized.")
+);
 
 impl Default for PerEntryState {
-    #[allow(clippy::let_unit_value)]
     fn default() -> Self {
-        _ = PER_ENTRY_STATE_CACHE_SIZED;
-        Self { devs: Arc::new(DevMap::new()), _pad: [0u8; 48] }
+        Self { devs: KMutex::new(Arc::new(DevMap::new())), _pad: [0u8; 48] }
     }
 }
 
 #[repr(C)]
 struct UnderlayDev {
     stream: DlsStream,
-    ports_map: Vec<KMutex<PerEntryState>>,
+    ports_map: Vec<PerEntryState>,
 }
 
 impl core::fmt::Debug for UnderlayDev {
@@ -907,7 +917,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         if devs.get_by_name(&req.xde_devname).is_some() {
             return Err(OpteError::PortExists(req.xde_devname.clone()));
         }
-        if devs.get(cfg.vni, cfg.guest_mac).is_some() {
+        if devs.get_by_key(VniMac::new(cfg.vni, cfg.guest_mac)).is_some() {
             return Err(OpteError::MacExists {
                 port: req.xde_devname.clone(),
                 vni: cfg.vni,
@@ -961,7 +971,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u2,
         underlay_capab,
         routes: RouteCache::default(),
-        port_map: KRwLock::new(PerEntryState::default()),
+        port_map: KRwLock::new(Default::default()),
     });
     let xde_ref =
         Arc::get_mut(&mut xde).expect("only one instance of XDE exists");
@@ -1077,7 +1087,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     // Clear the port's devmap to break any cycles.
     {
         let mut pmap = xde.port_map.write();
-        pmap.devs = DevMap::new().into();
+        *pmap = Default::default();
     }
 
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
@@ -1158,15 +1168,15 @@ fn refresh_maps(devs: KRwLockWriteGuard<DevMap>, underlay: &UnderlayState) {
     // Update all ports' maps.
     for port in devs.iter() {
         let mut map = port.port_map.write();
-        map.devs = new_map.clone();
+        *map = Arc::clone(&new_map);
     }
 
     // Update all underlays' maps.
     let ports = [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
     for port in ports {
         for map in port {
-            let mut map = map.lock();
-            map.devs = new_map.clone();
+            let mut map = map.devs.lock();
+            *map = Arc::clone(&new_map);
         }
     }
 }
@@ -1393,7 +1403,7 @@ fn create_underlay_port(
     let cpus = ncpus();
     let mut ports_map = Vec::with_capacity(cpus);
     for _ in 0..cpus {
-        ports_map.push(KMutex::new(PerEntryState::default()));
+        ports_map.push(PerEntryState::default());
     }
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
@@ -1764,7 +1774,7 @@ fn guest_loopback_probe(
 
 fn guest_loopback(
     src_dev: &XdeDev,
-    entry_state: &PerEntryState,
+    entry_state: &DevMap,
     mut pkt: MsgBlk,
     vni: Vni,
     postbox: &mut TxPostbox,
@@ -1803,8 +1813,8 @@ fn guest_loopback(
     let flow = parsed_pkt.flow();
 
     let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let port_key = FastKey::new(vni, ether_dst);
-    let maybe_dest_dev = entry_state.devs.get_by_key(&port_key);
+    let port_key = VniMac::new(vni, ether_dst);
+    let maybe_dest_dev = entry_state.get_by_key(port_key);
 
     match maybe_dest_dev {
         Some(dest_dev) => {
@@ -1934,14 +1944,14 @@ unsafe extern "C" fn xde_mc_tx(
     }
 
     if let Some(entry_state) = entry_state {
-        entry_state.devs.deliver_all(tx_postbox.postbox());
+        entry_state.deliver_all(tx_postbox.postbox());
     }
 
     // `entry_state` has been moved, making it safe to deliver hairpin
     // packets (which may cause us to re-enter XDE in the same stack).
     src_dev.deliver(hairpin_chain);
 
-    if let Some(u_chain) = tx_postbox.drain_underlay(0) {
+    if let Some(u_chain) = tx_postbox.drain_underlay(UnderlayIndex::U1) {
         src_dev.u1.stream.stream.tx_drop_on_no_desc(
             u_chain.msgs,
             u_chain.last_hint,
@@ -1949,7 +1959,7 @@ unsafe extern "C" fn xde_mc_tx(
         );
     }
 
-    if let Some(u_chain) = tx_postbox.drain_underlay(1) {
+    if let Some(u_chain) = tx_postbox.drain_underlay(UnderlayIndex::U2) {
         src_dev.u2.stream.stream.tx_drop_on_no_desc(
             u_chain.msgs,
             u_chain.last_hint,
@@ -1965,7 +1975,7 @@ fn xde_mc_tx_one<'a>(
     src_dev: &'a XdeDev,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
-    entry_state: &mut Option<KRwLockReadGuard<'a, PerEntryState>>,
+    entry_state: &mut Option<KRwLockReadGuard<'a, Arc<DevMap>>>,
     hairpin_chain: &mut MsgBlkChain,
 ) {
     let parser = src_dev.port.network().parser();
@@ -2016,7 +2026,7 @@ fn xde_mc_tx_one<'a>(
         //
         // TODO Is there way to set mac_tx to must use result?
         drop(parsed_pkt);
-        postbox.post_underlay(0, None, pkt);
+        postbox.post_underlay(UnderlayIndex::U1, TxHint::NoneOrMixed, pkt);
         return;
     }
 
@@ -2150,17 +2160,9 @@ fn xde_mc_tx_one<'a>(
                 MsgBlk::wrap_mblk(mblk).unwrap()
             };
 
-            // We do *have* a flow hash but zero means no hint given, as
-            // far as illumos is concerned. Invert the bits in this case.
-            let hint = NonZeroUsize::try_from(
-                NonZeroU32::new(l4_hash)
-                    .unwrap_or(NonZeroU32::new(u32::MAX).unwrap()),
-            )
-            .expect("usize should be at least 32b on target platform");
-
             postbox.post_underlay(
-                usize::from(underlay_idx),
-                Some(hint),
+                underlay_idx,
+                TxHint::from_crc32(l4_hash),
                 new_pkt,
             );
         }
@@ -2396,12 +2398,12 @@ unsafe extern "C" fn xde_rx(
     // threads here (interrupt contexts, poll threads, fanout, worker threads)
     // are all bound to a given CPU each by MAC.
     let cpu_index = current_cpu().seq_id;
-    let mut cpu_state = stream.ports_map[cpu_index].lock();
+    let cpu_state = stream.ports_map[cpu_index].devs.lock();
     let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
         if let Some(pkt) =
-            xde_rx_one(&stream.stream, pkt, &mut cpu_state, &mut postbox)
+            xde_rx_one(&stream.stream, pkt, &cpu_state, &mut postbox)
         {
             count += 1;
             len += pkt.byte_len();
@@ -2409,7 +2411,7 @@ unsafe extern "C" fn xde_rx(
         }
     }
 
-    cpu_state.devs.deliver_all(&mut postbox);
+    cpu_state.deliver_all(&mut postbox);
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()
@@ -2445,7 +2447,7 @@ unsafe extern "C" fn xde_rx(
 fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
-    devs: &mut PerEntryState,
+    devs: &DevMap,
     postbox: &mut Postbox,
 ) -> Option<MsgBlk> {
     let mblk_addr = pkt.mblk_addr();
@@ -2487,8 +2489,8 @@ fn xde_rx_one(
 
     let ether_dst = meta.inner_eth.destination();
 
-    let port_key = FastKey::new(vni, ether_dst);
-    let Some(dev) = devs.devs.get_by_key(&port_key) else {
+    let port_key = VniMac::new(vni, ether_dst);
+    let Some(dev) = devs.get_by_key(port_key) else {
         // TODO add SDT probe
         // TODO add stat
         opte::engine::dbg!(
@@ -2540,7 +2542,11 @@ fn xde_rx_one(
             postbox.post(port_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
-            stream.tx_drop_on_no_desc(hppkt, None, MacTxFlags::empty());
+            stream.tx_drop_on_no_desc(
+                hppkt,
+                TxHint::NoneOrMixed,
+                MacTxFlags::empty(),
+            );
         }
         _ => {}
     }

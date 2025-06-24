@@ -107,7 +107,7 @@ impl MsgBlkChain {
         Self(None)
     }
 
-    /// Create an empty packet chain.
+    /// Return whether this chain contains any [`MsgBlk`]s.
     pub const fn is_empty(&self) -> bool {
         self.0.is_none()
     }

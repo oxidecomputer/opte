@@ -12,10 +12,10 @@ use crate::mac::MAC_DROP_ON_NO_DESC;
 use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::TxHint;
 use crate::mac::mac_client_handle;
 use core::ffi::CStr;
 use core::fmt::Display;
-use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use illumos_sys_hdrs::ENOENT;
@@ -204,15 +204,10 @@ impl DlsStream {
     /// descriptor available
     ///
     /// This function always consumes the [`Packet`].
-    ///
-    /// `hint` will be used for fanout if needed -- a `None` value
-    /// implies the hint is unknown, or the packets belong to different
-    /// flows (and should be hashed out separately by, e.g.,
-    /// mac_tx_fanout_mode).
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: Option<NonZeroUsize>,
+        hint: TxHint,
         flags: MacTxFlags,
     ) {
         let Some(inner) = self.inner.as_ref() else {
@@ -231,7 +226,7 @@ impl DlsStream {
             str_mdata_fastpath_put(
                 inner.dld_str.as_ptr(),
                 mblk.as_ptr(),
-                zerocopy::transmute!(hint),
+                hint.into(),
                 raw_flags,
             )
         };

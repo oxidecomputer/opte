@@ -259,15 +259,10 @@ impl MacClientHandle {
     /// If the packet cannot be sent, return it. If you want to drop
     /// the packet when no descriptors are available, then use
     /// [`MacClient::tx_drop_on_no_desc()`].
-    ///
-    /// `hint` will be used for fanout if needed -- a `None` value
-    /// implies the hint is unknown, or the packets belong to different
-    /// flows (and should be hashed out separately by, e.g.,
-    /// mac_tx_fanout_mode).
     pub fn tx(
         &self,
         pkt: impl AsMblk,
-        hint: Option<NonZeroUsize>,
+        hint: TxHint,
         flags: MacTxFlags,
     ) -> Option<MsgBlk> {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
@@ -279,7 +274,7 @@ impl MacClientHandle {
             mac_tx(
                 self.mch,
                 mblk.as_ptr(),
-                zerocopy::transmute!(hint),
+                hint.into(),
                 flags.bits(),
                 &mut ret_mp,
             )
@@ -302,12 +297,11 @@ impl MacClientHandle {
     /// Send the [`Packet`] on this client, dropping if there is no
     /// descriptor available.
     ///
-    /// This function always consumes the [`Packet`]. See
-    /// [`MacClientHandle::tx`] for discussion on `hint`.
+    /// This function always consumes the [`Packet`].
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: Option<NonZeroUsize>,
+        hint: TxHint,
         flags: MacTxFlags,
     ) {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
@@ -322,13 +316,7 @@ impl MacClientHandle {
         };
 
         unsafe {
-            mac_tx(
-                self.mch,
-                mblk.as_ptr(),
-                zerocopy::transmute!(hint),
-                raw_flags,
-                &mut ret_mp,
-            )
+            mac_tx(self.mch, mblk.as_ptr(), hint.into(), raw_flags, &mut ret_mp)
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
@@ -641,6 +629,45 @@ impl OffloadInfo {
                 },
             },
             mtu: self.mtu.min(other.mtu),
+        }
+    }
+}
+
+/// Used by illumos to aid fanout for a packet chain if needed.
+///
+/// illumos requires that if a hint is provided to `mac_tx, then
+/// all packets in the chain are covered by the same flow (and so will
+/// be routed to, e.g., the same Tx queue). This type abstracts over
+/// how the known/unknown cases are signalled, and whether packets
+/// should be hashed separately by, e.g., mac_tx_fanout_mode.
+#[derive(Copy, Clone, PartialEq)]
+pub enum TxHint {
+    NoneOrMixed,
+    SingleFlow(NonZeroUsize),
+}
+
+impl TxHint {
+    /// Construct a hint from a CRC32 flow hash (of, e.g., the 5-tuple).
+    ///
+    /// This correctly handles a zero-hash value.
+    pub fn from_crc32(mut val: u32) -> Self {
+        // We do *have* a flow hash, but zero means no hint given, as
+        // far as illumos is concerned. Invert the bits in this case.
+        if val == 0 {
+            val = u32::MAX;
+        }
+        let val = usize::try_from(val)
+            .expect("usize should be at least 32b on target platform");
+
+        TxHint::SingleFlow(NonZeroUsize::new(val).unwrap())
+    }
+}
+
+impl From<TxHint> for uintptr_t {
+    fn from(value: TxHint) -> Self {
+        match value {
+            TxHint::NoneOrMixed => 0,
+            TxHint::SingleFlow(v) => v.get(),
         }
     }
 }

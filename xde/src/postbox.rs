@@ -4,10 +4,11 @@
 
 // Copyright 2025 Oxide Computer Company
 
-use crate::dev_map::FastKey;
+use crate::dev_map::VniMac;
+use crate::mac::TxHint;
+use crate::xde::UnderlayIndex;
 use alloc::collections::btree_map::BTreeMap;
 use core::mem;
-use core::num::NonZeroUsize;
 use core::ptr::NonNull;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
@@ -15,9 +16,9 @@ use opte::ddi::mblk::MsgBlkChain;
 /// Temporary storage to collect and transmit packets bound for the same
 /// destination in a single batch.
 pub struct Postbox {
-    boxes: BTreeMap<FastKey, MsgBlkChain>,
+    boxes: BTreeMap<VniMac, MsgBlkChain>,
     // Avoid any lookup on adjacent runs of packets hitting a single port.
-    last_caller: Option<(FastKey, NonNull<MsgBlkChain>)>,
+    last_caller: Option<(VniMac, NonNull<MsgBlkChain>)>,
 }
 
 impl Default for Postbox {
@@ -33,7 +34,7 @@ impl Postbox {
 
     /// Append the given `pkt` to a chain for delivery to `key`.
     #[inline]
-    pub fn post(&mut self, key: FastKey, pkt: MsgBlk) {
+    pub fn post(&mut self, key: VniMac, pkt: MsgBlk) {
         let chain = if let Some((stored_key, mut chain_ptr)) = self.last_caller
             && stored_key == key
         {
@@ -59,7 +60,7 @@ impl Postbox {
     }
 
     #[inline]
-    pub fn drain(&mut self) -> impl Iterator<Item = (FastKey, MsgBlkChain)> {
+    pub fn drain(&mut self) -> impl Iterator<Item = (VniMac, MsgBlkChain)> {
         let mut the_set = BTreeMap::new();
         mem::swap(&mut the_set, &mut self.boxes);
         self.last_caller = None;
@@ -88,7 +89,7 @@ impl TxPostbox {
 
     /// Append a `MsgBlk` to the chain of a local (loopback) port.
     #[inline]
-    pub fn post_local(&mut self, key: FastKey, pkt: MsgBlk) {
+    pub fn post_local(&mut self, key: VniMac, pkt: MsgBlk) {
         self.local_ports.post(key, pkt);
     }
 
@@ -100,27 +101,22 @@ impl TxPostbox {
 
     /// Append a `MsgBlk` to the chain of an underlay NIC.
     #[inline]
-    pub fn post_underlay(
-        &mut self,
-        idx: usize,
-        hint: Option<NonZeroUsize>,
-        pkt: MsgBlk,
-    ) {
-        let chain = &mut self.underlay[idx];
+    pub fn post_underlay(&mut self, idx: UnderlayIndex, hint: TxHint, pkt: MsgBlk) {
+        let chain = &mut self.underlay[idx as usize];
         let was_empty = chain.msgs.is_empty();
         chain.msgs.append(pkt);
 
         if was_empty {
             chain.last_hint = hint;
         } else if hint != chain.last_hint {
-            chain.last_hint = None;
+            chain.last_hint = TxHint::NoneOrMixed;
         }
     }
 
     /// Extract the message chain for underlay NIC `idx`.
     #[inline]
-    pub fn drain_underlay(&mut self, idx: usize) -> Option<UnderlayChain> {
-        let chain = &mut self.underlay[idx];
+    pub fn drain_underlay(&mut self, idx: UnderlayIndex) -> Option<UnderlayChain> {
+        let chain = &mut self.underlay[idx as usize];
         if chain.msgs.is_empty() {
             return None;
         }
@@ -146,12 +142,12 @@ pub struct UnderlayChain {
     /// If we have a run of packets on one flow, MAC will honour this
     /// and put them all in the same Tx queue (and avoid recomputing
     /// the hash). Use this where we can.
-    pub last_hint: Option<NonZeroUsize>,
+    pub last_hint: TxHint,
 }
 
 impl UnderlayChain {
     const fn new() -> Self {
-        Self { msgs: MsgBlkChain::empty(), last_hint: None }
+        Self { msgs: MsgBlkChain::empty(), last_hint: TxHint::NoneOrMixed }
     }
 }
 
