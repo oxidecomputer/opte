@@ -64,7 +64,7 @@
 //! (e.g., insertion of a port should not lock out all use of the datapath).
 //! For this reason, we provide the datapath entrypoints with read-only shared
 //! copies of the central `DevMap`.
-//!  * For Rx entrypoints, we allocate a `Vec<KMutex<PerEntryState>>`. Each CPU
+//!  * For Rx entrypoints, we allocate a `Vec<KMutex<Arc<DevMap>>>`. Each CPU
 //!    on the system has its own slot within this `Vec`, such that there should
 //!    never be lock contention unless a port is being added/removed. The CPU ID
 //!    is then used as an index into this table, and the lock is held until all
@@ -1943,29 +1943,28 @@ unsafe extern "C" fn xde_mc_tx(
         );
     }
 
+    let (local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
+
     if let Some(entry_state) = entry_state {
-        entry_state.deliver_all(tx_postbox.postbox());
+        entry_state.deliver_all(local_pkts);
     }
 
     // `entry_state` has been moved, making it safe to deliver hairpin
     // packets (which may cause us to re-enter XDE in the same stack).
+    // All deliver/tx calls will NO-OP if the sent chain is empty.
     src_dev.deliver(hairpin_chain);
 
-    if let Some(u_chain) = tx_postbox.drain_underlay(UnderlayIndex::U1) {
-        src_dev.u1.stream.stream.tx_drop_on_no_desc(
-            u_chain.msgs,
-            u_chain.last_hint,
-            MacTxFlags::empty(),
-        );
-    }
+    src_dev.u1.stream.stream.tx_drop_on_no_desc(
+        u1_pkts.msgs,
+        u1_pkts.last_hint,
+        MacTxFlags::empty(),
+    );
 
-    if let Some(u_chain) = tx_postbox.drain_underlay(UnderlayIndex::U2) {
-        src_dev.u2.stream.stream.tx_drop_on_no_desc(
-            u_chain.msgs,
-            u_chain.last_hint,
-            MacTxFlags::empty(),
-        );
-    }
+    src_dev.u2.stream.stream.tx_drop_on_no_desc(
+        u2_pkts.msgs,
+        u2_pkts.last_hint,
+        MacTxFlags::empty(),
+    );
 
     ptr::null_mut()
 }
@@ -2411,7 +2410,7 @@ unsafe extern "C" fn xde_rx(
         }
     }
 
-    cpu_state.deliver_all(&mut postbox);
+    cpu_state.deliver_all(postbox);
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()

@@ -8,7 +8,6 @@ use crate::dev_map::VniMac;
 use crate::mac::TxHint;
 use crate::xde::UnderlayIndex;
 use alloc::collections::btree_map::BTreeMap;
-use core::mem;
 use core::ptr::NonNull;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
@@ -60,11 +59,8 @@ impl Postbox {
     }
 
     #[inline]
-    pub fn drain(&mut self) -> impl Iterator<Item = (VniMac, MsgBlkChain)> {
-        let mut the_set = BTreeMap::new();
-        mem::swap(&mut the_set, &mut self.boxes);
-        self.last_caller = None;
-        the_set.into_iter()
+    pub fn drain(self) -> impl Iterator<Item = (VniMac, MsgBlkChain)> {
+        self.boxes.into_iter()
     }
 }
 
@@ -93,15 +89,14 @@ impl TxPostbox {
         self.local_ports.post(key, pkt);
     }
 
-    /// Access the underlying `Postbox` for delivery via `DevMap`.
-    #[inline]
-    pub fn postbox(&mut self) -> &mut Postbox {
-        &mut self.local_ports
-    }
-
     /// Append a `MsgBlk` to the chain of an underlay NIC.
     #[inline]
-    pub fn post_underlay(&mut self, idx: UnderlayIndex, hint: TxHint, pkt: MsgBlk) {
+    pub fn post_underlay(
+        &mut self,
+        idx: UnderlayIndex,
+        hint: TxHint,
+        pkt: MsgBlk,
+    ) {
         let chain = &mut self.underlay[idx as usize];
         let was_empty = chain.msgs.is_empty();
         chain.msgs.append(pkt);
@@ -115,16 +110,8 @@ impl TxPostbox {
 
     /// Extract the message chain for underlay NIC `idx`.
     #[inline]
-    pub fn drain_underlay(&mut self, idx: UnderlayIndex) -> Option<UnderlayChain> {
-        let chain = &mut self.underlay[idx as usize];
-        if chain.msgs.is_empty() {
-            return None;
-        }
-
-        let mut out = UnderlayChain::new();
-        mem::swap(chain, &mut out);
-
-        Some(out)
+    pub fn deconstruct(self) -> (Postbox, [UnderlayChain; 2]) {
+        (self.local_ports, self.underlay)
     }
 }
 

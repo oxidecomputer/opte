@@ -210,16 +210,18 @@ impl DlsStream {
         hint: TxHint,
         flags: MacTxFlags,
     ) {
-        let Some(inner) = self.inner.as_ref() else {
-            // XXX: probably handle or signal an error here.
-            return;
-        };
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
         let Some(mblk) = pkt.unwrap_mblk() else {
             return;
         };
+
+        let Some(inner) = self.inner.as_ref() else {
+            // XXX: probably handle or signal an error here.
+            return;
+        };
+
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {

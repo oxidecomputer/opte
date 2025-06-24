@@ -103,7 +103,7 @@ impl DevMap {
     ///
     /// Any chains without a matching port are dropped.
     #[inline]
-    pub fn deliver_all(&self, postbox: &mut Postbox) {
+    pub fn deliver_all(&self, postbox: Postbox) {
         for (k, v) in postbox.drain() {
             if let Some(port) = self.devs.get(&k) {
                 port.deliver(v);

@@ -307,13 +307,13 @@ impl MacClientHandle {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
-        let mut raw_flags = flags.bits();
-        raw_flags |= MAC_DROP_ON_NO_DESC;
-        let mut ret_mp = ptr::null_mut();
-
         let Some(mblk) = pkt.unwrap_mblk() else {
             return;
         };
+
+        let mut raw_flags = flags.bits();
+        raw_flags |= MAC_DROP_ON_NO_DESC;
+        let mut ret_mp = ptr::null_mut();
 
         unsafe {
             mac_tx(self.mch, mblk.as_ptr(), hint.into(), raw_flags, &mut ret_mp)
