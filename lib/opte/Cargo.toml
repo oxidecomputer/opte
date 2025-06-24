@@ -8,7 +8,7 @@ repository.workspace = true
 
 [features]
 default = ["api", "std"]
-api = []
+api = ["dep:zerocopy"]
 engine = [
 	"api",
 	"dep:cfg-if",

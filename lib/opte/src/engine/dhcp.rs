@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
@@ -13,12 +13,12 @@ use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
 use super::predicate::Ipv4AddrMatch;
-use super::predicate::PortMatch;
 use super::predicate::Predicate;
 use super::rule::AllowOrDeny;
 use super::rule::GenPacketResult;
 use super::rule::HairpinAction;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::predicate::Match;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt;
@@ -457,8 +457,8 @@ impl HairpinAction for DhcpAction {
                 Ipv4Addr::LOCAL_BCAST,
             )]),
             Predicate::InnerIpProto(vec![IpProtoMatch::Exact(Protocol::UDP)]),
-            Predicate::InnerDstPort(vec![PortMatch::Exact(DHCP_SERVER_PORT)]),
-            Predicate::InnerSrcPort(vec![PortMatch::Exact(DHCP_CLIENT_PORT)]),
+            Predicate::InnerDstPort(vec![Match::Exact(DHCP_SERVER_PORT)]),
+            Predicate::InnerSrcPort(vec![Match::Exact(DHCP_CLIENT_PORT)]),
         ];
 
         let data_preds = match self.reply_type {
