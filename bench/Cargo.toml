@@ -12,6 +12,7 @@ default = ["alloc"]
 alloc = []
 
 [dependencies]
+ahash = { workspace = true, default-features = true }
 anyhow.workspace = true
 clap.workspace = true
 criterion.workspace = true

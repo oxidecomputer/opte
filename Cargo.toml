@@ -39,6 +39,7 @@ opteadm = { path = "bin/opteadm" }
 oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 
 # External dependencies
+ahash = { version = "0.8", default-features = false }
 anyhow = "1.0"
 bitflags = "2"
 cargo_metadata = "0.20"

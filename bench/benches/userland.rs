@@ -300,7 +300,35 @@ pub fn maps(c: &mut Criterion) {
             );
         });
 
-        g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
+        g.bench_with_input(BenchmarkId::new("ahash", n), &n, |b, &n| {
+            let map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<hashbrown::HashMap<_, _, ahash::RandomState>>();
+            let mmap = RefCell::new(map);
+            let i = AtomicU64::new(0);
+
+            b.iter_batched(
+                || {
+                    let mut mmap = mmap.borrow_mut();
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    let last_idx = (raw_idx.wrapping_sub(1) as usize) % n;
+                    mmap.insert(add_list[last_idx], Arc::new(()));
+                    mmap.remove(&add_list[my_idx]);
+                    add_list[my_idx]
+                },
+                |my_idx| {
+                    let mut mmap = mmap.borrow_mut();
+                    mmap.insert(core::hint::black_box(my_idx), Arc::new(()));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        g.bench_with_input(BenchmarkId::new("foldhash", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
                 .copied()
@@ -328,7 +356,7 @@ pub fn maps(c: &mut Criterion) {
             );
         });
 
-        g.bench_with_input(BenchmarkId::new("HashMap", n), &n, |b, &n| {
+        g.bench_with_input(BenchmarkId::new("siphash", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
                 .copied()
@@ -390,7 +418,29 @@ pub fn maps(c: &mut Criterion) {
             );
         });
 
-        g.bench_with_input(BenchmarkId::new("hashbrown", n), &n, |b, &n| {
+        g.bench_with_input(BenchmarkId::new("ahash", n), &n, |b, &n| {
+            let map = flow_ids[..n]
+                .iter()
+                .copied()
+                .map(|a| (a, Arc::new(())))
+                .collect::<hashbrown::HashMap<_, _, ahash::RandomState>>();
+            let i = AtomicU64::new(0);
+
+            b.iter_batched_ref(
+                || {
+                    let raw_idx =
+                        i.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let my_idx = (raw_idx as usize) % n;
+                    add_list[my_idx]
+                },
+                |my_idx| {
+                    core::hint::black_box(map.get(my_idx));
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+
+        g.bench_with_input(BenchmarkId::new("foldhash", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
                 .copied()
@@ -412,7 +462,7 @@ pub fn maps(c: &mut Criterion) {
             );
         });
 
-        g.bench_with_input(BenchmarkId::new("HashMap", n), &n, |b, &n| {
+        g.bench_with_input(BenchmarkId::new("siphash", n), &n, |b, &n| {
             let map = flow_ids[..n]
                 .iter()
                 .copied()
