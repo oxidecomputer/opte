@@ -29,7 +29,7 @@ if [[ -z $BUILDOMAT_JOB_ID ]]; then
     pfexec ln -s /work /input/xde/work
 fi
 
-/usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
+pfexec /usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
