@@ -20,7 +20,7 @@
 
 set -o xtrace
 
-pfexec pkg install brand/sparse opte
+pfexec pkg install brand/omicron1 opte
 
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first

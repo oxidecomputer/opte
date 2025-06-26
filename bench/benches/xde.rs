@@ -77,12 +77,12 @@ fn main() -> Result<()> {
             over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
-        Experiment::Local { no_bench, .. } => {
-            check_deps(true, !no_bench, Some(ZoneBrand::Sparse))?;
+        Experiment::Local { no_bench, brand, .. } => {
+            check_deps(true, !no_bench, Some(brand))?;
             if no_bench {
                 zone_to_zone_dummy()?;
             } else {
-                zone_to_zone()?;
+                zone_to_zone(brand)?;
             }
             give_ownership()
         }
@@ -141,6 +141,14 @@ enum Experiment {
         /// Only run end-of-benchmark processing.
         #[arg(short, long)]
         no_bench: bool,
+
+        /// Type of Zone created to host iperf instances.
+        #[arg(
+            short,
+            long,
+            default_value_t=ZoneBrand::Omicron1,
+        )]
+        brand: ZoneBrand,
 
         #[command(flatten)]
         _waste: IgnoredExtras,
@@ -212,7 +220,7 @@ struct OpteCreateParams {
     #[arg(
         short,
         long,
-        default_value_t=ZoneBrand::Sparse,
+        default_value_t=ZoneBrand::Omicron1,
     )]
     brand: ZoneBrand,
 
@@ -327,12 +335,12 @@ fn check_deps(
 }
 
 #[cfg(target_os = "illumos")]
-fn zone_to_zone() -> Result<()> {
+fn zone_to_zone(brand: ZoneBrand) -> Result<()> {
     // add_drv xde.
     ensure_xde()?;
 
     print_banner("Building test topology... (120s)");
-    let topol = xde_tests::two_node_topology()?;
+    let topol = xde_tests::two_node_topology(brand.to_str())?;
     print_banner("Topology built!");
 
     // Create iPerf server on one zone.

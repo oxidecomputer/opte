@@ -286,7 +286,7 @@ pub struct Topology {
 /// to OPTE and then to the adjacent vopte device. This is a nice little
 /// sanity checker to make sure basic opte/xde functionality is working - and
 /// that we're not hitting things like debug asserts in the OS.
-pub fn two_node_topology() -> Result<Topology> {
+pub fn two_node_topology(brand: &str) -> Result<Topology> {
     // Create the "underlay loopback". With simnet device pairs, any packet that
     // goes in one is forwarded to the other. In the topology depicted above,
     // this means that anything vopte0 sends, will be encapsulated onto the
@@ -347,9 +347,9 @@ pub fn two_node_topology() -> Result<Topology> {
 
     // Create a pair of zones to simulate our VM instances.
     println!("start zone a");
-    let a = OpteZone::new("a", &zfs, &[&opte0.name], "sparse")?;
+    let a = OpteZone::new("a", &zfs, &[&opte0.name], brand)?;
     println!("start zone b");
-    let b = OpteZone::new("b", &zfs, &[&opte1.name], "sparse")?;
+    let b = OpteZone::new("b", &zfs, &[&opte1.name], brand)?;
 
     println!("setup zone a");
     a.setup(&opte0.name, opte0.ip())?;

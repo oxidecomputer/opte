@@ -28,7 +28,7 @@ set -o xtrace
 
 source .github/buildomat/common.sh
 
-pfexec pkg install brand/sparse opte iperf demangle flamegraph
+pfexec pkg install brand/omicron1 opte iperf demangle flamegraph
 
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first
@@ -110,7 +110,7 @@ pfexec cp /input/xde/work/release/xde /kernel/drv/amd64
 pfexec add_drv xde
 
 banner "bench"
-cargo kbench local
+cargo kbench local -b omicron1
 cargo ubench
 
 cp -r target/criterion $OUT_DIR
