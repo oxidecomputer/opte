@@ -516,7 +516,7 @@ pub fn single_node_over_real_nic(
     println!("start zone");
     let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
 
-    // std::thread::sleep(Duration::from_secs(30));
+    std::thread::sleep(Duration::from_secs(30));
 
     println!("setup zone");
     a.setup(&opte.name, opte.ip())?;
