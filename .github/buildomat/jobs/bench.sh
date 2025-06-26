@@ -30,6 +30,8 @@ source .github/buildomat/common.sh
 
 pfexec pkg install brand/omicron1 opte iperf demangle flamegraph
 
+svcadm enable /system/omicron/baseline
+
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first
     echo to have the artifacts at the expected spot.
