@@ -28,7 +28,7 @@ set -o xtrace
 
 source .github/buildomat/common.sh
 
-pfexec pkg install brand/omicron1 opte iperf demangle flamegraph
+pfexec pkg install brand/omicron1 brand/omicron1/tools opte iperf demangle flamegraph
 
 svcadm enable /system/omicron/baseline
 

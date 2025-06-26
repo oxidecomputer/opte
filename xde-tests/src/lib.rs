@@ -250,6 +250,7 @@ pub struct Topology {
     pub v6_routes: Vec<RouteV6>,
     pub xde: Xde,
     pub lls: Vec<LinkLocal>,
+    pub vnics: Vec<Vnic>,
     pub simnet: Option<SimnetLink>,
     pub zfs: Arc<Zfs>,
 }
@@ -294,10 +295,12 @@ pub fn two_node_topology(brand: &str) -> Result<Topology> {
     // happen later), is forwarded to sim1, is decapsulated by opte1 and then
     // sent to vopte1.
     let sim = SimnetLink::new("xde_test_sim0", "xde_test_sim1")?;
-    let ll0 = LinkLocal::new(&sim.end_a, "ll")?;
-    let ll1 = LinkLocal::new(&sim.end_b, "ll")?;
+    let vn0 = Vnic::new("xde_test_vnic0", &sim.end_a)?;
+    let vn1 = Vnic::new("xde_test_vnic1", &sim.end_b)?;
+    let ll0 = LinkLocal::new(&vn0.name, "ll")?;
+    let ll1 = LinkLocal::new(&vn1.name, "ll")?;
 
-    Xde::set_xde_underlay(&sim.end_a, &sim.end_b)?;
+    Xde::set_xde_underlay(&vn0.name, &vn1.name)?;
     // TODO this is a sort of force unset underlay until we have an unset
     // underlay command. When this object drops it will remove the xde driver.
     // If we do not do this, xde will hold references to the simnet devices
@@ -327,7 +330,7 @@ pub fn two_node_topology(brand: &str) -> Result<Topology> {
     // sim1 and out sim0.
     println!("adding underlay route 0");
     let r0 =
-        RouteV6::new(opte0.underlay_ip(), 64, ll0.ip, Some(sim.end_b.clone()))?;
+        RouteV6::new(opte0.underlay_ip(), 64, ll0.ip, Some(vn1.name.clone()))?;
 
     // Create the second OPTE port with the provided overlay/underlay parameters.
     let opte1 =
@@ -340,7 +343,7 @@ pub fn two_node_topology(brand: &str) -> Result<Topology> {
     // loopback.
     println!("adding underlay route 1");
     let r1 =
-        RouteV6::new(opte1.underlay_ip(), 64, ll1.ip, Some(sim.end_a.clone()))?;
+        RouteV6::new(opte1.underlay_ip(), 64, ll1.ip, Some(vn0.name.clone()))?;
 
     // Set up a zfs pool for our test zones.
     let zfs = Arc::new(Zfs::new("opte2node")?);
@@ -360,6 +363,7 @@ pub fn two_node_topology(brand: &str) -> Result<Topology> {
     Ok(Topology {
         xde,
         lls: vec![ll0, ll1],
+        vnics: vec![vn0, vn1],
         simnet: Some(sim),
         nodes: vec![
             TestNode { zone: a, port: opte0 },
@@ -512,7 +516,7 @@ pub fn single_node_over_real_nic(
     println!("start zone");
     let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
 
-    std::thread::sleep(Duration::from_secs(30));
+    // std::thread::sleep(Duration::from_secs(30));
 
     println!("setup zone");
     a.setup(&opte.name, opte.ip())?;
@@ -520,6 +524,7 @@ pub fn single_node_over_real_nic(
     Ok(Topology {
         xde,
         lls: vec![],
+        vnics: vec![],
         simnet: None,
         nodes: vec![TestNode { zone: a, port: opte }],
         null_ports,

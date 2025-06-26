@@ -20,7 +20,7 @@
 
 set -o xtrace
 
-pfexec pkg install brand/omicron1 opte
+pfexec pkg install brand/omicron1 brand/omicron1/tools opte
 
 svcadm enable /system/omicron/baseline
 
