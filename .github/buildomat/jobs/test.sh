@@ -20,7 +20,7 @@
 
 set -o xtrace
 
-pfexec pkg install brand/sparse opte
+pfexec pkg install brand/omicron1 brand/omicron1/tools opte
 
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first
@@ -28,6 +28,8 @@ if [[ -z $BUILDOMAT_JOB_ID ]]; then
     pfexec mkdir -p /input/xde
     pfexec ln -s /work /input/xde/work
 fi
+
+pfexec /usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .

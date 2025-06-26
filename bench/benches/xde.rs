@@ -77,12 +77,12 @@ fn main() -> Result<()> {
             over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
-        Experiment::Local { no_bench, .. } => {
-            check_deps(true, !no_bench, Some(ZoneBrand::Sparse))?;
+        Experiment::Local { no_bench, brand, pause, .. } => {
+            check_deps(true, !no_bench, Some(brand))?;
             if no_bench {
                 zone_to_zone_dummy()?;
             } else {
-                zone_to_zone()?;
+                zone_to_zone(brand, pause)?;
             }
             give_ownership()
         }
@@ -141,6 +141,19 @@ enum Experiment {
         /// Only run end-of-benchmark processing.
         #[arg(short, long)]
         no_bench: bool,
+
+        /// Type of Zone created to host iperf instances.
+        #[arg(
+            short,
+            long,
+            default_value_t=ZoneBrand::Omicron1,
+        )]
+        brand: ZoneBrand,
+
+        /// Pauses before running experiments from a zone, allowing
+        /// a window of time to access the zone using `zlogin a`.
+        #[arg(short, long)]
+        pause: bool,
 
         #[command(flatten)]
         _waste: IgnoredExtras,
@@ -212,7 +225,7 @@ struct OpteCreateParams {
     #[arg(
         short,
         long,
-        default_value_t=ZoneBrand::Sparse,
+        default_value_t=ZoneBrand::Omicron1,
     )]
     brand: ZoneBrand,
 
@@ -327,12 +340,12 @@ fn check_deps(
 }
 
 #[cfg(target_os = "illumos")]
-fn zone_to_zone() -> Result<()> {
+fn zone_to_zone(brand: ZoneBrand, pause: bool) -> Result<()> {
     // add_drv xde.
     ensure_xde()?;
 
     print_banner("Building test topology... (120s)");
-    let topol = xde_tests::two_node_topology()?;
+    let topol = xde_tests::two_node_topology(brand.to_str())?;
     print_banner("Topology built!");
 
     // Create iPerf server on one zone.
@@ -343,6 +356,11 @@ fn zone_to_zone() -> Result<()> {
     print_banner("iPerf spawned!\nWaiting... (10s)");
     std::thread::sleep(Duration::from_secs(10));
     print_banner("Go!");
+
+    if pause {
+        print_banner("Holding, type 'exit' to begin measurement.");
+        loop_til_exit();
+    }
 
     // Ping for good luck / to verify reachability.
     let _ = &topol.nodes[0]
@@ -443,7 +461,6 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     // Ping for good luck / to verify reachability.
     let _ = &topol.nodes[0].zone.zone.zexec(&format!("ping {}", &target_ip))?;
 
-    // uncomment to enter the zone safely for testing.
     if pause {
         print_banner("Holding, type 'exit' to begin measurement.");
         loop_til_exit();
