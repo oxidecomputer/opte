@@ -30,14 +30,14 @@ source .github/buildomat/common.sh
 
 pfexec pkg install brand/omicron1 brand/omicron1/tools opte iperf demangle flamegraph
 
-svcadm enable /system/omicron/baseline
-
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first
     echo to have the artifacts at the expected spot.
     pfexec mkdir -p /input/xde
     pfexec ln -s /work /input/xde/work
 fi
+
+/usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
 
 function cleanup {
     pfexec chown -R `id -un`:`id -gn` .
