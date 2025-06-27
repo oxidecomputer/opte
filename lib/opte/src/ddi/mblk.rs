@@ -645,12 +645,12 @@ impl MsgBlk {
     }
 
     /// Returns a shared cursor over all segments in this `MsgBlk`.
-    pub fn iter(&self) -> MsgBlkIter {
+    pub fn iter(&self) -> MsgBlkIter<'_> {
         MsgBlkIter { curr: Some(self.0), marker: PhantomData }
     }
 
     /// Returns a mutable cursor over all segments in this `MsgBlk`.
-    pub fn iter_mut(&mut self) -> MsgBlkIterMut {
+    pub fn iter_mut(&mut self) -> MsgBlkIterMut<'_> {
         MsgBlkIterMut { curr: Some(self.0), marker: PhantomData }
     }
 
@@ -943,14 +943,14 @@ pub struct MsgBlkIterMut<'a> {
 }
 
 impl MsgBlkIterMut<'_> {
-    pub fn next_iter(&self) -> MsgBlkIter {
+    pub fn next_iter(&self) -> MsgBlkIter<'_> {
         let curr = self
             .curr
             .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));
         MsgBlkIter { curr, marker: PhantomData }
     }
 
-    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut {
+    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut<'_> {
         let curr = self
             .curr
             .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));

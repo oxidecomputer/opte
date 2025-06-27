@@ -132,7 +132,7 @@ impl ReadOnlyDevMap {
         Self(rwl)
     }
 
-    pub fn read(&self) -> KRwLockReadGuard<DevMap> {
+    pub fn read(&self) -> KRwLockReadGuard<'_, DevMap> {
         self.0.read()
     }
 }
