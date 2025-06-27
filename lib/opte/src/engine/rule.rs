@@ -1081,13 +1081,14 @@ impl Rule<Finalized> {
     ) -> bool {
         #[cfg(debug_assertions)]
         {
-            if let Some(preds) = &self.state.preds {
-                if preds.hdr_preds.is_empty() && preds.data_preds.is_empty() {
-                    panic!(
-                        "bug: RulePredicates must have at least one \
-                            predicate"
-                    );
-                }
+            if let Some(preds) = &self.state.preds
+                && preds.hdr_preds.is_empty()
+                && preds.data_preds.is_empty()
+            {
+                panic!(
+                    "bug: RulePredicates must have at least one \
+                        predicate"
+                );
             }
         }
 

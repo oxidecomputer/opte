@@ -451,10 +451,9 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
         if let Some(l3) = self.inner_l3.as_mut() {
             if let (Some(ulp), Some(body_csum)) =
                 (self.inner_ulp.as_mut(), body_csum)
+                && ulp.has_ulp_csum()
             {
-                if ulp.has_ulp_csum() {
-                    ulp.compute_checksum(body_csum, l3);
-                }
+                ulp.compute_checksum(body_csum, l3);
             }
             if l3.has_ip_csum() {
                 l3.compute_checksum();
@@ -581,11 +580,12 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
     #[inline]
     fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
-        if let Some(body_csum) = body_csum {
-            if self.inner_ulp.has_ulp_csum() {
-                self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
-            }
+        if let Some(body_csum) = body_csum
+            && self.inner_ulp.has_ulp_csum()
+        {
+            self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
         }
+
         if self.inner_l3.has_ip_csum() {
             self.inner_l3.compute_checksum();
         }
@@ -724,29 +724,25 @@ impl<T: ByteSliceMut> HeaderActionModify<UlpMetaModify> for Ulp<T> {
                 }
             }
             Ulp::IcmpV4(i4) => {
-                if let Some(id) = mod_spec.icmp_id {
-                    if i4.echo_id().is_some() {
-                        let roh = i4.rest_of_hdr_mut();
-                        ValidIcmpEcho::parse(&mut roh[..])
-                            .expect(
-                                "ICMP ROH is exactly as large as ValidIcmpEcho",
-                            )
-                            .0
-                            .set_id(id);
-                    }
+                if let Some(id) = mod_spec.icmp_id
+                    && i4.echo_id().is_some()
+                {
+                    let roh = i4.rest_of_hdr_mut();
+                    ValidIcmpEcho::parse(&mut roh[..])
+                        .expect("ICMP ROH is exactly as large as ValidIcmpEcho")
+                        .0
+                        .set_id(id);
                 }
             }
             Ulp::IcmpV6(i6) => {
-                if let Some(id) = mod_spec.icmp_id {
-                    if i6.echo_id().is_some() {
-                        let roh = i6.rest_of_hdr_mut();
-                        ValidIcmpEcho::parse(&mut roh[..])
-                            .expect(
-                                "ICMP ROH is exactly as large as ValidIcmpEcho",
-                            )
-                            .0
-                            .set_id(id);
-                    }
+                if let Some(id) = mod_spec.icmp_id
+                    && i6.echo_id().is_some()
+                {
+                    let roh = i6.rest_of_hdr_mut();
+                    ValidIcmpEcho::parse(&mut roh[..])
+                        .expect("ICMP ROH is exactly as large as ValidIcmpEcho")
+                        .0
+                        .set_id(id);
                 }
             }
         }
