@@ -1185,7 +1185,7 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(&meta, &ameta));
+    assert!(r1.is_match(meta, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -1194,5 +1194,5 @@ fn rule_matching() {
         v4.set_source(new_src_ip);
     }
 
-    assert!(!r1.is_match(&meta, &ameta));
+    assert!(!r1.is_match(meta, &ameta));
 }

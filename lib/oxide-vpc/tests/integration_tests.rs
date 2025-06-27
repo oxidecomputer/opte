@@ -389,7 +389,7 @@ fn gateway_icmp4_ping() {
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
     // In this case we are parsing a hairpin reply, so we can't use
@@ -438,7 +438,7 @@ fn gateway_icmp4_ping() {
             assert_eq!(r_data, data);
         }
 
-        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+        _ => panic!("expected Echo Reply, got {reply_icmp:?}"),
     }
 }
 
@@ -473,7 +473,7 @@ fn packet_body_pullup() {
     let res = g1.port.process(Out, pkt1);
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
 
     // Verify that the contents are correctly replicated.
@@ -1966,7 +1966,7 @@ fn arp_gateway() {
             assert_eq!(arp.tpa(), cfg.ipv4_cfg().unwrap().private_ip);
         }
 
-        res => panic!("expected a Hairpin, got {:?}", res),
+        res => panic!("expected a Hairpin, got {res:?}"),
     }
     incr!(g1, ["stats.port.out_uft_miss"]);
 }
@@ -2070,7 +2070,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
@@ -2108,7 +2108,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     let msg_type = Icmpv6Message::from(icmp6.ty().0);
     let msg_code = icmp6.code();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Verify the parsed metadata matches the packet
@@ -2130,7 +2130,7 @@ fn test_guest_to_gateway_icmpv6_ping(
             assert_eq!(r_data, data);
         }
 
-        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+        _ => panic!("expected Echo Reply, got {reply_icmp:?}"),
     }
 }
 
@@ -2162,7 +2162,7 @@ fn gateway_router_advert_reply() {
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
@@ -2222,7 +2222,7 @@ fn gateway_router_advert_reply() {
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     let mut csum = CsumCapab::ignored();
@@ -2258,10 +2258,7 @@ fn gateway_router_advert_reply() {
             assert!(prefix_info.is_none());
         }
         other => {
-            panic!(
-                "Expected an ICMPv6 Router Advertisement, found {:?}",
-                other
-            );
+            panic!("Expected an ICMPv6 Router Advertisement, found {other:?}",);
         }
     };
 }
@@ -2462,7 +2459,7 @@ fn validate_hairpin_advert(
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Validate the details of the Neighbor Advertisement itself.
@@ -2489,8 +2486,7 @@ fn validate_hairpin_advert(
         );
     } else {
         panic!(
-            "Expected an ICMPv6 Neighbor Advertisement, found {:?}",
-            reply_icmp
+            "Expected an ICMPv6 Neighbor Advertisement, found {reply_icmp:?}",
         );
     }
 }
@@ -2869,7 +2865,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
             let res = g1.port.process(Out, request_pkt).unwrap();
 
             let Hairpin(mut hp) = res else {
-                panic!("Expected a Hairpin, found {:?}", res);
+                panic!("Expected a Hairpin, found {res:?}");
             };
 
             // In this case we are parsing a hairpin reply, so we
@@ -2945,10 +2941,10 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     assert!(preferred.is_infinite());
                     assert!(opts.is_empty());
                 } else {
-                    panic!("Expected an IA Addr option, found {:#?}", options);
+                    panic!("Expected an IA Addr option, found {options:#?}");
                 }
             } else {
-                panic!("Expected an IANA option, found {:?}", iana);
+                panic!("Expected an IANA option, found {iana:?}");
             }
 
             let used_dhcp = base_dhcp_config();
@@ -4703,7 +4699,7 @@ fn icmp_inner_has_nat_applied() {
 
     let mut ip: L3<&mut [u8]> = Ipv4 {
         source: g1_cfg.ipv4().private_ip,
-        destination: remote_addr.into(),
+        destination: remote_addr,
         protocol: IngotIpProto::ICMP,
         total_len: (icmp.buffer_len() + Ipv4::MINIMUM_LENGTH) as u16,
         ..Default::default()
@@ -4778,7 +4774,7 @@ fn icmpv6_inner_has_nat_applied() {
 
     let ip = Ipv6 {
         source: remote_addr,
-        destination: eph_ip.into(),
+        destination: eph_ip,
         next_header: IngotIpProto::ICMP_V6,
         payload_len: icmp.buffer_len() as u16,
         hop_limit: 64,

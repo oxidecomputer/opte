@@ -1325,11 +1325,11 @@ mod test {
                 assert_eq!(err.error(), &IngotParseError::TooSmall);
             }
 
-            Err(e) => panic!("expected read error, got: {:?}", e),
+            Err(e) => panic!("expected read error, got: {e:?}"),
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
 
-        let pkt2 = MsgBlk::copy(&[]);
+        let pkt2 = MsgBlk::copy([]);
         assert_eq!(pkt2.len(), 0);
         assert_eq!(pkt2.seg_len(), 1);
         assert_eq!(pkt2.tail_capacity(), 16);
@@ -1340,7 +1340,7 @@ mod test {
                 assert_eq!(err.error(), &IngotParseError::TooSmall);
             }
 
-            Err(e) => panic!("expected read error, got: {:?}", e),
+            Err(e) => panic!("expected read error, got: {e:?}"),
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
     }
@@ -1386,9 +1386,9 @@ mod test {
 
     #[test]
     fn truncate() {
-        let mut p1 = MsgBlk::copy(&[0, 1, 2, 3]);
-        p1.append(MsgBlk::copy(&[4, 5, 6, 7]));
-        p1.append(MsgBlk::copy(&[8, 9, 10, 11]));
+        let mut p1 = MsgBlk::copy([0, 1, 2, 3]);
+        p1.append(MsgBlk::copy([4, 5, 6, 7]));
+        p1.append(MsgBlk::copy([8, 9, 10, 11]));
 
         assert_eq!(p1.seg_len(), 3);
         assert_eq!(p1.byte_len(), 12);
@@ -1552,9 +1552,9 @@ mod test {
 
         let mut chain = unsafe { MsgBlkChain::new(els[0]) }.unwrap();
 
-        for i in 0..els.len() {
+        for el in els {
             let pkt = chain.pop_front().unwrap();
-            assert_eq!(pkt.mblk_addr(), els[i] as uintptr_t);
+            assert_eq!(pkt.mblk_addr(), el as uintptr_t);
         }
 
         assert!(chain.pop_front().is_none());
