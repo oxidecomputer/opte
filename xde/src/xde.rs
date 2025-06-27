@@ -508,7 +508,7 @@ struct PerEntryState {
 
 const _: () = assert!(
     size_of::<PerEntryState>().is_multiple_of(64),
-    concat!("PerEntryState must be cache-line-sized.")
+    "PerEntryState must be cache-line-sized.",
 );
 
 impl Default for PerEntryState {
