@@ -804,8 +804,28 @@ fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
 /// Collects stats as a packet is processed, keeping track of the boundary
 /// of the most recent layer.
 ///
-/// TODO: there are soundness rules to prevent double-counting if different
-/// expiries occur at different times. Codify these.
+/// ## Ensuring exact counting
+/// For stats to be measured exactly (i.e., without any nondeterministic
+/// double/triple-counting) you must ensure that your [`NetworkImpl`] is designed
+/// so that each [`RootStat`] you define is only reachable by at most one path
+/// from any flow. Duplicate root stats (in a flow or internal node) are
+/// trivially filtered out, but reusing a [`RootStat`] in, e.g., a layer which
+/// generates an LFT entry and then as the rule-stat in a stateless layer poses
+/// problems.
+/// 
+/// I.e., consider the below case:
+/// ```text
+/// flow(abcd)[ RootStat(0), RootStat(1), InternalNode(2), RootStat(3) ]
+///                                          ^
+///                                          |
+///                           [ RootStat(1), RootStat(4), ... ]
+/// ```
+/// `InternalNode(2)` could expire at a *later time* than `flow(abcd)`,
+/// which means that it and `RootStat(1)` will inherit the flow stats on
+/// its closure, and then RootStat(1) will inherit these *again* once
+/// `InternalNode(2)` expires.
+///
+/// [`NetworkImpl`]: super::NetworkImpl
 pub struct FlowStatBuilder {
     parents: Vec<StatParent>,
     layer_end: usize,
@@ -821,13 +841,22 @@ impl FlowStatBuilder {
     }
 
     /// Push a parent onto this flow.
-    pub fn push(&mut self, parent: impl Into<StatParent>) {
+    pub fn push(&mut self, parent: StatParent) {
         self.parents.push(parent.into());
     }
 
     /// Mark all current parents as [`Action::Allow`].
     pub fn new_layer(&mut self) {
         self.layer_end = self.parents.len();
+    }
+
+    /// Mark all current parents as [`Action::Allow`], moving them all into
+    /// a new [`InternalStat`].
+    pub fn new_layer_lft(&mut self, tree: &mut StatTree) -> Arc<InternalStat> {
+        let out = tree.new_intermediate(self.parents.split_off(self.layer_end));
+        self.parents.push(out.clone().into());
+        self.new_layer();
+        out
     }
 
     /// Return a list of stat parents if this packet is bound for flow creation.

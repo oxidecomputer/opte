@@ -1281,6 +1281,7 @@ impl Layer {
         if !matches!(action, Action::StatefulAllow | Action::Stateful(_)) {
             pkt.meta_mut().stats.push(stat.take().unwrap());
         }
+        pkt.meta_mut().stats
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
