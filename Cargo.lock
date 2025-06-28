@@ -2857,6 +2857,7 @@ dependencies = [
  "oxide-vpc",
  "postcard",
  "serde",
+ "zerocopy 0.8.26",
 ]
 
 [[package]]

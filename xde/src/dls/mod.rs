@@ -12,6 +12,7 @@ use crate::mac::MAC_DROP_ON_NO_DESC;
 use crate::mac::MacClient;
 use crate::mac::MacPerimeterHandle;
 use crate::mac::MacTxFlags;
+use crate::mac::TxHint;
 use crate::mac::mac_client_handle;
 use core::ffi::CStr;
 use core::fmt::Display;
@@ -20,7 +21,6 @@ use core::ptr::NonNull;
 use illumos_sys_hdrs::ENOENT;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::datalink_id_t;
-use illumos_sys_hdrs::uintptr_t;
 use opte::ddi::mblk::AsMblk;
 pub use sys::*;
 
@@ -178,6 +178,11 @@ pub struct DlsStream {
     link: LinkId,
 }
 
+// SAFETY: Mac/DLS use their own internal locking where required,
+// such that the use of a stream is valid from multiple threads.
+unsafe impl Send for DlsStream {}
+unsafe impl Sync for DlsStream {}
+
 #[derive(Debug)]
 struct DlsStreamInner {
     dld_str: NonNull<dld_str_s>,
@@ -199,33 +204,31 @@ impl DlsStream {
     /// descriptor available
     ///
     /// This function always consumes the [`Packet`].
-    ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: TxHint,
         flags: MacTxFlags,
     ) {
-        let Some(inner) = self.inner.as_ref() else {
-            // XXX: probably handle or signal an error here.
-            return;
-        };
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
         let Some(mblk) = pkt.unwrap_mblk() else {
             return;
         };
+
+        let Some(inner) = self.inner.as_ref() else {
+            // XXX: probably handle or signal an error here.
+            return;
+        };
+
         let mut raw_flags = flags.bits();
         raw_flags |= MAC_DROP_ON_NO_DESC;
         unsafe {
-            // mac_tx(self.mch, pkt.unwrap_mblk(), hint, raw_flags, &mut ret_mp)
             str_mdata_fastpath_put(
                 inner.dld_str.as_ptr(),
                 mblk.as_ptr(),
-                hint,
+                hint.into(),
                 raw_flags,
             )
         };

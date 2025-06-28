@@ -150,10 +150,6 @@ impl From<HdrTransformError> for ProcessError {
 
 /// The result of processing a packet.
 ///
-/// * Bypass: Let this packet bypass the system; do not process it at
-///   all. XXX This is probably going away as its only use is for
-///   punting on traffic I didn't want to deal with yet.
-///
 /// * Drop: The packet has been dropped, as determined by the rules
 ///   or because of resource exhaustion. Included is the reason for the
 ///   drop.
@@ -165,11 +161,8 @@ impl From<HdrTransformError> for ProcessError {
 ///   packet is dropped.
 #[derive(Debug, DError)]
 pub enum ProcessResult {
-    Bypass,
     #[leaf]
-    Drop {
-        reason: DropReason,
-    },
+    Drop { reason: DropReason },
     #[leaf]
     Modified(EmitSpec),
     // TODO: it would be nice if this packet type could be user-specified, but might
@@ -594,10 +587,6 @@ impl<Id> fmt::Debug for UftEntry<Id> {
 /// Cumulative counters for a single [`Port`].
 #[derive(KStatProvider)]
 struct PortStats {
-    /// The number of inbound packets marked as
-    /// [`ProcessResult::Bypass`].
-    in_bypass: KStatU64,
-
     /// The number of inbound packets dropped
     /// ([`ProcessResult::Drop`]), for one reason or another.
     in_drop: KStatU64,
@@ -633,10 +622,6 @@ struct PortStats {
     /// The number of inbound packets which did not match a UFT entry
     /// and resulted in rule processing.
     in_uft_miss: KStatU64,
-
-    /// The number of outbound packets marked as
-    /// [`ProcessResult::Bypass`].
-    out_bypass: KStatU64,
 
     /// The number of outbound packets dropped
     /// ([`ProcessResult::Drop`]), for one reason or another.
