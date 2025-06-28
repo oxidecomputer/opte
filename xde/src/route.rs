@@ -8,7 +8,7 @@ use crate::ip;
 use crate::sys;
 use crate::xde::DropRef;
 use crate::xde::XdeDev;
-use crate::xde::xde_underlay_port;
+use crate::xde::XdeUnderlayPort;
 use alloc::collections::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::sync::Arc;
@@ -272,7 +272,7 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 fn next_hop<'a>(
     key: &RouteKey,
     ustate: &'a XdeDev,
-) -> Result<Route<'a>, &'a xde_underlay_port> {
+) -> Result<Route<'a>, &'a XdeUnderlayPort> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -654,20 +654,20 @@ impl CachedRoute {
 pub struct Route<'a> {
     pub src: EtherAddr,
     pub dst: EtherAddr,
-    pub underlay_dev: &'a xde_underlay_port,
+    pub underlay_dev: &'a XdeUnderlayPort,
 }
 
 impl<'a> Route<'a> {
     fn cached(&self, xde: &XdeDev, timestamp: Moment) -> CachedRoute {
         // As unfortunate as `into_route`.
-        let port_0: &xde_underlay_port = &xde.u1;
+        let port_0: &XdeUnderlayPort = &xde.u1;
         let underlay_idx =
             if core::ptr::eq(self.underlay_dev, port_0) { 0 } else { 1 };
 
         CachedRoute { src: self.src, dst: self.dst, underlay_idx, timestamp }
     }
 
-    fn zero_addr(underlay_dev: &'a xde_underlay_port) -> Route<'a> {
+    fn zero_addr(underlay_dev: &'a XdeUnderlayPort) -> Route<'a> {
         Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_dev }
     }
 }
