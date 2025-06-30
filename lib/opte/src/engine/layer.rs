@@ -1973,7 +1973,7 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let ameta = ActionMeta::new();
         let ifid = *pmeta.flow();
-        assert!(rule_table.find_match(&ifid, &pmeta.meta(), &ameta).is_some());
+        assert!(rule_table.find_match(&ifid, pmeta.meta(), &ameta).is_some());
     }
 }
 // TODO Reinstate

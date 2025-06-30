@@ -11,7 +11,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v4::Ipv4;
-use crate::engine::packet::MblkPacketData;
 use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;

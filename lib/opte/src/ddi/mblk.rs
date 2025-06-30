@@ -1329,7 +1329,7 @@ mod test {
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
 
-        let pkt2 = MsgBlk::copy(&[]);
+        let pkt2 = MsgBlk::copy([]);
         assert_eq!(pkt2.len(), 0);
         assert_eq!(pkt2.seg_len(), 1);
         assert_eq!(pkt2.tail_capacity(), 16);
@@ -1386,9 +1386,9 @@ mod test {
 
     #[test]
     fn truncate() {
-        let mut p1 = MsgBlk::copy(&[0, 1, 2, 3]);
-        p1.append(MsgBlk::copy(&[4, 5, 6, 7]));
-        p1.append(MsgBlk::copy(&[8, 9, 10, 11]));
+        let mut p1 = MsgBlk::copy([0, 1, 2, 3]);
+        p1.append(MsgBlk::copy([4, 5, 6, 7]));
+        p1.append(MsgBlk::copy([8, 9, 10, 11]));
 
         assert_eq!(p1.seg_len(), 3);
         assert_eq!(p1.byte_len(), 12);

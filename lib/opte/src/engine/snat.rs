@@ -12,9 +12,7 @@ use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::packet::InnerFlowId;
-use super::packet::MblkFullParsed;
 use super::packet::MblkPacketDataView;
-use super::packet::Packet;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -483,6 +481,7 @@ mod test {
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
+    use crate::engine::Packet;
 
     use super::*;
 

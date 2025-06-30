@@ -8,7 +8,6 @@
 
 use super::ether::Ethernet;
 use super::ip::v4::*;
-use super::packet::MblkPacketData;
 use super::packet::MblkPacketDataView;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;

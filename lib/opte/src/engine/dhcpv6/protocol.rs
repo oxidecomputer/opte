@@ -25,7 +25,6 @@ use crate::engine::dhcpv6::options::StatusCode;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
-use crate::engine::packet::MblkPacketData;
 use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;

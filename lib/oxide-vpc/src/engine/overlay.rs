@@ -48,7 +48,6 @@ use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::MblkPacketData;
 use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;

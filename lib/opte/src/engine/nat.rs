@@ -17,9 +17,7 @@ use super::ip::v6::ValidIpv6;
 use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
-use super::packet::MblkFullParsed;
 use super::packet::MblkPacketDataView;
-use super::packet::Packet;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
 use super::port::meta::ActionMeta;
@@ -390,6 +388,7 @@ mod test {
     use super::*;
 
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::packet::Packet;
     use crate::engine::GenericUlp;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;

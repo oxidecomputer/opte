@@ -29,10 +29,8 @@ use super::ip::v6::Ipv6Mut;
 use super::ip::v6::v6_set_next_header;
 use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
-use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
 use super::packet::MblkPacketDataView;
-use super::packet::Packet;
 use super::packet::PacketData;
 use super::packet::Pullup;
 use super::parse::ValidUlp;
@@ -1175,6 +1173,7 @@ fn rule_matching() {
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;
     use ingot::types::HeaderLen;
+    use crate::engine::packet::Packet;
 
     let action = Identity::new("rule_matching");
     let mut r1 = Rule::new(1, Action::Static(Arc::new(action)));
@@ -1213,7 +1212,7 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(&meta, &ameta));
+    assert!(r1.is_match(meta, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -1222,5 +1221,5 @@ fn rule_matching() {
         v4.set_source(new_src_ip);
     }
 
-    assert!(!r1.is_match(&meta, &ameta));
+    assert!(!r1.is_match(meta, &ameta));
 }

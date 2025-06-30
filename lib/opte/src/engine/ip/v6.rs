@@ -441,7 +441,7 @@ pub(crate) mod test {
         header_end: usize,
     ) {
         assert_eq!(
-            header.packet_length() as usize,
+            { header.packet_length() },
             header_end,
             "Header length does not include all extension headers"
         );
@@ -570,10 +570,10 @@ pub(crate) mod test {
 
         // Parsing this one will fail -- next header is hop-by-hop, which is
         // an RFC6564 header -- we don't have (0xc1 * 8) bytes here!!
-        assert!(ValidIpv6::parse(&buf[..]).is_err());
+        assert!(ValidIpv6::parse(buf).is_err());
 
         // We can construct this manually via ingot...
-        let (v6, _rem) = Accessor::read_from_prefix(&buf[..]).unwrap();
+        let (v6, _rem) = Accessor::read_from_prefix(buf).unwrap();
         let ip = ValidIpv6(v6, Header::Repr(Default::default()));
         assert!(ip.validate(120).is_err());
     }

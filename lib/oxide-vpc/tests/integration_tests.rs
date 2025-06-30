@@ -2135,7 +2135,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     let msg_type = Icmpv6Message::from(icmp6.ty().0);
     let msg_code = icmp6.code();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Verify the parsed metadata matches the packet
@@ -2249,7 +2249,7 @@ fn gateway_router_advert_reply() {
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     let mut csum = CsumCapab::ignored();
@@ -2489,7 +2489,7 @@ fn validate_hairpin_advert(
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining().into_iter());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Validate the details of the Neighbor Advertisement itself.
@@ -4796,7 +4796,7 @@ fn icmp_inner_has_nat_applied() {
 
     let mut ip: L3<&mut [u8]> = Ipv4 {
         source: g1_cfg.ipv4().private_ip,
-        destination: remote_addr.into(),
+        destination: remote_addr,
         protocol: IngotIpProto::ICMP,
         total_len: (icmp.buffer_len() + Ipv4::MINIMUM_LENGTH) as u16,
         ..Default::default()
@@ -4871,7 +4871,7 @@ fn icmpv6_inner_has_nat_applied() {
 
     let ip = Ipv6 {
         source: remote_addr,
-        destination: eph_ip.into(),
+        destination: eph_ip,
         next_header: IngotIpProto::ICMP_V6,
         payload_len: icmp.buffer_len() as u16,
         hop_limit: 64,
