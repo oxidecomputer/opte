@@ -26,6 +26,7 @@ use opte_test_utils::icmp::gen_icmp_echo;
 use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
 use opte_test_utils::*;
+use oxide_vpc::api::Route;
 
 pub type TestCase = (MsgBlk, Direction);
 
@@ -294,18 +295,24 @@ impl BenchPacketInstance for UlpProcessInstance {
 
         router::add_entry(
             &g1.port,
-            IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
-            RouterTarget::InternetGateway(None),
-            RouterClass::System,
+            Route {
+                dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+                target: RouterTarget::InternetGateway(None),
+                class: RouterClass::System,
+                stat_id: None,
+            },
         )
         .unwrap();
         incr!(g1, ["epoch", "router.rules.out"]);
 
         router::add_entry(
             &g1.port,
-            IpCidr::Ip6("::/0".parse().unwrap()),
-            RouterTarget::InternetGateway(None),
-            RouterClass::System,
+            Route {
+                dest: IpCidr::Ip6("::/0".parse().unwrap()),
+                target: RouterTarget::InternetGateway(None),
+                class: RouterClass::System,
+                stat_id: None,
+            },
         )
         .unwrap();
         incr!(g1, ["epoch", "router.rules.out"]);
@@ -314,7 +321,7 @@ impl BenchPacketInstance for UlpProcessInstance {
             let any_in = "dir=in action=allow priority=1000 protocol=any";
             firewall::set_fw_rules(
                 &g1.port,
-                &SetFwRulesReq {
+                SetFwRulesReq {
                     port_name: g1.port.name().to_string(),
                     rules: vec![any_in.parse().unwrap()],
                 },

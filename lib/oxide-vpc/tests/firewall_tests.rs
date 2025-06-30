@@ -27,7 +27,7 @@ fn firewall_replace_rules() {
     let rule = "dir=in action=allow priority=10 protocol=TCP";
     firewall::add_fw_rule(
         &g2.port,
-        &AddFwRuleReq {
+        AddFwRuleReq {
             port_name: g2.port.name().to_string(),
             rule: rule.parse().unwrap(),
         },
@@ -64,7 +64,7 @@ fn firewall_replace_rules() {
     let tcp_out = "dir=out action=allow priority=1000 protocol=TCP";
     firewall::set_fw_rules(
         &g1.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g1.port.name().to_string(),
             rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
         },
@@ -124,7 +124,7 @@ fn firewall_replace_rules() {
     let new_rule = "dir=in action=deny priority=1000 protocol=TCP";
     firewall::set_fw_rules(
         &g2.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g2.port.name().to_string(),
             rules: vec![new_rule.parse().unwrap()],
         },
@@ -282,7 +282,7 @@ fn firewall_vni_outbound() {
         format!("dir=out action=allow priority=1000 hosts=vni={}", g1_cfg.vni);
     firewall::set_fw_rules(
         &g1.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: g1.port.name().to_string(),
             rules: vec![any_out.parse().unwrap(), vni_out.parse().unwrap()],
         },

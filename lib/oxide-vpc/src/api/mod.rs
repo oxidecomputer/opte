@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -19,6 +19,8 @@ pub use opte::api::*;
 use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
+
+pub mod stat;
 
 /// This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =
@@ -579,14 +581,20 @@ pub struct ClearVirt2BoundaryReq {
     pub tep: Vec<TunnelEndpoint>,
 }
 
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub struct Route {
+    pub dest: IpCidr,
+    pub target: RouterTarget,
+    pub class: RouterClass,
+    pub stat_id: Option<Uuid>,
+}
+
 /// Add an entry to the router. Addresses may be either IPv4 or IPv6, though the
 /// destination and target must match in protocol version.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AddRouterEntryReq {
     pub port_name: String,
-    pub dest: IpCidr,
-    pub target: RouterTarget,
-    pub class: RouterClass,
+    pub route: Route,
 }
 
 /// Remove an entry to the router. Addresses may be either IPv4 or IPv6, though the
@@ -594,9 +602,7 @@ pub struct AddRouterEntryReq {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DelRouterEntryReq {
     pub port_name: String,
-    pub dest: IpCidr,
-    pub target: RouterTarget,
-    pub class: RouterClass,
+    pub route: Route,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -621,7 +627,7 @@ pub struct AddFwRuleReq {
     pub rule: FirewallRule,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetFwRulesReq {
     pub port_name: String,
     pub rules: Vec<FirewallRule>,
@@ -640,7 +646,16 @@ pub struct FirewallRule {
     pub filters: Filters,
     pub action: FirewallAction,
     pub priority: u16,
+    pub stat_id: Option<Uuid>,
 }
+
+// TEMP
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpFlowStatsResp {
+    pub data: String,
+}
+
+impl CmdOk for DumpFlowStatsResp {}
 
 impl FromStr for FirewallRule {
     type Err = String;
@@ -714,10 +729,10 @@ impl FromStr for FirewallRule {
 
         Ok(FirewallRule {
             direction: direction.unwrap(),
-            // target.unwrap(),
             filters,
             action: action.unwrap(),
             priority: priority.unwrap(),
+            stat_id: None,
         })
     }
 }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The ARP implementation of the Virtual Gateway.
 
@@ -17,8 +17,13 @@ use opte::engine::predicate::EtherTypeMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use opte::engine::stat::StatTree;
 
-pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
+pub fn setup(
+    layer: &mut Layer,
+    cfg: &VpcCfg,
+    stats: &mut StatTree,
+) -> Result<(), OpteError> {
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     //
@@ -33,7 +38,7 @@ pub fn setup(layer: &mut Layer, cfg: &VpcCfg) -> Result<(), OpteError> {
         )]),
         Predicate::InnerEtherSrc(vec![EtherAddrMatch::Exact(cfg.guest_mac)]),
     ]);
-    layer.add_rule(Direction::Out, rule.finalize());
+    layer.add_rule(Direction::Out, rule.finalize(), stats);
 
     Ok(())
 }

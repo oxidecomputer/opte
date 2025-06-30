@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 //! The ICMP implementation of the Virtual Gateway.
 
@@ -15,11 +15,13 @@ use opte::engine::icmp::v4::IcmpEchoReply;
 use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
+use opte::engine::stat::StatTree;
 
 pub fn setup(
     layer: &mut Layer,
     cfg: &VpcCfg,
     ip_cfg: &Ipv4Cfg,
+    stats: &mut StatTree,
 ) -> Result<(), OpteError> {
     // ================================================================
     // ICMPv4 Echo Reply
@@ -33,6 +35,6 @@ pub fn setup(
         echo_dst_ip: ip_cfg.gateway_ip,
     }));
     let rule = Rule::new(1, reply);
-    layer.add_rule(Direction::Out, rule.finalize());
+    layer.add_rule(Direction::Out, rule.finalize(), stats);
     Ok(())
 }

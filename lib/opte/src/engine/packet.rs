@@ -6,6 +6,8 @@
 
 //! Types for creating, reading, and writing network packets.
 
+use super::stat::RootStat;
+use super::stat::StatParent;
 use super::Direction;
 use super::LightweightMeta;
 use super::NetworkParser;
@@ -34,6 +36,7 @@ use super::rule::CompiledEncap;
 use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
+use super::stat::FlowStatBuilder;
 pub use crate::api::AddrPair;
 pub use crate::api::FLOW_ID_DEFAULT;
 use crate::api::IcmpInfo;
@@ -460,6 +463,7 @@ pub struct PacketData<T: Read + Pullup> {
     pub(crate) headers: OpteMeta<T::Chunk>,
     initial_lens: Option<Box<InitialLayerLens>>,
     body: PktBodyWalker<T>,
+    pub(crate) stats: FlowStatBuilder,
 }
 
 impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
@@ -634,6 +638,17 @@ impl<T: Read + Pullup> PacketData<T> {
 
         csum != 0
     }
+
+    /// 
+    /// TODO:::::::::
+    /// 
+    /// Need to rethink this. This *should* be &mut, but we don't
+    /// want anything else in here to be mut to protect OPTE's design
+    /// (i.e., actions don't *actually* modify packets). So we maybe
+    /// need a view type preventing mut use of the other fields?
+    pub fn push_stat(&mut self, stat: RootStat) {
+        self.stats.push(stat.into());
+    }
 }
 
 impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
@@ -781,7 +796,12 @@ where
             .into(),
         );
         let body = PktBodyWalker::new(last_chunk, data);
-        let meta = Box::new(PacketData { headers, initial_lens, body });
+        let meta = Box::new(PacketData {
+            headers,
+            initial_lens,
+            body,
+            stats: FlowStatBuilder::new(),
+        });
 
         Packet {
             state: FullParsed {
