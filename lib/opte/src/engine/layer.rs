@@ -968,7 +968,7 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
+                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
 
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
@@ -1129,7 +1129,7 @@ impl Layer {
                     }
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
+                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
 
                 // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1278,7 +1278,7 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
+                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
 
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1402,7 +1402,7 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
+                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {

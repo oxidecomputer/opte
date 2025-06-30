@@ -839,7 +839,7 @@ impl FlowStatBuilder {
 
     /// Push a parent onto this flow.
     pub fn push(&mut self, parent: StatParent) {
-        self.parents.push(parent.into());
+        self.parents.push(parent);
     }
 
     /// Mark all current parents as [`Action::Allow`].
