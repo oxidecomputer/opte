@@ -1107,13 +1107,14 @@ impl Rule<Finalized> {
     ) -> bool {
         #[cfg(debug_assertions)]
         {
-            if let Some(preds) = &self.state.preds {
-                if preds.hdr_preds.is_empty() && preds.data_preds.is_empty() {
-                    panic!(
-                        "bug: RulePredicates must have at least one \
-                            predicate"
-                    );
-                }
+            if let Some(preds) = &self.state.preds
+                && preds.hdr_preds.is_empty()
+                && preds.data_preds.is_empty()
+            {
+                panic!(
+                    "bug: RulePredicates must have at least one \
+                        predicate"
+                );
             }
         }
 
@@ -1167,13 +1168,13 @@ fn rule_matching() {
     use crate::engine::GenericUlp;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Mut;
+    use crate::engine::packet::Packet;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;
     use ingot::types::HeaderLen;
-    use crate::engine::packet::Packet;
 
     let action = Identity::new("rule_matching");
     let mut r1 = Rule::new(1, Action::Static(Arc::new(action)));

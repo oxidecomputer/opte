@@ -645,12 +645,12 @@ impl MsgBlk {
     }
 
     /// Returns a shared cursor over all segments in this `MsgBlk`.
-    pub fn iter(&self) -> MsgBlkIter {
+    pub fn iter(&self) -> MsgBlkIter<'_> {
         MsgBlkIter { curr: Some(self.0), marker: PhantomData }
     }
 
     /// Returns a mutable cursor over all segments in this `MsgBlk`.
-    pub fn iter_mut(&mut self) -> MsgBlkIterMut {
+    pub fn iter_mut(&mut self) -> MsgBlkIterMut<'_> {
         MsgBlkIterMut { curr: Some(self.0), marker: PhantomData }
     }
 
@@ -943,14 +943,14 @@ pub struct MsgBlkIterMut<'a> {
 }
 
 impl MsgBlkIterMut<'_> {
-    pub fn next_iter(&self) -> MsgBlkIter {
+    pub fn next_iter(&self) -> MsgBlkIter<'_> {
         let curr = self
             .curr
             .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));
         MsgBlkIter { curr, marker: PhantomData }
     }
 
-    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut {
+    pub fn next_iter_mut(&mut self) -> MsgBlkIterMut<'_> {
         let curr = self
             .curr
             .and_then(|ptr| NonNull::new(unsafe { (*ptr.as_ptr()).b_cont }));
@@ -1325,7 +1325,7 @@ mod test {
                 assert_eq!(err.error(), &IngotParseError::TooSmall);
             }
 
-            Err(e) => panic!("expected read error, got: {:?}", e),
+            Err(e) => panic!("expected read error, got: {e:?}"),
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
 
@@ -1340,7 +1340,7 @@ mod test {
                 assert_eq!(err.error(), &IngotParseError::TooSmall);
             }
 
-            Err(e) => panic!("expected read error, got: {:?}", e),
+            Err(e) => panic!("expected read error, got: {e:?}"),
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
     }
@@ -1552,9 +1552,9 @@ mod test {
 
         let mut chain = unsafe { MsgBlkChain::new(els[0]) }.unwrap();
 
-        for i in 0..els.len() {
+        for el in els {
             let pkt = chain.pop_front().unwrap();
-            assert_eq!(pkt.mblk_addr(), els[i] as uintptr_t);
+            assert_eq!(pkt.mblk_addr(), el as uintptr_t);
         }
 
         assert!(chain.pop_front().is_none());

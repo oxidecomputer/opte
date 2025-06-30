@@ -145,7 +145,7 @@ impl<T> KMutex<T> {
     /// Try to acquire the mutex guard to gain access to the underlying
     /// value. If the guard is currently held, then this call will
     /// block. The mutex is released when the guard is dropped.
-    pub fn lock(&self) -> KMutexGuard<T> {
+    pub fn lock(&self) -> KMutexGuard<'_, T> {
         // Safety: ???.
         unsafe { mutex_enter(self.mutex.0.get()) };
         KMutexGuard { lock: self }
@@ -154,7 +154,7 @@ impl<T> KMutex<T> {
     /// Try to acquire the mutex guard to gain access to the underlying
     /// value. If the guard is currently held, then this call will
     /// return the [`LockWouldBlock`] error.
-    pub fn try_lock(&self) -> Result<KMutexGuard<T>, LockWouldBlock> {
+    pub fn try_lock(&self) -> Result<KMutexGuard<'_, T>, LockWouldBlock> {
         let try_lock = unsafe { mutex_tryenter(self.mutex.0.get()) };
         if try_lock != 0 {
             Ok(KMutexGuard { lock: self })
@@ -314,12 +314,12 @@ impl<T> KRwLock<T> {
         KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
     }
 
-    pub fn read(&self) -> KRwLockReadGuard<T> {
+    pub fn read(&self) -> KRwLockReadGuard<'_, T> {
         unsafe { rw_enter(self.rwl.get(), krw_t::RW_READER) };
         KRwLockReadGuard { lock: self }
     }
 
-    pub fn write(&self) -> KRwLockWriteGuard<T> {
+    pub fn write(&self) -> KRwLockWriteGuard<'_, T> {
         unsafe { rw_enter(self.rwl.get(), krw_t::RW_WRITER) };
         KRwLockWriteGuard { lock: self }
     }
@@ -736,7 +736,7 @@ impl<T> TokenLock<T> {
     }
 }
 
-pub struct TokenGuard<'a, T> {
+pub struct TokenGuard<'a, T: 'a> {
     lock: &'a TokenLock<T>,
 }
 

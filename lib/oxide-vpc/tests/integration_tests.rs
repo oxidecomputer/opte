@@ -393,7 +393,7 @@ fn gateway_icmp4_ping() {
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
     // In this case we are parsing a hairpin reply, so we can't use
@@ -442,7 +442,7 @@ fn gateway_icmp4_ping() {
             assert_eq!(r_data, data);
         }
 
-        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+        _ => panic!("expected Echo Reply, got {reply_icmp:?}"),
     }
 }
 
@@ -477,7 +477,7 @@ fn packet_body_pullup() {
     let res = g1.port.process(Out, pkt1);
     let hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
 
     // Verify that the contents are correctly replicated.
@@ -1993,7 +1993,7 @@ fn arp_gateway() {
             assert_eq!(arp.tpa(), cfg.ipv4_cfg().unwrap().private_ip);
         }
 
-        res => panic!("expected a Hairpin, got {:?}", res),
+        res => panic!("expected a Hairpin, got {res:?}"),
     }
     incr!(g1, ["stats.port.out_uft_miss"]);
 }
@@ -2097,7 +2097,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
@@ -2157,7 +2157,7 @@ fn test_guest_to_gateway_icmpv6_ping(
             assert_eq!(r_data, data);
         }
 
-        _ => panic!("expected Echo Reply, got {:?}", reply_icmp),
+        _ => panic!("expected Echo Reply, got {reply_icmp:?}"),
     }
 }
 
@@ -2189,7 +2189,7 @@ fn gateway_router_advert_reply() {
     let res = g1.port.process(Out, pkt1);
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
-        _ => panic!("expected Hairpin, got {:?}", res),
+        _ => panic!("expected Hairpin, got {res:?}"),
     };
     incr!(g1, ["stats.port.out_uft_miss"]);
 
@@ -2285,10 +2285,7 @@ fn gateway_router_advert_reply() {
             assert!(prefix_info.is_none());
         }
         other => {
-            panic!(
-                "Expected an ICMPv6 Router Advertisement, found {:?}",
-                other
-            );
+            panic!("Expected an ICMPv6 Router Advertisement, found {other:?}",);
         }
     };
 }
@@ -2516,8 +2513,7 @@ fn validate_hairpin_advert(
         );
     } else {
         panic!(
-            "Expected an ICMPv6 Neighbor Advertisement, found {:?}",
-            reply_icmp
+            "Expected an ICMPv6 Neighbor Advertisement, found {reply_icmp:?}",
         );
     }
 }
@@ -2902,7 +2898,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
             let res = g1.port.process(Out, request_pkt).unwrap();
 
             let Hairpin(mut hp) = res else {
-                panic!("Expected a Hairpin, found {:?}", res);
+                panic!("Expected a Hairpin, found {res:?}");
             };
 
             // In this case we are parsing a hairpin reply, so we
@@ -2978,10 +2974,10 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
                     assert!(preferred.is_infinite());
                     assert!(opts.is_empty());
                 } else {
-                    panic!("Expected an IA Addr option, found {:#?}", options);
+                    panic!("Expected an IA Addr option, found {options:#?}");
                 }
             } else {
-                panic!("Expected an IANA option, found {:?}", iana);
+                panic!("Expected an IANA option, found {iana:?}");
             }
 
             let used_dhcp = base_dhcp_config();

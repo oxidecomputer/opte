@@ -732,8 +732,7 @@ mod test {
         for pred in dhcpv6_server_predicates(&client_mac) {
             assert!(
                 pred.is_match(pmeta, &ameta),
-                "Expected predicate to match snooped Solicit test packet: {}",
-                pred
+                "Expected predicate to match snooped Solicit test packet: {pred}",
             );
         }
     }

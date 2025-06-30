@@ -441,7 +441,7 @@ pub(crate) mod test {
         header_end: usize,
     ) {
         assert_eq!(
-            { header.packet_length() },
+            header.packet_length(),
             header_end,
             "Header length does not include all extension headers"
         );

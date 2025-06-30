@@ -477,11 +477,11 @@ mod test {
     use ingot::types::HeaderLen;
 
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::Packet;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Ref;
-    use crate::engine::Packet;
 
     use super::*;
 

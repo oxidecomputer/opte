@@ -1459,15 +1459,14 @@ impl<N: NetworkImpl> Port<N> {
                         // `Arc`-identical.
                         if let Some(found_entry) =
                             local_lock.tcp_flows.get(ufid_out)
+                            && Arc::ptr_eq(found_entry, &entry)
                         {
-                            if Arc::ptr_eq(found_entry, &entry) {
-                                self.uft_tcp_closed(
-                                    &mut local_lock,
-                                    ufid_out,
-                                    ufid_in,
-                                );
-                                _ = local_lock.tcp_flows.remove(ufid_out);
-                            }
+                            self.uft_tcp_closed(
+                                &mut local_lock,
+                                ufid_out,
+                                ufid_in,
+                            );
+                            _ = local_lock.tcp_flows.remove(ufid_out);
                         }
 
                         // We've determined we're actually starting a new TCP flow (e.g.,
