@@ -233,7 +233,7 @@ impl LayerFlowTable {
         // We add unchecked because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
         let in_entry =
-            LftInEntry { action_desc: action_desc.clone(), stat: stat.clone() };
+            LftInEntry { action_desc: action_desc.clone(), stat: Arc::clone(&stat) };
         self.ft_in.add_unchecked(in_flow, in_entry);
         let out_entry =
             LftOutEntry { in_flow_pair: in_flow, action_desc, stat };
@@ -278,7 +278,7 @@ impl LayerFlowTable {
             Some(entry) => {
                 entry.hit();
                 let action = entry.state().action_desc.clone();
-                let stat = entry.state().stat.clone();
+                let stat = Arc::clone(&entry.state().stat);
                 if entry.is_dirty() {
                     EntryState::Dirty(action, stat)
                 } else {
@@ -295,7 +295,7 @@ impl LayerFlowTable {
             Some(entry) => {
                 entry.hit();
                 let action = entry.state().action_desc.clone();
-                let stat = entry.state().stat.clone();
+                let stat = Arc::clone(&entry.state().stat);
                 if entry.is_dirty() {
                     EntryState::Dirty(action, stat)
                 } else {
@@ -889,7 +889,7 @@ impl Layer {
         };
 
         if let Some(stat) = stat {
-            pkt.meta_mut().stats.push(stat);
+            pkt.meta_mut().stats.push(stat.into());
         }
 
         match action {
@@ -945,20 +945,14 @@ impl Layer {
 
         let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
-            (rule.rule.action(), rule.stat.clone())
+            (rule.rule.action(), Arc::clone(&rule.stat))
         } else {
             self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
-            (self.default_in.into(), self.default_in_stat.clone())
+            (self.default_in.into(), Arc::clone(&self.default_in_stat))
         };
 
-        // No LFT to account for.
-        // TODO: figure out how to have actions push on some IDs
-        // that then belong to the LFT.
-        let mut stat = Some(stat);
-        if !matches!(action, Action::StatefulAllow | Action::Stateful(_)) {
-            pkt.meta_mut().stats.push(stat.take().unwrap());
-        }
+        pkt.meta_mut().stats.push(stat.into());
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -972,10 +966,7 @@ impl Layer {
                     });
                 }
 
-                let stat = ectx
-                    .stats
-                    .new_intermediate(vec![stat.take().unwrap().into()]);
-                pkt.meta_mut().stats.push(stat.clone());
+                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
 
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
@@ -1136,10 +1127,7 @@ impl Layer {
                     }
                 }
 
-                let stat = ectx
-                    .stats
-                    .new_intermediate(vec![stat.take().unwrap().into()]);
-                pkt.meta_mut().stats.push(stat.clone());
+                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
 
                 // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1211,7 +1199,7 @@ impl Layer {
         };
 
         if let Some(stat) = stat {
-            pkt.meta_mut().stats.push(stat);
+            pkt.meta_mut().stats.push(stat.into());
         }
 
         match action {
@@ -1267,21 +1255,14 @@ impl Layer {
 
         let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
-            (rule.rule.action(), rule.stat.clone())
+            (rule.rule.action(), Arc::clone(&rule.stat))
         } else {
             self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
-            (self.default_out.into(), self.default_out_stat.clone())
+            (self.default_out.into(), Arc::clone(&self.default_out_stat))
         };
 
-        // No LFT to account for.
-        // TODO: figure out how to have actions push on some IDs
-        // that then belong to the LFT.
-        let mut stat = Some(stat);
-        if !matches!(action, Action::StatefulAllow | Action::Stateful(_)) {
-            pkt.meta_mut().stats.push(stat.take().unwrap());
-        }
-        pkt.meta_mut().stats
+        pkt.meta_mut().stats.push(stat.into());
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -1295,10 +1276,7 @@ impl Layer {
                     });
                 }
 
-                let stat = ectx
-                    .stats
-                    .new_intermediate(vec![stat.take().unwrap().into()]);
-                pkt.meta_mut().stats.push(stat.clone());
+                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
 
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1422,10 +1400,7 @@ impl Layer {
                     });
                 }
 
-                let stat = ectx
-                    .stats
-                    .new_intermediate(vec![stat.take().unwrap().into()]);
-                pkt.meta_mut().stats.push(stat.clone());
+                let stat = pkt.meta_mut().stats.new_layer_lft(&mut ectx.stats);
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {

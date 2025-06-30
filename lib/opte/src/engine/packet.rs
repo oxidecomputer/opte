@@ -7,7 +7,6 @@
 //! Types for creating, reading, and writing network packets.
 
 use super::stat::RootStat;
-use super::stat::StatParent;
 use super::Direction;
 use super::LightweightMeta;
 use super::NetworkParser;
@@ -646,7 +645,7 @@ impl<T: Read + Pullup> PacketData<T> {
     /// want anything else in here to be mut to protect OPTE's design
     /// (i.e., actions don't *actually* modify packets). So we maybe
     /// need a view type preventing mut use of the other fields?
-    pub fn push_stat(&mut self, stat: RootStat) {
+    pub fn push_stat(&mut self, stat: Arc<RootStat>) {
         self.stats.push(stat.into());
     }
 }

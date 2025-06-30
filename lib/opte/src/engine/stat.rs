@@ -496,7 +496,7 @@ impl StatTree {
         let uuid = uuid.unwrap_or_else(|| Uuid::from_u64_pair(0, self.next_id));
         let ids = &mut self.next_id;
 
-        self.roots
+        Arc::clone(self.roots
             .entry(uuid)
             .or_insert_with(|| {
                 Arc::new(RootStat {
@@ -507,8 +507,7 @@ impl StatTree {
                         stats: FullCounter::from_next_id(ids),
                     },
                 })
-            })
-            .clone()
+            }))
     }
 
     /// Creates a new internal node from a given set of parents.
@@ -528,7 +527,7 @@ impl StatTree {
             parent.append_child(&out);
         }
 
-        self.internal.push(out.clone());
+        self.internal.push(Arc::clone(&out));
 
         out
     }
@@ -556,7 +555,7 @@ impl StatTree {
             //         -- flow closes
             // In the above example, b' and c should receive the packet
             // byte/counts split at the epoch 0->1 transition.
-            return e.get().clone();
+            return Arc::clone(e.get());
         }
 
         let parents = parents.into_boxed_slice();
@@ -569,7 +568,7 @@ impl StatTree {
                 partner: *partner_flow,
                 parents,
                 bases,
-                shared: partner.get().shared.clone(),
+                shared: Arc::clone(&partner.get().shared),
                 last_hit: Moment::now().raw().into(),
             }),
             // Miss, no partner.
@@ -595,7 +594,7 @@ impl StatTree {
         }
 
         // We have proven a miss on flow_id already
-        let _ = self.flows.insert(*flow_id, out.clone());
+        let _ = self.flows.insert(*flow_id, Arc::clone(&out));
         out
     }
 
@@ -854,7 +853,7 @@ impl FlowStatBuilder {
     /// a new [`InternalStat`].
     pub fn new_layer_lft(&mut self, tree: &mut StatTree) -> Arc<InternalStat> {
         let out = tree.new_intermediate(self.parents.split_off(self.layer_end));
-        self.parents.push(out.clone().into());
+        self.parents.push(Arc::clone(&out).into());
         self.new_layer();
         out
     }
@@ -989,12 +988,12 @@ mod tests {
         let i1 = tree.new_intermediate(vec![r2.into()]);
 
         let mut fb = FlowStatBuilder::new();
-        fb.push(i0.clone());
+        fb.push(Arc::clone(&i0).into());
         fb.new_layer();
-        fb.push(r1.clone());
+        fb.push(Arc::clone(&r1).into());
         fb.new_layer();
-        fb.push(i1.clone());
-        fb.push(r3.clone());
+        fb.push(Arc::clone(&i1).into());
+        fb.push(Arc::clone(&r3).into());
 
         assert!(
             fb.terminate(Action::Deny, 128, Direction::Out, false).is_none()
@@ -1025,7 +1024,7 @@ mod tests {
 
         // Does this work with only one layer?
         let mut fb = FlowStatBuilder::new();
-        fb.push(i0.clone());
+        fb.push(Arc::clone(&i0).into());
         assert!(
             fb.terminate(Action::Deny, 64, Direction::Out, false).is_none()
         );
@@ -1046,14 +1045,14 @@ mod tests {
         let r2 = tree.root(Some(ROOT_2));
         let r3 = tree.root(Some(ROOT_3));
 
-        let i0 = tree.new_intermediate(vec![r0.clone().into()]);
-        let i1 = tree.new_intermediate(vec![r1.clone().into()]);
+        let i0 = tree.new_intermediate(vec![Arc::clone(&r0).into()]);
+        let i1 = tree.new_intermediate(vec![Arc::clone(&r1).into()]);
 
         let p_sz = 64;
         let f_out = {
             let mut fb = FlowStatBuilder::new();
-            fb.push(i0.clone());
-            fb.push(r3.clone());
+            fb.push(Arc::clone(&i0).into());
+            fb.push(Arc::clone(&r3).into());
             tree.new_flow(
                 &FLOW_OUT,
                 &FLOW_IN,
@@ -1067,9 +1066,9 @@ mod tests {
 
         let f_in = {
             let mut fb = FlowStatBuilder::new();
-            fb.push(i0.clone());
-            fb.push(i1.clone());
-            fb.push(r2.clone());
+            fb.push(Arc::clone(&i0).into());
+            fb.push(Arc::clone(&i1).into());
+            fb.push(Arc::clone(&r2).into());
             tree.new_flow(
                 &FLOW_IN,
                 &FLOW_OUT,
@@ -1179,12 +1178,12 @@ mod tests {
         let r2 = tree.root(Some(ROOT_2));
         let r3 = tree.root(Some(ROOT_3));
 
-        let i0 = tree.new_intermediate(vec![r0.clone().into()]);
-        let i1 = tree.new_intermediate(vec![r1.clone().into()]);
+        let i0 = tree.new_intermediate(vec![Arc::clone(&r0).into()]);
+        let i1 = tree.new_intermediate(vec![Arc::clone(&r1).into()]);
 
         let f0_out = {
             let mut fb = FlowStatBuilder::new();
-            fb.push(i0.clone());
+            fb.push(Arc::clone(&i0).into());
             tree.new_flow(
                 &FLOW_OUT,
                 &FLOW_IN,
@@ -1196,9 +1195,9 @@ mod tests {
 
         let f0_in = {
             let mut fb = FlowStatBuilder::new();
-            fb.push(i0.clone());
-            fb.push(i1.clone());
-            fb.push(r2.clone());
+            fb.push(Arc::clone(&i0).into());
+            fb.push(Arc::clone(&i1).into());
+            fb.push(Arc::clone(&r2).into());
             tree.new_flow(
                 &FLOW_IN,
                 &FLOW_OUT,
@@ -1210,9 +1209,9 @@ mod tests {
 
         let f1_out = {
             let mut fb = FlowStatBuilder::new();
-            fb.push(i0.clone());
-            fb.push(r2.clone());
-            fb.push(r3.clone());
+            fb.push(Arc::clone(&i0).into());
+            fb.push(Arc::clone(&r2).into());
+            fb.push(Arc::clone(&r3).into());
             tree.new_flow(
                 &FLOW_OUT_2,
                 &FLOW_IN_2,
