@@ -232,8 +232,10 @@ impl LayerFlowTable {
     ) {
         // We add unchecked because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables.
-        let in_entry =
-            LftInEntry { action_desc: action_desc.clone(), stat: Arc::clone(&stat) };
+        let in_entry = LftInEntry {
+            action_desc: action_desc.clone(),
+            stat: Arc::clone(&stat),
+        };
         self.ft_in.add_unchecked(in_flow, in_entry);
         let out_entry =
             LftOutEntry { in_flow_pair: in_flow, action_desc, stat };

@@ -6,7 +6,6 @@
 
 //! Types for creating, reading, and writing network packets.
 
-use super::stat::RootStat;
 use super::Direction;
 use super::LightweightMeta;
 use super::NetworkParser;
@@ -36,6 +35,7 @@ use super::rule::CompiledTransform;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
 use super::stat::FlowStatBuilder;
+use super::stat::RootStat;
 pub use crate::api::AddrPair;
 pub use crate::api::FLOW_ID_DEFAULT;
 use crate::api::IcmpInfo;
@@ -638,9 +638,9 @@ impl<T: Read + Pullup> PacketData<T> {
         csum != 0
     }
 
-    /// 
+    ///
     /// TODO:::::::::
-    /// 
+    ///
     /// Need to rethink this. This *should* be &mut, but we don't
     /// want anything else in here to be mut to protect OPTE's design
     /// (i.e., actions don't *actually* modify packets). So we maybe

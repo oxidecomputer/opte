@@ -496,18 +496,16 @@ impl StatTree {
         let uuid = uuid.unwrap_or_else(|| Uuid::from_u64_pair(0, self.next_id));
         let ids = &mut self.next_id;
 
-        Arc::clone(self.roots
-            .entry(uuid)
-            .or_insert_with(|| {
-                Arc::new(RootStat {
-                    id: uuid,
-                    last_hit: Moment::now().raw().into(),
-                    body: TableStat {
-                        children: KRwLock::new(vec![]),
-                        stats: FullCounter::from_next_id(ids),
-                    },
-                })
-            }))
+        Arc::clone(self.roots.entry(uuid).or_insert_with(|| {
+            Arc::new(RootStat {
+                id: uuid,
+                last_hit: Moment::now().raw().into(),
+                body: TableStat {
+                    children: KRwLock::new(vec![]),
+                    stats: FullCounter::from_next_id(ids),
+                },
+            })
+        }))
     }
 
     /// Creates a new internal node from a given set of parents.
@@ -811,7 +809,7 @@ fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
 /// trivially filtered out, but reusing a [`RootStat`] in, e.g., a layer which
 /// generates an LFT entry and then as the rule-stat in a stateless layer poses
 /// problems.
-/// 
+///
 /// I.e., consider the below case:
 /// ```text
 /// flow(abcd)[ RootStat(0), RootStat(1), InternalNode(2), RootStat(3) ]
