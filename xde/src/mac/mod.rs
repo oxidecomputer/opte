@@ -19,6 +19,7 @@ use bitflags::bitflags;
 use core::ffi::CStr;
 use core::fmt;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 use core::ops::RangeInclusive;
 use core::ptr;
 use illumos_sys_hdrs::*;
@@ -258,13 +259,10 @@ impl MacClientHandle {
     /// If the packet cannot be sent, return it. If you want to drop
     /// the packet when no descriptors are available, then use
     /// [`MacClient::tx_drop_on_no_desc()`].
-    ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
     pub fn tx(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: TxHint,
         flags: MacTxFlags,
     ) -> Option<MsgBlk> {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
@@ -273,7 +271,13 @@ impl MacClientHandle {
         let mut ret_mp = ptr::null_mut();
         let mblk = pkt.unwrap_mblk()?;
         unsafe {
-            mac_tx(self.mch, mblk.as_ptr(), hint, flags.bits(), &mut ret_mp)
+            mac_tx(
+                self.mch,
+                mblk.as_ptr(),
+                hint.into(),
+                flags.bits(),
+                &mut ret_mp,
+            )
         };
         if !ret_mp.is_null() {
             // Unwrap: We know the ret_mp is valid because we gave
@@ -291,31 +295,28 @@ impl MacClientHandle {
     }
 
     /// Send the [`Packet`] on this client, dropping if there is no
-    /// descriptor available
+    /// descriptor available.
     ///
     /// This function always consumes the [`Packet`].
-    ///
-    /// XXX The underlying mac_tx() function accepts a packet chain,
-    /// but for now we pass only a single packet at a time.
     pub fn tx_drop_on_no_desc(
         &self,
         pkt: impl AsMblk,
-        hint: uintptr_t,
+        hint: TxHint,
         flags: MacTxFlags,
     ) {
         // We must unwrap the raw `mblk_t` out of the `pkt` here,
         // otherwise the mblk_t would be dropped at the end of this
         // function along with `pkt`.
-        let mut raw_flags = flags.bits();
-        raw_flags |= MAC_DROP_ON_NO_DESC;
-        let mut ret_mp = ptr::null_mut();
-
         let Some(mblk) = pkt.unwrap_mblk() else {
             return;
         };
 
+        let mut raw_flags = flags.bits();
+        raw_flags |= MAC_DROP_ON_NO_DESC;
+        let mut ret_mp = ptr::null_mut();
+
         unsafe {
-            mac_tx(self.mch, mblk.as_ptr(), hint, raw_flags, &mut ret_mp)
+            mac_tx(self.mch, mblk.as_ptr(), hint.into(), raw_flags, &mut ret_mp)
         };
         debug_assert_eq!(ret_mp, ptr::null_mut());
     }
@@ -386,6 +387,49 @@ impl<P> Drop for MacPromiscHandle<P> {
         unsafe {
             mac_promisc_remove(self.mph);
             Arc::from_raw(self.parent); // dropped immediately
+        };
+    }
+}
+
+/// Safe wrapper around `mac_siphon_set`/`mac_siphon_clear`.
+#[derive(Debug)]
+pub struct MacSiphon<P: MacClient> {
+    /// The MAC client this siphon callback is attached to.
+    parent: *const P,
+}
+
+impl<P: MacClient> MacSiphon<P> {
+    /// Register a promiscuous callback to receive packets on the underlying MAC.
+    pub fn new(
+        parent: Arc<P>,
+        siphon_fn: mac_siphon_fn,
+    ) -> Result<Self, c_int> {
+        let mch = parent.mac_client_handle()?;
+        let parent = Arc::into_raw(parent);
+        let arg = parent as *mut c_void;
+
+        // SAFETY: `MacSiphon` keeps a reference to this `P` until it is removed,
+        // and so we can safely access it from the callback via the `arg`
+        // pointer.
+        unsafe {
+            mac_siphon_set(mch, siphon_fn, arg);
+        }
+
+        Ok(Self { parent })
+    }
+}
+
+impl<P: MacClient> Drop for MacSiphon<P> {
+    fn drop(&mut self) {
+        // Safety: the parent MAC we've attached this siphon to is guaranteed
+        // to live long enough to access again, since we have a refcount hold
+        // on it.
+        unsafe {
+            let parent = Arc::from_raw(self.parent);
+            let mac_client = parent
+                .mac_client_handle()
+                .expect("FATAL: cannot remove mac siphon from client");
+            mac_siphon_clear(mac_client);
         };
     }
 }
@@ -585,6 +629,45 @@ impl OffloadInfo {
                 },
             },
             mtu: self.mtu.min(other.mtu),
+        }
+    }
+}
+
+/// Used by illumos to aid fanout for a packet chain if needed.
+///
+/// illumos requires that if a hint is provided to `mac_tx, then
+/// all packets in the chain are covered by the same flow (and so will
+/// be routed to, e.g., the same Tx queue). This type abstracts over
+/// how the known/unknown cases are signalled, and whether packets
+/// should be hashed separately by, e.g., mac_tx_fanout_mode.
+#[derive(Copy, Clone, PartialEq)]
+pub enum TxHint {
+    NoneOrMixed,
+    SingleFlow(NonZeroUsize),
+}
+
+impl TxHint {
+    /// Construct a hint from a CRC32 flow hash (of, e.g., the 5-tuple).
+    ///
+    /// This correctly handles a zero-hash value.
+    pub fn from_crc32(mut val: u32) -> Self {
+        // We do *have* a flow hash, but zero means no hint given, as
+        // far as illumos is concerned. Invert the bits in this case.
+        if val == 0 {
+            val = u32::MAX;
+        }
+        let val = usize::try_from(val)
+            .expect("usize should be at least 32b on target platform");
+
+        TxHint::SingleFlow(NonZeroUsize::new(val).unwrap())
+    }
+}
+
+impl From<TxHint> for uintptr_t {
+    fn from(value: TxHint) -> Self {
+        match value {
+            TxHint::NoneOrMixed => 0,
+            TxHint::SingleFlow(v) => v.get(),
         }
     }
 }

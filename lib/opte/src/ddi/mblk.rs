@@ -44,6 +44,34 @@ pub trait AsMblk {
     /// Consume `self`, returning the underlying `mblk_t`. The caller of this
     /// function now owns the underlying segment chain.
     fn unwrap_mblk(self) -> Option<NonNull<mblk_t>>;
+
+    /// Consume `self`, returning the underlying `mblk_t` and a pointer to the tail
+    /// element. The caller of this function now owns the underlying segment chain.
+    ///
+    /// If the chain contains a single element, then the tail will be equal to the
+    /// head.
+    fn unwrap_head_and_tail(self) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)>
+    where
+        Self: Sized,
+    {
+        // SAFETY: `v`, if present, is a valid mblk_t.
+        self.unwrap_mblk().map(|v| unsafe { (v, find_mblk_tail(v)) })
+    }
+}
+
+/// Find the last element in an `mblk_t` chain.
+///
+/// # SAFETY
+/// `head` must point to a valid mblk_t, which must not contain any loops
+/// in its `b_next` chain.
+unsafe fn find_mblk_tail(head: NonNull<mblk_t>) -> NonNull<mblk_t> {
+    let mut tail = head;
+    unsafe {
+        while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
+            tail = next_ptr;
+        }
+    }
+    tail
 }
 
 /// The head and tail of an mblk_t list.
@@ -68,10 +96,20 @@ struct MsgBlkChainInner {
 // practically XDE will always assume it has a chain from MAC.
 pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 
+// SAFETY: We ensure that chain-modifying operations require a `&mut`.
+// Moreover, `mblk_t`s contain no e.g. thread-local state.
+unsafe impl Send for MsgBlkChain {}
+unsafe impl Sync for MsgBlkChain {}
+
 impl MsgBlkChain {
     /// Create an empty packet chain.
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self(None)
+    }
+
+    /// Return whether this chain contains any [`MsgBlk`]s.
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_none()
     }
 
     /// Convert an mblk_t packet chain into a safe source of `MsgBlk`s.
@@ -86,12 +124,7 @@ impl MsgBlkChain {
         let head = NonNull::new(mp).ok_or(WrapError::NullPtr)?;
 
         // Walk the chain to find the tail, and support faster append.
-        let mut tail = head;
-        unsafe {
-            while let Some(next_ptr) = NonNull::new((*tail.as_ptr()).b_next) {
-                tail = next_ptr;
-            }
-        }
+        let tail = unsafe { find_mblk_tail(head) };
 
         Ok(Self(Some(MsgBlkChainInner { head, tail })))
     }
@@ -163,6 +196,12 @@ impl MsgBlkChain {
 impl AsMblk for MsgBlkChain {
     fn unwrap_mblk(mut self) -> Option<NonNull<mblk_t>> {
         self.0.take().map(|v| v.head)
+    }
+
+    fn unwrap_head_and_tail(
+        mut self,
+    ) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)> {
+        self.0.take().map(|v| (v.head, v.tail))
     }
 }
 
@@ -829,6 +868,15 @@ impl AsMblk for MsgBlk {
         let ptr_out = self.0;
         _ = ManuallyDrop::new(self);
         Some(ptr_out)
+    }
+
+    fn unwrap_head_and_tail(
+        self,
+    ) -> Option<(NonNull<mblk_t>, NonNull<mblk_t>)> {
+        // MsgBlk represents a single `mblk_t` with NULL `b_next`.
+        // Thus, tail is just the head.
+        let out = self.unwrap_mblk();
+        Some((out, out))
     }
 }
 
