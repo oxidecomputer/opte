@@ -796,6 +796,8 @@ pub trait HairpinAction: Display {
     /// modifications made by previous layers up to this point.
     /// This also provides access to a reader over the packet body,
     /// positioned after the parsed metadata.
+    ///
+    /// [`Packet`]: super::packet::Packet
     fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
