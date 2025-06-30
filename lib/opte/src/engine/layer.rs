@@ -914,13 +914,9 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) =
-                        desc.gen_bt(Direction::In, pkt.meta(), body_segs)?
-                    {
-                        pkt.body_transform(Direction::In, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(bt) = desc.gen_bt(Direction::In, pkt.meta_view())? {
+                    pkt.body_transform(Direction::In, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 Ok(LayerResult::Allow)
@@ -955,6 +951,7 @@ impl Layer {
         };
 
         pkt.meta_mut().stats.push(stat.into());
+        let flow_before = *pkt.flow();
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -1007,8 +1004,12 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(In, pkt.flow(), pkt.meta(), ameta)
-                {
+                let ht = match action.gen_ht(
+                    In,
+                    &flow_before,
+                    pkt.meta_view(),
+                    ameta,
+                ) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -1033,7 +1034,6 @@ impl Layer {
                     }
                 };
 
-                let flow_before = *pkt.flow();
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1085,30 +1085,30 @@ impl Layer {
                     });
                 }
 
-                // TODO: how on earth are we plumbing StatTree into here??
+                let desc =
+                    match action.gen_desc(&flow_before, pkt.meta_view(), ameta)
+                    {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(desc) => desc,
 
-                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(desc) => desc,
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
 
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
+                        Err(e) => {
+                            self.record_gen_desc_failure(
+                                ectx.user_ctx,
+                                In,
+                                pkt.flow(),
+                                &e,
+                            );
+                            return Err(LayerError::GenDesc(e));
                         }
-                    },
-
-                    Err(e) => {
-                        self.record_gen_desc_failure(
-                            ectx.user_ctx,
-                            In,
-                            pkt.flow(),
-                            &e,
-                        );
-                        return Err(LayerError::GenDesc(e));
-                    }
-                };
+                    };
 
                 let flow_before = *pkt.flow();
                 let ht_in = desc.gen_ht(In);
@@ -1122,11 +1122,9 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)? {
-                        pkt.body_transform(In, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(bt) = desc.gen_bt(In, pkt.meta_view())? {
+                    pkt.body_transform(In, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
@@ -1150,7 +1148,7 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                match action.gen_packet(pkt.meta()) {
+                match action.gen_packet(pkt.meta_view()) {
                     Ok(AllowOrDeny::Allow(pkt)) => {
                         Ok(LayerResult::Hairpin(pkt))
                     }
@@ -1224,13 +1222,11 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) =
-                        desc.gen_bt(Direction::Out, pkt.meta(), body_segs)?
-                    {
-                        pkt.body_transform(Direction::Out, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(bt) =
+                    desc.gen_bt(Direction::Out, pkt.meta_view())?
+                {
+                    pkt.body_transform(Direction::Out, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 Ok(LayerResult::Allow)
@@ -1265,6 +1261,7 @@ impl Layer {
         };
 
         pkt.meta_mut().stats.push(stat.into());
+        let flow_before = *pkt.flow();
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -1324,8 +1321,12 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(Out, pkt.flow(), pkt.meta(), ameta)
-                {
+                let ht = match action.gen_ht(
+                    Out,
+                    &flow_before,
+                    pkt.meta_view(),
+                    ameta,
+                ) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(ht) => ht,
                         AllowOrDeny::Deny => {
@@ -1350,7 +1351,6 @@ impl Layer {
                     }
                 };
 
-                let flow_before = *pkt.flow();
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1404,30 +1404,31 @@ impl Layer {
 
                 let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
 
-                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(desc) => desc,
+                let desc =
+                    match action.gen_desc(&flow_before, pkt.meta_view(), ameta)
+                    {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(desc) => desc,
 
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_desc_failure(
+                                ectx.user_ctx,
+                                Out,
+                                pkt.flow(),
+                                &e,
+                            );
+                            return Err(LayerError::GenDesc(e));
                         }
-                    },
+                    };
 
-                    Err(e) => {
-                        self.record_gen_desc_failure(
-                            ectx.user_ctx,
-                            Out,
-                            pkt.flow(),
-                            &e,
-                        );
-                        return Err(LayerError::GenDesc(e));
-                    }
-                };
-
-                let flow_before = *pkt.flow();
                 let ht_out = desc.gen_ht(Out);
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
@@ -1439,11 +1440,9 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)? {
-                        pkt.body_transform(Out, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(bt) = desc.gen_bt(Out, pkt.meta_view())? {
+                    pkt.body_transform(Out, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 // The inbound flow ID must be calculated _after_ the
@@ -1466,7 +1465,7 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                match action.gen_packet(pkt.meta()) {
+                match action.gen_packet(pkt.meta_view()) {
                     Ok(AllowOrDeny::Allow(pkt)) => {
                         Ok(LayerResult::Hairpin(pkt))
                     }

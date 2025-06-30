@@ -13,6 +13,7 @@ use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
 use crate::engine::packet::MblkPacketData;
+use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
@@ -109,7 +110,7 @@ impl HairpinAction for Icmpv6EchoReply {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -234,7 +235,7 @@ impl HairpinAction for RouterAdvertisement {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
@@ -552,7 +553,7 @@ impl HairpinAction for NeighborAdvertisement {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That

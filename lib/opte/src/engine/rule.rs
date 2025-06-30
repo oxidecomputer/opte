@@ -31,6 +31,7 @@ use super::packet::BodyTransform;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
 use super::packet::MblkPacketData;
+use super::packet::MblkPacketDataView;
 use super::packet::Packet;
 use super::packet::PacketData;
 use super::packet::Pullup;
@@ -179,8 +180,7 @@ pub trait ActionDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        _meta: &MblkPacketData,
-        _payload_seg: &[u8],
+        _meta: MblkPacketDataView,
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
     }
@@ -277,7 +277,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        _pkt_meta: MblkPacketDataView,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -706,7 +706,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<MblkFullParsed>,
+        pkt: MblkPacketDataView,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -726,7 +726,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &MblkPacketData,
+        packet_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
@@ -798,7 +798,7 @@ pub trait HairpinAction: Display {
     /// modifications made by previous layers up to this point.
     /// This also provides access to a reader over the packet body,
     /// positioned after the parsed metadata.
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult;
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///

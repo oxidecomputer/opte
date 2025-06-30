@@ -62,6 +62,7 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
+use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::port::meta::ActionMeta;
@@ -154,7 +155,7 @@ impl StaticAction for RewriteSrcMac {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _packet_meta: &MblkPacketData,
+        _packet_meta: MblkPacketDataView,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {

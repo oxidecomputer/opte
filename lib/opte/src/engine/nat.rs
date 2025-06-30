@@ -18,6 +18,7 @@ use super::packet::BodyTransform;
 use super::packet::BodyTransformError;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
+use super::packet::MblkPacketDataView;
 use super::packet::Packet;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
@@ -105,7 +106,7 @@ impl StatefulAction for OutboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet<MblkFullParsed>,
+        _pkt: MblkPacketDataView,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // When we have several external IPs at our disposal, we are
@@ -168,7 +169,7 @@ impl StatefulAction for InboundNat {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        _pkt: &Packet<MblkFullParsed>,
+        _pkt: MblkPacketDataView,
         _meta: &mut ActionMeta,
     ) -> rule::GenDescResult {
         // We rely on the attached predicates to filter out IPs which are *not*
@@ -234,8 +235,7 @@ impl ActionDesc for NatDesc {
     fn gen_bt(
         &self,
         _dir: Direction,
-        meta: &super::packet::MblkPacketData,
-        _payload_seg: &[u8],
+        meta: MblkPacketDataView,
     ) -> Result<Option<Box<dyn BodyTransform>>, rule::GenBtError> {
         // ICMPv4/v6 traffic can carry frames which they were generated
         // in response to. We need to also apply our NAT transform to
@@ -459,7 +459,7 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(pkt.meta());
-        let desc = match nat.gen_desc(&flow_out, &pkt, &mut ameta) {
+        let desc = match nat.gen_desc(&flow_out, pkt.meta_view(), &mut ameta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };

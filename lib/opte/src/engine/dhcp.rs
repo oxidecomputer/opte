@@ -9,6 +9,7 @@
 use super::ether::Ethernet;
 use super::ip::v4::*;
 use super::packet::MblkPacketData;
+use super::packet::MblkPacketDataView;
 use super::predicate::DataPredicate;
 use super::predicate::EtherAddrMatch;
 use super::predicate::IpProtoMatch;
@@ -478,7 +479,7 @@ impl HairpinAction for DhcpAction {
         (hdr_preds, data_preds)
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         let body = meta.copy_remaining();
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;

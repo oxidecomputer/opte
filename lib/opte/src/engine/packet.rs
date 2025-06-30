@@ -457,12 +457,171 @@ impl<T: Read + Pullup> Drop for PktBodyWalker<T> {
     }
 }
 
+/// View of [`PacketData`] for use in action bodies.
+pub struct PacketDataView<'a, T: Read + Pullup> {
+    pub headers: &'a OpteMeta<T::Chunk>,
+    pub initial_lens: &'a InitialLayerLens,
+    body: &'a PktBodyWalker<T>,
+    pub stats: &'a mut FlowStatBuilder,
+}
+
+impl<T: Read + Pullup> core::fmt::Debug for PacketDataView<'_, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("PacketHeaders(..)")
+    }
+}
+
 /// Packet state for the standard ULP path, or a full table walk over the slowpath.
 pub struct PacketData<T: Read + Pullup> {
     pub(crate) headers: OpteMeta<T::Chunk>,
-    initial_lens: Option<Box<InitialLayerLens>>,
+    initial_lens: InitialLayerLens,
     body: PktBodyWalker<T>,
     pub(crate) stats: FlowStatBuilder,
+}
+
+impl<T: Read + Pullup> PacketDataView<'_, T> {
+    pub fn outer_ether(
+        &self,
+    ) -> Option<&InlineHeader<Ethernet, ValidEthernet<T::Chunk>>> {
+        self.headers.outer_eth.as_ref()
+    }
+
+    pub fn outer_ip(&self) -> Option<&L3<T::Chunk>> {
+        self.headers.outer_l3.as_ref()
+    }
+
+    /// Returns whether this packet is sourced from outside the rack,
+    /// in addition to its VNI.
+    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
+        match &self.headers.outer_encap {
+            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
+                Some((g.vni, g.oxide_external_pkt))
+            }
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
+                Some((g.vni(), valid_geneve_has_oxide_external(g)))
+            }
+            None => None,
+        }
+    }
+
+    pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
+        &self.headers.inner_eth
+    }
+
+    pub fn inner_l3(&self) -> Option<&L3<T::Chunk>> {
+        self.headers.inner_l3.as_ref()
+    }
+
+    pub fn inner_ulp(&self) -> Option<&Ulp<T::Chunk>> {
+        self.headers.inner_ulp.as_ref()
+    }
+
+    pub fn inner_ip4(&self) -> Option<&Ipv4Packet<T::Chunk>> {
+        self.inner_l3().and_then(|v| match v {
+            L3::Ipv4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_ip6(&self) -> Option<&Ipv6Packet<T::Chunk>> {
+        self.inner_l3().and_then(|v| match v {
+            L3::Ipv6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp(&self) -> Option<&IcmpV4Packet<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::IcmpV4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp6(&self) -> Option<&IcmpV6Packet<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::IcmpV6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_tcp(&self) -> Option<&TcpPacket<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::Tcp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_udp(&self) -> Option<&UdpPacket<T::Chunk>> {
+        self.inner_ulp().and_then(|v| match v {
+            Ulp::Udp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn is_inner_tcp(&self) -> bool {
+        matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
+    }
+
+    pub fn body(&self) -> &[u8]
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        self.body.body()
+    }
+
+    pub fn copy_remaining(&self) -> Vec<u8>
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        let base = self.body();
+        base.to_vec()
+    }
+
+    pub fn append_remaining(&self, buf: &mut Vec<u8>)
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        let base = self.body();
+        buf.extend_from_slice(base);
+    }
+
+    /// Return whether the IP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ip_csum(&self) -> bool {
+        match &self.headers.inner_l3 {
+            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
+            Some(L3::Ipv6(_)) => false,
+            None => false,
+        }
+    }
+
+    /// Return whether the ULP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ulp_csum(&self) -> bool {
+        let csum = match &self.headers.inner_ulp {
+            Some(Ulp::Tcp(t)) => t.checksum(),
+            Some(Ulp::Udp(u)) => u.checksum(),
+            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
+            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
+            None => return false,
+        };
+
+        csum != 0
+    }
+
+    /// Push a rootstat
+    /// TODO:::::::::
+    ///
+    /// Need to rethink this. This *should* be &mut, but we don't
+    /// want anything else in here to be mut to protect OPTE's design
+    /// (i.e., actions don't *actually* modify packets). So we maybe
+    /// need a view type preventing mut use of the other fields?
+    pub fn push_stat(&mut self, stat: Arc<RootStat>) {
+        self.stats.push(stat.into());
+    }
 }
 
 impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
@@ -486,8 +645,37 @@ impl<T: Read + Pullup> core::fmt::Debug for PacketData<T> {
 }
 
 impl<T: Read + Pullup> PacketData<T> {
-    pub fn initial_lens(&self) -> Option<&InitialLayerLens> {
-        self.initial_lens.as_deref()
+    pub fn view(&mut self) -> PacketDataView<T> {
+        PacketDataView {
+            headers: &self.headers,
+            initial_lens: &self.initial_lens,
+            body: &self.body,
+            stats: &mut self.stats,
+        }
+    }
+
+    pub fn prep_body(&mut self)
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        self.body.prepare()
+    }
+
+    pub fn body(&self) -> &[u8]
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        self.body.body()
+    }
+
+    pub fn body_mut(&mut self) -> &mut [u8]
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        self.body.body_mut()
     }
 
     pub fn outer_ether(
@@ -572,22 +760,6 @@ impl<T: Read + Pullup> PacketData<T> {
         matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
     }
 
-    pub fn prep_body(&mut self)
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.prepare()
-    }
-
-    pub fn body(&self) -> &[u8]
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.body()
-    }
-
     pub fn copy_remaining(&self) -> Vec<u8>
     where
         T::Chunk: ByteSliceMut,
@@ -604,14 +776,6 @@ impl<T: Read + Pullup> PacketData<T> {
     {
         let base = self.body();
         buf.extend_from_slice(base);
-    }
-
-    pub fn body_mut(&mut self) -> &mut [u8]
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.body_mut()
     }
 
     /// Return whether the IP layer has a checksum both structurally
@@ -636,17 +800,6 @@ impl<T: Read + Pullup> PacketData<T> {
         };
 
         csum != 0
-    }
-
-    ///
-    /// TODO:::::::::
-    ///
-    /// Need to rethink this. This *should* be &mut, but we don't
-    /// want anything else in here to be mut to protect OPTE's design
-    /// (i.e., actions don't *actually* modify packets). So we maybe
-    /// need a view type preventing mut use of the other fields?
-    pub fn push_stat(&mut self, stat: Arc<RootStat>) {
-        self.stats.push(stat.into());
     }
 }
 
@@ -783,17 +936,14 @@ where
         let flow = headers.flow();
 
         let headers: OpteMeta<_> = headers.into();
-        let initial_lens = Some(
-            InitialLayerLens {
-                outer_eth: headers.outer_eth.packet_length(),
-                outer_l3: headers.outer_l3.packet_length(),
-                outer_encap: headers.outer_encap.packet_length(),
-                inner_eth: headers.inner_eth.packet_length(),
-                inner_l3: headers.inner_l3.packet_length(),
-                inner_ulp: headers.inner_ulp.packet_length(),
-            }
-            .into(),
-        );
+        let initial_lens = InitialLayerLens {
+            outer_eth: headers.outer_eth.packet_length(),
+            outer_l3: headers.outer_l3.packet_length(),
+            outer_encap: headers.outer_encap.packet_length(),
+            inner_eth: headers.inner_eth.packet_length(),
+            inner_l3: headers.inner_l3.packet_length(),
+            inner_ulp: headers.inner_ulp.packet_length(),
+        };
         let body = PktBodyWalker::new(last_chunk, data);
         let meta = Box::new(PacketData {
             headers,
@@ -843,6 +993,10 @@ where
 }
 
 impl<T: Read + Pullup> Packet<FullParsed<T>> {
+    pub fn meta_view(&mut self) -> PacketDataView<T> {
+        self.state.meta.view()
+    }
+
     pub fn meta(&self) -> &PacketData<T> {
         &self.state.meta
     }
@@ -873,7 +1027,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         //   pkt space.
         let l4_hash = self.l4_hash();
         let state = &mut self.state;
-        let init_lens = state.meta.initial_lens.as_ref().unwrap();
+        let init_lens = &state.meta.initial_lens;
         let headers = &state.meta.headers;
         let payload_len = state.len - init_lens.hdr_len();
         let mut encapped_len = payload_len;
@@ -1435,6 +1589,7 @@ impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 // ActionDescs to be generic over T (trait object safety rules, etc.),
 // in addition to needing to rework Hairpin actions.
 pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
+pub type MblkPacketDataView<'a, 'b> = PacketDataView<'a, MsgBlkIterMut<'b>>;
 pub type MblkFullParsed<'a> = FullParsed<MsgBlkIterMut<'a>>;
 pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 

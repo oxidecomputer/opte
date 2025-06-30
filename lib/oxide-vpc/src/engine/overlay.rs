@@ -49,6 +49,7 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
+use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::port::meta::ActionMeta;
@@ -201,7 +202,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        _pkt_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -387,7 +388,7 @@ impl StaticAction for DecapAction {
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        pkt_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         match pkt_meta.outer_encap_geneve_vni_and_origin() {

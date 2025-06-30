@@ -13,6 +13,7 @@ use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
+use super::packet::MblkPacketDataView;
 use super::packet::Packet;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
@@ -243,13 +244,11 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet<MblkFullParsed>,
+        pkt: MblkPacketDataView,
     ) -> GenDescResult {
-        let meta = pkt.meta();
-
         let echo_ident = match T::MESSAGE_PROTOCOL {
             Protocol::ICMP => {
-                let icmp = meta.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
+                let icmp = pkt.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
 
                 Ok(if icmp.ty() == IcmpV4Type::ECHO_REQUEST {
                     icmp.echo_id()
@@ -259,7 +258,7 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
             }
             Protocol::ICMPv6 => {
                 let icmp6 =
-                    meta.inner_icmp6().ok_or(GenIcmpErr::MetaNotFound)?;
+                    pkt.inner_icmp6().ok_or(GenIcmpErr::MetaNotFound)?;
 
                 Ok(if icmp6.ty() == IcmpV6Type::ECHO_REQUEST {
                     icmp6.echo_id()
@@ -306,7 +305,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<MblkFullParsed>,
+        pkt: MblkPacketDataView,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let proto = flow_id.protocol();
@@ -560,10 +559,11 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(pkt.meta());
-        let desc = match snat.gen_desc(&flow_out, &pkt, &mut action_meta) {
-            Ok(AllowOrDeny::Allow(desc)) => desc,
-            _ => panic!("expected AllowOrDeny::Allow(desc) result"),
-        };
+        let desc =
+            match snat.gen_desc(&flow_out, pkt.meta_view(), &mut action_meta) {
+                Ok(AllowOrDeny::Allow(desc)) => desc,
+                _ => panic!("expected AllowOrDeny::Allow(desc) result"),
+            };
         assert!(!snat.tcp_pool.verify_available(priv_ip, pub_ip, pub_port));
 
         // ================================================================
