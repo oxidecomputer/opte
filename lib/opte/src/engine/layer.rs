@@ -852,13 +852,12 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) =
+                if let Some(body_segs) = pkt.body()
+                    && let Some(bt) =
                         desc.gen_bt(Direction::In, pkt.meta(), body_segs)?
-                    {
-                        pkt.body_transform(Direction::In, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                {
+                    pkt.body_transform(Direction::In, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 Ok(LayerResult::Allow)
@@ -1044,11 +1043,11 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)? {
-                        pkt.body_transform(In, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(body_segs) = pkt.body()
+                    && let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)?
+                {
+                    pkt.body_transform(In, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 // The outbound flow ID must be calculated _after_ the
@@ -1139,13 +1138,12 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) =
+                if let Some(body_segs) = pkt.body()
+                    && let Some(bt) =
                         desc.gen_bt(Direction::Out, pkt.meta(), body_segs)?
-                    {
-                        pkt.body_transform(Direction::Out, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                {
+                    pkt.body_transform(Direction::Out, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 Ok(LayerResult::Allow)
@@ -1333,11 +1331,11 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body() {
-                    if let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)? {
-                        pkt.body_transform(Out, &*bt)?;
-                        xforms.body.push(bt);
-                    }
+                if let Some(body_segs) = pkt.body()
+                    && let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)?
+                {
+                    pkt.body_transform(Out, &*bt)?;
+                    xforms.body.push(bt);
                 }
 
                 // The inbound flow ID must be calculated _after_ the
@@ -1855,7 +1853,7 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let ameta = ActionMeta::new();
         let ifid = *pmeta.flow();
-        assert!(rule_table.find_match(&ifid, &pmeta.meta(), &ameta).is_some());
+        assert!(rule_table.find_match(&ifid, pmeta.meta(), &ameta).is_some());
     }
 }
 // TODO Reinstate
