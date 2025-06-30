@@ -367,7 +367,7 @@ mod test {
     fn parse_single_opt() {
         // Create a packet with one extension header.
         #[rustfmt::skip]
-        let buf = vec![
+        let buf = [
             // source
             0x1E, 0x61,
             // dest
@@ -407,7 +407,7 @@ mod test {
         // flag set.
         // We do not unsdertand this extension, so must drop the packet.
         #[rustfmt::skip]
-        let buf = vec![
+        let buf = [
             // source
             0x1E, 0x61,
             // dest
@@ -449,7 +449,7 @@ mod test {
         // We shoukld also be able to extract info on the options we *do*
         // care about.
         #[rustfmt::skip]
-        let buf = vec![
+        let buf = [
             // source
             0x1E, 0x61,
             // dest

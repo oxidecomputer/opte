@@ -1081,13 +1081,14 @@ impl Rule<Finalized> {
     ) -> bool {
         #[cfg(debug_assertions)]
         {
-            if let Some(preds) = &self.state.preds {
-                if preds.hdr_preds.is_empty() && preds.data_preds.is_empty() {
-                    panic!(
-                        "bug: RulePredicates must have at least one \
-                            predicate"
-                    );
-                }
+            if let Some(preds) = &self.state.preds
+                && preds.hdr_preds.is_empty()
+                && preds.data_preds.is_empty()
+            {
+                panic!(
+                    "bug: RulePredicates must have at least one \
+                        predicate"
+                );
             }
         }
 
@@ -1185,7 +1186,7 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(&meta, &ameta));
+    assert!(r1.is_match(meta, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
@@ -1194,5 +1195,5 @@ fn rule_matching() {
         v4.set_source(new_src_ip);
     }
 
-    assert!(!r1.is_match(&meta, &ameta));
+    assert!(!r1.is_match(meta, &ameta));
 }

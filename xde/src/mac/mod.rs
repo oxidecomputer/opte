@@ -55,7 +55,7 @@ pub struct MacHandle(*mut mac_handle);
 
 impl MacHandle {
     /// Grab a handle to the mac provider for the given link.
-    pub fn open_by_link_name(link: &str) -> Result<Self, MacOpenError> {
+    pub fn open_by_link_name(link: &str) -> Result<Self, MacOpenError<'_>> {
         let name = CString::new(link)
             .map_err(|_| MacOpenError::InvalidLinkName(link))?;
 
