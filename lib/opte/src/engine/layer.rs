@@ -786,8 +786,8 @@ impl Layer {
         ft_limit: NonZeroU32,
     ) -> Self {
         let stats = port.stats_mut();
-        let default_in_stat = stats.root(actions.default_in_stat_id);
-        let default_out_stat = stats.root(actions.default_out_stat_id);
+        let default_in_stat = stats.new_root(actions.default_in_stat_id);
+        let default_out_stat = stats.new_root(actions.default_out_stat_id);
 
         let port_name = port.name();
 
@@ -1656,7 +1656,7 @@ pub enum RuleRemoveErr {
 
 impl RuleTable {
     fn add(&mut self, rule: Rule<rule::Finalized>, stats: &mut StatTree) {
-        let stat = stats.root(rule.stat_id().copied());
+        let stat = stats.new_root(rule.stat_id().copied());
         match self.find_pos(&rule) {
             RulePlace::End => {
                 let rte =

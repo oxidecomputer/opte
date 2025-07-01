@@ -379,6 +379,63 @@ impl<T: ByteSlice> OpteMeta<T> {
     }
 }
 
+impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: NoEncap<T>) -> Self {
+        OpteMeta {
+            outer_eth: None,
+            outer_l3: None,
+            outer_encap: None,
+            inner_eth: value.inner_eth,
+            inner_l3: value.inner_l3,
+            inner_ulp: value.inner_ulp,
+        }
+    }
+}
+
+impl<T: ByteSlice> From<&OpteMeta<T>> for InnerFlowId {
+    #[inline]
+    fn from(meta: &OpteMeta<T>) -> Self {
+        let (proto, addrs) = match &meta.inner_l3 {
+            Some(L3::Ipv4(pkt)) => (
+                pkt.protocol().0,
+                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
+            ),
+            Some(L3::Ipv6(pkt)) => (
+                pkt.next_layer().unwrap_or_default().0,
+                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
+            ),
+            None => (255, FLOW_ID_DEFAULT.addrs),
+        };
+
+        let proto_info = match &meta.inner_ulp {
+            Some(Ulp::Tcp(t)) => {
+                PortInfo { src_port: t.source(), dst_port: t.destination() }
+                    .into()
+            }
+            Some(Ulp::Udp(u)) => {
+                PortInfo { src_port: u.source(), dst_port: u.destination() }
+                    .into()
+            }
+            Some(Ulp::IcmpV4(v4)) => IcmpInfo {
+                ty: v4.ty().0,
+                code: v4.code(),
+                id: v4.echo_id().unwrap_or_default(),
+            }
+            .into(),
+            Some(Ulp::IcmpV6(v6)) => IcmpInfo {
+                ty: v6.ty().0,
+                code: v6.code(),
+                id: v6.echo_id().unwrap_or_default(),
+            }
+            .into(),
+            _ => Default::default(),
+        };
+
+        InnerFlowId { proto, addrs, proto_info }
+    }
+}
+
 /// Helper for conditionally pulling up a packet when required,
 /// to provide safe read/write access to the packet body.
 ///
@@ -543,7 +600,12 @@ impl<T: Read + Pullup> Drop for PktBodyWalker<T> {
     }
 }
 
-/// View of [`PacketData`] for use in action bodies.
+/// Per-packet context for use within (stateful) actions.
+///
+/// This view type provides read-only access to the packet's headers and body,
+/// which allow for an action to determine in more detail how a packet should be
+/// modified. Additionally, this allows for an action to insert particular
+/// [`RootStat`] objects into the packet trace.
 pub struct PacketDataView<'a, T: Read + Pullup> {
     pub headers: &'a OpteMeta<T::Chunk>,
     pub initial_lens: &'a InitialLayerLens,
@@ -558,6 +620,13 @@ impl<T: Read + Pullup> core::fmt::Debug for PacketDataView<'_, T> {
 }
 
 impl<T: Read + Pullup> PacketDataView<'_, T> {
+    /// Examine a packet's body, beginning after the last parsed layer in
+    /// `headers`.
+    ///
+    /// This should be avoided unless required -- if a packet's body is split
+    /// over several segments or has a shared refcount, then the packet body
+    /// will be puleld up into a single segment. This cost is paid at most
+    /// once per packet.
     pub fn body(&self) -> &[u8]
     where
         T::Chunk: ByteSliceMut,
@@ -566,6 +635,9 @@ impl<T: Read + Pullup> PacketDataView<'_, T> {
         self.body.body()
     }
 
+    /// Copy the packet's body into a new `Vec`.
+    ///
+    /// Comes with the same performance caveats as [`Self::body`].
     pub fn copy_remaining(&self) -> Vec<u8>
     where
         T::Chunk: ByteSliceMut,
@@ -575,6 +647,9 @@ impl<T: Read + Pullup> PacketDataView<'_, T> {
         base.to_vec()
     }
 
+    /// Append the packet's body to an existing `Vec`.
+    ///
+    /// Comes with the same performance caveats as [`Self::body`].
     pub fn append_remaining(&self, buf: &mut Vec<u8>)
     where
         T::Chunk: ByteSliceMut,
@@ -586,11 +661,34 @@ impl<T: Read + Pullup> PacketDataView<'_, T> {
 
     /// Push a stat object for this layer of packet processing, in addition to
     /// that of the current rule. This allows one rule to be associated with
-    /// several control-plane level objects, and associate states with each
+    /// several control-plane level objects, and to associate states with each
     /// as needed.
     ///
-    /// Dataplane designs should avoid pushing the same root stat in multiple
-    /// layers -- see the commentary [`FlowStatBuilder`].
+    /// ## Ensuring exact counting
+    /// If an LFT entry is created, all [`RootStat`]s from the current layer are
+    /// collected and assigned a new internal stat node as a child.
+    ///
+    /// For stats to be measured exactly (i.e., without any nondeterministic
+    /// double/triple-counting) you must ensure that your [`NetworkImpl`] is designed
+    /// so that each [`RootStat`] you define is only reachable by at most one path
+    /// in a flow. Duplicate root stats (within a flow or internal node) are
+    /// trivially filtered out, but reusing a [`RootStat`] in, e.g., a layer which
+    /// generates an LFT entry and then as the rule-stat in a stateless layer poses
+    /// problems.
+    ///
+    /// I.e., consider the below case:
+    /// ```text
+    /// flow(abcd)[ RootStat(0), RootStat(1), InternalStat(2), RootStat(3) ]
+    ///                                          ^
+    ///                                          |
+    ///                           [ RootStat(1), RootStat(4), ... ]
+    /// ```
+    /// `InternalNode(2)` could expire at a *later time* than `flow(abcd)`,
+    /// which means that it and `RootStat(1)` will inherit the flow stats on
+    /// its closure, and then RootStat(1) will inherit these *again* once
+    /// `InternalNode(2)` expires.
+    ///
+    /// [`NetworkImpl`]: super::NetworkImpl
     pub fn push_stat(&mut self, stat: Arc<RootStat>) {
         self.stats.push(stat.into());
     }
@@ -609,20 +707,6 @@ pub(crate) struct PacketData<T: Read + Pullup> {
     pub(crate) stats: FlowStatBuilder,
 }
 
-impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
-    #[inline]
-    fn from(value: NoEncap<T>) -> Self {
-        OpteMeta {
-            outer_eth: None,
-            outer_l3: None,
-            outer_encap: None,
-            inner_eth: value.inner_eth,
-            inner_l3: value.inner_l3,
-            inner_ulp: value.inner_ulp,
-        }
-    }
-}
-
 impl<T: Read + Pullup> core::fmt::Debug for PacketData<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("PacketHeaders(..)")
@@ -637,49 +721,6 @@ impl<T: Read + Pullup> PacketData<T> {
             body: &self.body,
             stats: &mut self.stats,
         }
-    }
-}
-
-impl<T: ByteSlice> From<&OpteMeta<T>> for InnerFlowId {
-    #[inline]
-    fn from(meta: &OpteMeta<T>) -> Self {
-        let (proto, addrs) = match &meta.inner_l3 {
-            Some(L3::Ipv4(pkt)) => (
-                pkt.protocol().0,
-                AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
-            ),
-            Some(L3::Ipv6(pkt)) => (
-                pkt.next_layer().unwrap_or_default().0,
-                AddrPair::V6 { src: pkt.source(), dst: pkt.destination() },
-            ),
-            None => (255, FLOW_ID_DEFAULT.addrs),
-        };
-
-        let proto_info = match &meta.inner_ulp {
-            Some(Ulp::Tcp(t)) => {
-                PortInfo { src_port: t.source(), dst_port: t.destination() }
-                    .into()
-            }
-            Some(Ulp::Udp(u)) => {
-                PortInfo { src_port: u.source(), dst_port: u.destination() }
-                    .into()
-            }
-            Some(Ulp::IcmpV4(v4)) => IcmpInfo {
-                ty: v4.ty().0,
-                code: v4.code(),
-                id: v4.echo_id().unwrap_or_default(),
-            }
-            .into(),
-            Some(Ulp::IcmpV6(v6)) => IcmpInfo {
-                ty: v6.ty().0,
-                code: v6.code(),
-                id: v6.echo_id().unwrap_or_default(),
-            }
-            .into(),
-            _ => Default::default(),
-        };
-
-        InnerFlowId { proto, addrs, proto_info }
     }
 }
 

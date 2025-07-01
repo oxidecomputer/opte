@@ -601,7 +601,7 @@ impl HdrTransform {
     }
 
     /// Run this header transformation against the passed in
-    /// [`PacketData`], mutating it in place.
+    /// [`Packet`], mutating it in place.
     ///
     /// Returns whether the inner checksum needs recomputed.
     ///

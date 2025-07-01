@@ -28,7 +28,6 @@ use opte_api::TcpState;
 use uuid::Uuid;
 
 // TODO READOUT OF STAT FROM GIVEN ROOT(S).
-// TODO restrict most of this to pub(crate)?
 
 /// Opaque identifier for tracking unique stat objects.
 #[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Debug)]
@@ -414,11 +413,11 @@ impl From<&PacketCounter> for ApiPktCounter {
 }
 
 /// Counts of actions taken/packets encountered by a rule.
-pub struct FullCounter {
-    pub allow: AtomicU64,
-    pub deny: AtomicU64,
-    pub hairpin: AtomicU64,
-    pub packets: PacketCounter,
+struct FullCounter {
+    allow: AtomicU64,
+    deny: AtomicU64,
+    hairpin: AtomicU64,
+    packets: PacketCounter,
 }
 
 impl FullCounter {
@@ -490,7 +489,7 @@ impl StatTree {
     /// Gets or creates the root stat for a given UUID.
     ///
     /// Allocates a new UUID if none is provided.
-    pub fn root(&mut self, uuid: Option<Uuid>) -> Arc<RootStat> {
+    pub fn new_root(&mut self, uuid: Option<Uuid>) -> Arc<RootStat> {
         let uuid = uuid.unwrap_or_else(|| Uuid::from_u64_pair(0, self.next_id));
         let ids = &mut self.next_id;
 
@@ -507,7 +506,7 @@ impl StatTree {
     }
 
     /// Creates a new internal node from a given set of parents.
-    pub fn new_intermediate(
+    fn new_intermediate(
         &mut self,
         parents: Vec<StatParent>,
     ) -> Arc<InternalStat> {
@@ -528,8 +527,8 @@ impl StatTree {
         out
     }
 
-    /// Gets or creates the flow stat
-    pub fn new_flow(
+    /// Gets or creates the flow stat associated with a pair of 5-tuples.
+    pub(crate) fn new_flow(
         &mut self,
         flow_id: &InnerFlowId,
         partner_flow: &InnerFlowId,
@@ -798,30 +797,7 @@ fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
 
 /// Collects stats as a packet is processed, keeping track of the boundary
 /// of the most recent layer.
-///
-/// ## Ensuring exact counting
-/// For stats to be measured exactly (i.e., without any nondeterministic
-/// double/triple-counting) you must ensure that your [`NetworkImpl`] is designed
-/// so that each [`RootStat`] you define is only reachable by at most one path
-/// from any flow. Duplicate root stats (in a flow or internal node) are
-/// trivially filtered out, but reusing a [`RootStat`] in, e.g., a layer which
-/// generates an LFT entry and then as the rule-stat in a stateless layer poses
-/// problems.
-///
-/// I.e., consider the below case:
-/// ```text
-/// flow(abcd)[ RootStat(0), RootStat(1), InternalNode(2), RootStat(3) ]
-///                                          ^
-///                                          |
-///                           [ RootStat(1), RootStat(4), ... ]
-/// ```
-/// `InternalNode(2)` could expire at a *later time* than `flow(abcd)`,
-/// which means that it and `RootStat(1)` will inherit the flow stats on
-/// its closure, and then RootStat(1) will inherit these *again* once
-/// `InternalNode(2)` expires.
-///
-/// [`NetworkImpl`]: super::NetworkImpl
-pub struct FlowStatBuilder {
+pub(crate) struct FlowStatBuilder {
     parents: Vec<StatParent>,
     layer_end: usize,
 }
@@ -975,10 +951,10 @@ mod tests {
         // All stats in the last layer instead increment the terminal action.
         let mut tree = StatTree::default();
 
-        let r0 = tree.root(Some(ROOT_0));
-        let r1 = tree.root(Some(ROOT_1));
-        let r2 = tree.root(Some(ROOT_2));
-        let r3 = tree.root(Some(ROOT_3));
+        let r0 = tree.new_root(Some(ROOT_0));
+        let r1 = tree.new_root(Some(ROOT_1));
+        let r2 = tree.new_root(Some(ROOT_2));
+        let r3 = tree.new_root(Some(ROOT_3));
 
         let i0 = tree.new_intermediate(vec![r0.into()]);
         let i1 = tree.new_intermediate(vec![r2.into()]);
@@ -1036,10 +1012,10 @@ mod tests {
     fn flow_lifecycle() {
         let mut tree = StatTree::default();
 
-        let r0 = tree.root(Some(ROOT_0));
-        let r1 = tree.root(Some(ROOT_1));
-        let r2 = tree.root(Some(ROOT_2));
-        let r3 = tree.root(Some(ROOT_3));
+        let r0 = tree.new_root(Some(ROOT_0));
+        let r1 = tree.new_root(Some(ROOT_1));
+        let r2 = tree.new_root(Some(ROOT_2));
+        let r3 = tree.new_root(Some(ROOT_3));
 
         let i0 = tree.new_intermediate(vec![Arc::clone(&r0).into()]);
         let i1 = tree.new_intermediate(vec![Arc::clone(&r1).into()]);
@@ -1169,10 +1145,10 @@ mod tests {
     fn root_counters() {
         let mut tree = StatTree::default();
 
-        let r0 = tree.root(Some(ROOT_0));
-        let r1 = tree.root(Some(ROOT_1));
-        let r2 = tree.root(Some(ROOT_2));
-        let r3 = tree.root(Some(ROOT_3));
+        let r0 = tree.new_root(Some(ROOT_0));
+        let r1 = tree.new_root(Some(ROOT_1));
+        let r2 = tree.new_root(Some(ROOT_2));
+        let r3 = tree.new_root(Some(ROOT_3));
 
         let i0 = tree.new_intermediate(vec![Arc::clone(&r0).into()]);
         let i1 = tree.new_intermediate(vec![Arc::clone(&r1).into()]);
