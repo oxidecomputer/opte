@@ -478,8 +478,6 @@ impl From<&InternalStat> for ApiFullCounter {
 }
 
 /// Manager of all stat/counter objects within a port.
-///
-///
 #[derive(Default)]
 pub struct StatTree {
     next_id: u64,
@@ -658,25 +656,25 @@ impl StatTree {
             #[allow(clippy::mutable_key_type)]
             let mut parents: BTreeSet<ById> = Default::default();
             let mut base_stats = None;
-            if let Liveness::Seen(id) = v.lhs {
-                if let Some(flow) = self.flows.remove(&id) {
-                    let flow = Arc::into_inner(flow)
-                        .expect("strong count 1 is enforced above");
-                    for p_id in flow.parents {
-                        parents.insert(ById(p_id));
-                    }
-                    base_stats = Some(flow.shared);
+            if let Liveness::Seen(id) = v.lhs
+                && let Some(flow) = self.flows.remove(&id)
+            {
+                let flow = Arc::into_inner(flow)
+                    .expect("strong count 1 is enforced above");
+                for p_id in flow.parents {
+                    parents.insert(ById(p_id));
                 }
+                base_stats = Some(flow.shared);
             }
-            if let Liveness::Seen(id) = v.rhs {
-                if let Some(flow) = self.flows.remove(&id) {
-                    let flow = Arc::into_inner(flow)
-                        .expect("strong count 1 is enforced above");
-                    for p_id in flow.parents {
-                        parents.insert(ById(p_id));
-                    }
-                    base_stats = Some(flow.shared);
+            if let Liveness::Seen(id) = v.rhs
+                && let Some(flow) = self.flows.remove(&id)
+            {
+                let flow = Arc::into_inner(flow)
+                    .expect("strong count 1 is enforced above");
+                for p_id in flow.parents {
+                    parents.insert(ById(p_id));
                 }
+                base_stats = Some(flow.shared);
             }
 
             // At long last, combine!
@@ -775,7 +773,7 @@ impl StatTree {
                 stat.parents.iter().map(|v| v.global_id()).collect();
             out.push_str(&format!("\t{id}/{} ->\n", stat.dir));
             out.push_str(&format!("\t\t{:?} {d:?}\n", stat.shared.stats.id));
-            out.push_str(&format!("\t\tparents {:?}\n", parents));
+            out.push_str(&format!("\t\tparents {parents:?}\n"));
             out.push_str(&format!("\t\tbases {:?}\n\n", stat.bases));
         }
         out.push_str("----\n");

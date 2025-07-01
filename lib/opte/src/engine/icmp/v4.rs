@@ -51,7 +51,7 @@ impl HairpinAction for IcmpEchoReply {
     }
 
     fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
-        let Some(icmp) = meta.inner_icmp() else {
+        let Some(icmp) = meta.headers.inner_icmp() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMP packet. That
             // should be impossible, but we avoid panicking given the kernel

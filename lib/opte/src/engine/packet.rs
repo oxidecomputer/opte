@@ -293,6 +293,92 @@ pub struct OpteMeta<T: ByteSlice> {
     pub inner_ulp: Option<Ulp<T>>,
 }
 
+impl<T: ByteSlice> OpteMeta<T> {
+    /// Returns whether this packet is sourced from outside the rack,
+    /// in addition to its VNI.
+    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
+        match &self.outer_encap {
+            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
+                Some((g.vni, g.oxide_external_pkt))
+            }
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
+                Some((g.vni(), valid_geneve_has_oxide_external(g)))
+            }
+            None => None,
+        }
+    }
+
+    pub fn inner_ip4(&self) -> Option<&Ipv4Packet<T>> {
+        self.inner_l3.as_ref().and_then(|v| match v {
+            L3::Ipv4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_ip6(&self) -> Option<&Ipv6Packet<T>> {
+        self.inner_l3.as_ref().and_then(|v| match v {
+            L3::Ipv6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp(&self) -> Option<&IcmpV4Packet<T>> {
+        self.inner_ulp.as_ref().and_then(|v| match v {
+            Ulp::IcmpV4(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_icmp6(&self) -> Option<&IcmpV6Packet<T>> {
+        self.inner_ulp.as_ref().and_then(|v| match v {
+            Ulp::IcmpV6(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_tcp(&self) -> Option<&TcpPacket<T>> {
+        self.inner_ulp.as_ref().and_then(|v| match v {
+            Ulp::Tcp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn inner_udp(&self) -> Option<&UdpPacket<T>> {
+        self.inner_ulp.as_ref().and_then(|v| match v {
+            Ulp::Udp(v) => Some(v),
+            _ => None,
+        })
+    }
+
+    pub fn is_inner_tcp(&self) -> bool {
+        matches!(self.inner_ulp, Some(Ulp::Tcp(_)))
+    }
+
+    /// Return whether the IP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ip_csum(&self) -> bool {
+        match &self.inner_l3 {
+            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
+            Some(L3::Ipv6(_)) => false,
+            None => false,
+        }
+    }
+
+    /// Return whether the ULP layer has a checksum both structurally
+    /// and that it is non-zero (i.e., not offloaded).
+    pub fn has_ulp_csum(&self) -> bool {
+        let csum = match &self.inner_ulp {
+            Some(Ulp::Tcp(t)) => t.checksum(),
+            Some(Ulp::Udp(u)) => u.checksum(),
+            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
+            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
+            None => return false,
+        };
+
+        csum != 0
+    }
+}
+
 /// Helper for conditionally pulling up a packet when required,
 /// to provide safe read/write access to the packet body.
 ///
@@ -462,7 +548,7 @@ pub struct PacketDataView<'a, T: Read + Pullup> {
     pub headers: &'a OpteMeta<T::Chunk>,
     pub initial_lens: &'a InitialLayerLens,
     body: &'a PktBodyWalker<T>,
-    pub stats: &'a mut FlowStatBuilder,
+    stats: &'a mut FlowStatBuilder,
 }
 
 impl<T: Read + Pullup> core::fmt::Debug for PacketDataView<'_, T> {
@@ -471,97 +557,7 @@ impl<T: Read + Pullup> core::fmt::Debug for PacketDataView<'_, T> {
     }
 }
 
-/// Packet state for the standard ULP path, or a full table walk over the slowpath.
-pub struct PacketData<T: Read + Pullup> {
-    pub(crate) headers: OpteMeta<T::Chunk>,
-    initial_lens: InitialLayerLens,
-    body: PktBodyWalker<T>,
-    pub(crate) stats: FlowStatBuilder,
-}
-
 impl<T: Read + Pullup> PacketDataView<'_, T> {
-    pub fn outer_ether(
-        &self,
-    ) -> Option<&InlineHeader<Ethernet, ValidEthernet<T::Chunk>>> {
-        self.headers.outer_eth.as_ref()
-    }
-
-    pub fn outer_ip(&self) -> Option<&L3<T::Chunk>> {
-        self.headers.outer_l3.as_ref()
-    }
-
-    /// Returns whether this packet is sourced from outside the rack,
-    /// in addition to its VNI.
-    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
-        match &self.headers.outer_encap {
-            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
-                Some((g.vni, g.oxide_external_pkt))
-            }
-            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(g)))
-            }
-            None => None,
-        }
-    }
-
-    pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
-        &self.headers.inner_eth
-    }
-
-    pub fn inner_l3(&self) -> Option<&L3<T::Chunk>> {
-        self.headers.inner_l3.as_ref()
-    }
-
-    pub fn inner_ulp(&self) -> Option<&Ulp<T::Chunk>> {
-        self.headers.inner_ulp.as_ref()
-    }
-
-    pub fn inner_ip4(&self) -> Option<&Ipv4Packet<T::Chunk>> {
-        self.inner_l3().and_then(|v| match v {
-            L3::Ipv4(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_ip6(&self) -> Option<&Ipv6Packet<T::Chunk>> {
-        self.inner_l3().and_then(|v| match v {
-            L3::Ipv6(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_icmp(&self) -> Option<&IcmpV4Packet<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::IcmpV4(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_icmp6(&self) -> Option<&IcmpV6Packet<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::IcmpV6(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_tcp(&self) -> Option<&TcpPacket<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::Tcp(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_udp(&self) -> Option<&UdpPacket<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::Udp(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn is_inner_tcp(&self) -> bool {
-        matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
-    }
-
     pub fn body(&self) -> &[u8]
     where
         T::Chunk: ByteSliceMut,
@@ -588,40 +584,29 @@ impl<T: Read + Pullup> PacketDataView<'_, T> {
         buf.extend_from_slice(base);
     }
 
-    /// Return whether the IP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ip_csum(&self) -> bool {
-        match &self.headers.inner_l3 {
-            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
-            Some(L3::Ipv6(_)) => false,
-            None => false,
-        }
-    }
-
-    /// Return whether the ULP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ulp_csum(&self) -> bool {
-        let csum = match &self.headers.inner_ulp {
-            Some(Ulp::Tcp(t)) => t.checksum(),
-            Some(Ulp::Udp(u)) => u.checksum(),
-            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
-            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
-            None => return false,
-        };
-
-        csum != 0
-    }
-
-    /// Push a rootstat
-    /// TODO:::::::::
+    /// Push a stat object for this layer of packet processing, in addition to
+    /// that of the current rule. This allows one rule to be associated with
+    /// several control-plane level objects, and associate states with each
+    /// as needed.
     ///
-    /// Need to rethink this. This *should* be &mut, but we don't
-    /// want anything else in here to be mut to protect OPTE's design
-    /// (i.e., actions don't *actually* modify packets). So we maybe
-    /// need a view type preventing mut use of the other fields?
+    /// Dataplane designs should avoid pushing the same root stat in multiple
+    /// layers -- see the commentary [`FlowStatBuilder`].
     pub fn push_stat(&mut self, stat: Arc<RootStat>) {
         self.stats.push(stat.into());
     }
+}
+
+/// Packet state for the standard ULP path, or a full table walk over the slowpath.
+///
+/// This type should not be used in or handed to OPTE actions, as its fields have
+/// different intended levels of mutability when generating an action. For instance,
+/// stats can be created and pushed at will, but packet fields/lengths/body contents
+/// should be immutable outside of constructed header/body transforms.
+pub(crate) struct PacketData<T: Read + Pullup> {
+    pub(crate) headers: OpteMeta<T::Chunk>,
+    pub(crate) initial_lens: InitialLayerLens,
+    body: PktBodyWalker<T>,
+    pub(crate) stats: FlowStatBuilder,
 }
 
 impl<T: ByteSlice> From<NoEncap<T>> for OpteMeta<T> {
@@ -645,7 +630,7 @@ impl<T: Read + Pullup> core::fmt::Debug for PacketData<T> {
 }
 
 impl<T: Read + Pullup> PacketData<T> {
-    pub fn view(&mut self) -> PacketDataView<T> {
+    pub fn view(&mut self) -> PacketDataView<'_, T> {
         PacketDataView {
             headers: &self.headers,
             initial_lens: &self.initial_lens,
@@ -653,160 +638,12 @@ impl<T: Read + Pullup> PacketData<T> {
             stats: &mut self.stats,
         }
     }
-
-    pub fn prep_body(&mut self)
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.prepare()
-    }
-
-    pub fn body(&self) -> &[u8]
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.body()
-    }
-
-    pub fn body_mut(&mut self) -> &mut [u8]
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        self.body.body_mut()
-    }
-
-    pub fn outer_ether(
-        &self,
-    ) -> Option<&InlineHeader<Ethernet, ValidEthernet<T::Chunk>>> {
-        self.headers.outer_eth.as_ref()
-    }
-
-    pub fn outer_ip(&self) -> Option<&L3<T::Chunk>> {
-        self.headers.outer_l3.as_ref()
-    }
-
-    /// Returns whether this packet is sourced from outside the rack,
-    /// in addition to its VNI.
-    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
-        match &self.headers.outer_encap {
-            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
-                Some((g.vni, g.oxide_external_pkt))
-            }
-            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(g)))
-            }
-            None => None,
-        }
-    }
-
-    pub fn inner_ether(&self) -> &EthernetPacket<T::Chunk> {
-        &self.headers.inner_eth
-    }
-
-    pub fn inner_l3(&self) -> Option<&L3<T::Chunk>> {
-        self.headers.inner_l3.as_ref()
-    }
-
-    pub fn inner_ulp(&self) -> Option<&Ulp<T::Chunk>> {
-        self.headers.inner_ulp.as_ref()
-    }
-
-    pub fn inner_ip4(&self) -> Option<&Ipv4Packet<T::Chunk>> {
-        self.inner_l3().and_then(|v| match v {
-            L3::Ipv4(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_ip6(&self) -> Option<&Ipv6Packet<T::Chunk>> {
-        self.inner_l3().and_then(|v| match v {
-            L3::Ipv6(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_icmp(&self) -> Option<&IcmpV4Packet<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::IcmpV4(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_icmp6(&self) -> Option<&IcmpV6Packet<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::IcmpV6(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_tcp(&self) -> Option<&TcpPacket<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::Tcp(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn inner_udp(&self) -> Option<&UdpPacket<T::Chunk>> {
-        self.inner_ulp().and_then(|v| match v {
-            Ulp::Udp(v) => Some(v),
-            _ => None,
-        })
-    }
-
-    pub fn is_inner_tcp(&self) -> bool {
-        matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
-    }
-
-    pub fn copy_remaining(&self) -> Vec<u8>
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        let base = self.body();
-        base.to_vec()
-    }
-
-    pub fn append_remaining(&self, buf: &mut Vec<u8>)
-    where
-        T::Chunk: ByteSliceMut,
-        T: Pullup,
-    {
-        let base = self.body();
-        buf.extend_from_slice(base);
-    }
-
-    /// Return whether the IP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ip_csum(&self) -> bool {
-        match &self.headers.inner_l3 {
-            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
-            Some(L3::Ipv6(_)) => false,
-            None => false,
-        }
-    }
-
-    /// Return whether the ULP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ulp_csum(&self) -> bool {
-        let csum = match &self.headers.inner_ulp {
-            Some(Ulp::Tcp(t)) => t.checksum(),
-            Some(Ulp::Udp(u)) => u.checksum(),
-            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
-            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
-            None => return false,
-        };
-
-        csum != 0
-    }
 }
 
-impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
+impl<T: ByteSlice> From<&OpteMeta<T>> for InnerFlowId {
     #[inline]
-    fn from(meta: &PacketData<T>) -> Self {
-        let (proto, addrs) = match meta.inner_l3() {
+    fn from(meta: &OpteMeta<T>) -> Self {
+        let (proto, addrs) = match &meta.inner_l3 {
             Some(L3::Ipv4(pkt)) => (
                 pkt.protocol().0,
                 AddrPair::V4 { src: pkt.source(), dst: pkt.destination() },
@@ -818,7 +655,7 @@ impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
             None => (255, FLOW_ID_DEFAULT.addrs),
         };
 
-        let proto_info = match meta.inner_ulp() {
+        let proto_info = match &meta.inner_ulp {
             Some(Ulp::Tcp(t)) => {
                 PortInfo { src_port: t.source(), dst_port: t.destination() }
                     .into()
@@ -967,12 +804,12 @@ where
     }
 
     #[inline]
-    pub fn meta(&self) -> &M {
+    pub fn headers(&self) -> &M {
         &self.state.meta.headers
     }
 
     #[inline]
-    pub fn meta_mut(&mut self) -> &mut M {
+    pub fn headers_mut(&mut self) -> &mut M {
         &mut self.state.meta.headers
     }
 
@@ -988,20 +825,24 @@ where
 
     #[inline]
     pub fn flow(&self) -> InnerFlowId {
-        self.meta().flow()
+        self.headers().flow()
     }
 }
 
 impl<T: Read + Pullup> Packet<FullParsed<T>> {
-    pub fn meta_view(&mut self) -> PacketDataView<T> {
+    pub fn meta(&mut self) -> PacketDataView<'_, T> {
         self.state.meta.view()
     }
 
-    pub fn meta(&self) -> &PacketData<T> {
+    pub fn headers(&self) -> &OpteMeta<T::Chunk> {
+        &self.state.meta.headers
+    }
+
+    pub(crate) fn meta_internal(&self) -> &PacketData<T> {
         &self.state.meta
     }
 
-    pub fn meta_mut(&mut self) -> &mut PacketData<T> {
+    pub(crate) fn meta_internal_mut(&mut self) -> &mut PacketData<T> {
         &mut self.state.meta
     }
 
@@ -1242,7 +1083,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
     where
         T::Chunk: ByteSliceMut,
     {
-        self.state.inner_csum_dirty |= xform.run(&mut self.state.meta)?;
+        self.state.inner_csum_dirty |= xform.run(self)?;
 
         // Recomputing this is a little bit wasteful, since we're moving
         // rebuilding a static repr from packet fields. This is a necessary
@@ -1251,7 +1092,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         //
         // We *could* elide this on non-compiled UFT transforms, but we do not
         // need those today.
-        self.state.flow = InnerFlowId::from(self.meta());
+        self.state.flow = InnerFlowId::from(self.headers());
         Ok(())
     }
 
@@ -1274,7 +1115,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         self.state.body_modified = true;
         self.state.meta.body.prepare();
 
-        let ulp = self.state.meta.inner_ulp().map(|v| v.repr());
+        let ulp = self.state.meta.headers.inner_ulp.as_ref().map(|v| v.repr());
 
         match self.body_mut() {
             Some(body_segs) => xform.run(dir, ulp.as_ref(), body_segs),
@@ -1291,7 +1132,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let out = self.state.meta.body();
+        let out = self.state.meta.body.body();
         if out.is_empty() { None } else { Some(out) }
     }
 
@@ -1301,8 +1142,30 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let out = self.state.meta.body_mut();
+        let out = self.state.meta.body.body_mut();
         if out.is_empty() { None } else { Some(out) }
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    pub fn append_remaining(&self, buf: &mut Vec<u8>)
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        let base = self.body();
+        if let Some(base) = base {
+            buf.extend_from_slice(base);
+        }
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    pub fn copy_remaining(&self) -> Vec<u8>
+    where
+        T::Chunk: ByteSliceMut,
+        T: Pullup,
+    {
+        let base = self.body();
+        if let Some(base) = base { base.to_vec() } else { vec![] }
     }
 
     #[inline]
@@ -1433,8 +1296,8 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // provided. If the checksum is zero, it's assumed heardware
         // checksum offload is being used, and OPTE should not update
         // the checksum.
-        let update_ip = self.state.meta.has_ip_csum();
-        let update_ulp = self.state.meta.has_ulp_csum();
+        let update_ip = self.state.meta.headers.has_ip_csum();
+        let update_ulp = self.state.meta.headers.has_ulp_csum();
 
         // We expect that any body transform will necessarily invalidate
         // the body_csum. Recompute from scratch.
@@ -1588,7 +1451,7 @@ impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 // These are needed for now to account for not wanting to redesign
 // ActionDescs to be generic over T (trait object safety rules, etc.),
 // in addition to needing to rework Hairpin actions.
-pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
+pub(crate) type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
 pub type MblkPacketDataView<'a, 'b> = PacketDataView<'a, MsgBlkIterMut<'b>>;
 pub type MblkFullParsed<'a> = FullParsed<MsgBlkIterMut<'a>>;
 pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
@@ -1971,17 +1834,19 @@ mod test {
             .unwrap()
             .to_full_meta();
 
-        let eth_meta = parsed.meta().inner_ether();
+        let headers = parsed.headers();
+
+        let eth_meta = &headers.inner_eth;
         assert_eq!(eth_meta.destination(), DST_MAC);
         assert_eq!(eth_meta.source(), SRC_MAC);
         assert_eq!(eth_meta.ethertype(), Ethertype::IPV4);
 
-        let ip4_meta = parsed.meta().inner_ip4().unwrap();
+        let ip4_meta = headers.inner_ip4().unwrap();
         assert_eq!(ip4_meta.source(), SRC_IP4);
         assert_eq!(ip4_meta.destination(), DST_IP4);
         assert_eq!(ip4_meta.protocol(), IpProtocol::TCP);
 
-        let tcp_meta = parsed.meta().inner_tcp().unwrap();
+        let tcp_meta = headers.inner_tcp().unwrap();
         assert_eq!(tcp_meta.source(), 3839);
         assert_eq!(tcp_meta.destination(), 80);
         assert_eq!(tcp_meta.flags(), TcpFlags::SYN);
@@ -2021,17 +1886,17 @@ mod test {
             .unwrap()
             .to_full_meta();
 
-        let eth_parsed = pkt.meta().inner_ether();
+        let eth_parsed = &pkt.headers().inner_eth;
         assert_eq!(eth_parsed.destination(), DST_MAC);
         assert_eq!(eth_parsed.source(), SRC_MAC);
         assert_eq!(eth_parsed.ethertype(), Ethertype::IPV4);
 
-        let ip4_parsed = pkt.meta().inner_ip4().unwrap();
+        let ip4_parsed = pkt.headers().inner_ip4().unwrap();
         assert_eq!(ip4_parsed.source(), SRC_IP4);
         assert_eq!(ip4_parsed.destination(), DST_IP4);
         assert_eq!(ip4_parsed.protocol(), IpProtocol::TCP);
 
-        let tcp_parsed = pkt.meta().inner_tcp().unwrap();
+        let tcp_parsed = pkt.headers().inner_tcp().unwrap();
         assert_eq!(tcp_parsed.source(), 3839);
         assert_eq!(tcp_parsed.destination(), 80);
         assert_eq!(tcp_parsed.flags(), TcpFlags::SYN);
@@ -2114,10 +1979,14 @@ mod test {
                 // Assert that the packet parses back out, and we can reach
                 // the TCP meta no matter which permutation of EHs we have.
                 assert_eq!(
-                    pkt.meta().inner_ip6().unwrap().v6ext_ref().packet_length(),
+                    pkt.headers()
+                        .inner_ip6()
+                        .unwrap()
+                        .v6ext_ref()
+                        .packet_length(),
                     ipv6_header_size - Ipv6::MINIMUM_LENGTH
                 );
-                let tcp_meta = pkt.meta().inner_tcp().unwrap();
+                let tcp_meta = pkt.headers().inner_tcp().unwrap();
                 assert_eq!(tcp_meta.source(), 3839);
                 assert_eq!(tcp_meta.destination(), 80);
                 assert_eq!(tcp_meta.sequence(), 4224936861);
@@ -2161,8 +2030,8 @@ mod test {
             .to_full_meta();
 
         // Grab parsed metadata
-        let ip4_meta = parsed.meta().inner_ip4().unwrap();
-        let tcp_meta = parsed.meta().inner_tcp().unwrap();
+        let ip4_meta = parsed.headers().inner_ip4().unwrap();
+        let tcp_meta = parsed.headers().inner_tcp().unwrap();
 
         // Length in packet headers shouldn't reflect include padding
         // This should not fail even though there are more bytes in
@@ -2220,8 +2089,8 @@ mod test {
             .to_full_meta();
 
         // Grab parsed metadata
-        let ip6_meta = pkt.meta().inner_ip6().unwrap();
-        let udp_meta = pkt.meta().inner_udp().unwrap();
+        let ip6_meta = pkt.headers().inner_ip6().unwrap();
+        let udp_meta = pkt.headers().inner_udp().unwrap();
 
         // Length in packet headers shouldn't reflect include padding
         assert_eq!(

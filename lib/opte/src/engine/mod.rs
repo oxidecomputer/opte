@@ -199,7 +199,7 @@ pub struct HdlPktError(pub &'static str);
 /// handling of the packet at an individual level, instead of
 /// treating it as a flow. This is useful for packets that do not
 /// easily map to the flow model.
-pub trait NetworkImpl {
+pub trait NetworkImpl: Send + Sync {
     /// The packet parser for this network implementation.
     type Parser: NetworkParser;
 

@@ -932,7 +932,7 @@ impl<N: NetworkImpl> Port<N> {
         if unsafe { super::opte_panic_debug != 0 } {
             super::err!("mblk: {}", pkt.mblk_addr());
             super::err!("flow: {}", pkt.flow());
-            super::err!("meta: {:?}", pkt.meta());
+            super::err!("meta: {:?}", pkt.meta_internal());
             super::err!("flows: {:?}", data);
             todo!("bad packet: {}", msg);
         } else {
@@ -1415,7 +1415,7 @@ impl<N: NetworkImpl> Port<N> {
                     tcp_flow.hit_at(process_start);
 
                     let tcp = pkt
-                        .meta()
+                        .headers()
                         .inner_tcp()
                         .expect("failed to find TCP state on known TCP flow");
 
@@ -1486,7 +1486,7 @@ impl<N: NetworkImpl> Port<N> {
             let tx = entry.state().xforms.compiled.as_ref().cloned().unwrap();
 
             let len = pkt.len();
-            let meta = pkt.meta_mut();
+            let meta = pkt.headers_mut();
             let csum_dirty = tx.checksums_dirty();
 
             let body_csum =
@@ -2319,14 +2319,14 @@ impl<N: NetworkImpl> Port<N> {
         // ID, therefore we mirror the flow. This value must represent
         // the guest-side of the flow and thus come from the passed-in
         // packet metadata that represents the post-processed packet.
-        let ufid_out = InnerFlowId::from(pmeta).mirror();
+        let ufid_out = InnerFlowId::from(&pmeta.headers).mirror();
 
         // Unwrap: We know this is a TCP packet at this point.
         //
         // XXX This will be even more foolproof in the future when
         // we've implemented the notion of FlowSet and Packet is
         // generic on header group/flow type.
-        let tcp = pmeta.inner_tcp().unwrap();
+        let tcp = pmeta.headers.inner_tcp().unwrap();
 
         let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
@@ -2393,7 +2393,7 @@ impl<N: NetworkImpl> Port<N> {
         };
 
         let pkt_len = pkt.len() as u64;
-        let Some(stat_parents) = pkt.meta_mut().stats.terminate(
+        let Some(stat_parents) = pkt.meta_internal_mut().stats.terminate(
             ipr.stat_action(),
             pkt_len,
             In,
@@ -2449,8 +2449,13 @@ impl<N: NetworkImpl> Port<N> {
 
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
-        if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp(data, pkt.meta(), ufid_in, pkt_len) {
+        if pkt.meta_internal().headers.is_inner_tcp() {
+            match self.process_in_tcp(
+                data,
+                pkt.meta_internal(),
+                ufid_in,
+                pkt_len,
+            ) {
                 Ok(TcpMaybeClosed::Closed { .. }) => {
                     Ok(InternalProcessResult::Modified)
                 }
@@ -2546,7 +2551,7 @@ impl<N: NetworkImpl> Port<N> {
         pmeta: &MblkPacketData,
         pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
-        let tcp = pmeta.inner_tcp().unwrap();
+        let tcp = pmeta.headers.inner_tcp().unwrap();
         let dir = TcpDirection::Out { ufid_out };
 
         match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
@@ -2579,11 +2584,11 @@ impl<N: NetworkImpl> Port<N> {
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
-        let tcp_flow = if pkt.meta().is_inner_tcp() {
+        let tcp_flow = if pkt.meta_internal().headers.is_inner_tcp() {
             match self.process_out_tcp_new(
                 data,
                 pkt.flow(),
-                pkt.meta(),
+                pkt.meta_internal(),
                 pkt_len,
             ) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
@@ -2678,7 +2683,7 @@ impl<N: NetworkImpl> Port<N> {
             Err(e) => return Err(ProcessError::Layer(e)),
         };
 
-        let Some(stat_parents) = pkt.meta_mut().stats.terminate(
+        let Some(stat_parents) = pkt.meta_internal_mut().stats.terminate(
             ipr.stat_action(),
             pkt_len,
             Out,

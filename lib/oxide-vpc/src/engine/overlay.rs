@@ -390,7 +390,7 @@ impl StaticAction for DecapAction {
         pkt_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        match pkt_meta.outer_encap_geneve_vni_and_origin() {
+        match pkt_meta.headers.outer_encap_geneve_vni_and_origin() {
             Some((vni, oxide_external_pkt)) => {
                 // We only conditionally add this metadata because the
                 // `Address::VNI` filter uses it to select VPC-originated

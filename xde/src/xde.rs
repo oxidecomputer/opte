@@ -1823,7 +1823,7 @@ fn guest_loopback(
         }
     };
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
@@ -1836,7 +1836,7 @@ fn guest_loopback(
 
     let flow = parsed_pkt.flow();
 
-    let ether_dst = parsed_pkt.meta().inner_eth.destination();
+    let ether_dst = parsed_pkt.headers().inner_eth.destination();
     let port_key = VniMac::new(vni, ether_dst);
     let maybe_dest_dev = entry_state.get_by_key(port_key);
 
@@ -2024,7 +2024,7 @@ fn xde_mc_tx_one<'a>(
     };
     let old_len = parsed_pkt.len();
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let Ok(non_eth_payl_bytes) =
         u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
     else {
@@ -2495,7 +2495,7 @@ fn xde_rx_one(
         }
     };
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {

@@ -620,7 +620,7 @@ fn generate_packet<'a>(
         source: Ipv6Addr::from_eui64(&action.server_mac),
         // Safety: We're only here if the predicates match, one of which is
         // IPv6.
-        destination: meta.inner_ip6().unwrap().source(),
+        destination: meta.headers.inner_ip6().unwrap().source(),
         next_header: IngotIpProto::UDP,
         payload_len: udp.length,
         ..Default::default()
@@ -725,13 +725,12 @@ mod test {
         let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
-        let pmeta = pkt.meta();
         let ameta = ActionMeta::new();
         let client_mac =
             MacAddr::from_const([0xa8, 0x40, 0x25, 0xfa, 0xdd, 0x0b]);
         for pred in dhcpv6_server_predicates(&client_mac) {
             assert!(
-                pred.is_match(pmeta, &ameta),
+                pred.is_match(&pkt, &ameta),
                 "Expected predicate to match snooped Solicit test packet: {pred}",
             );
         }

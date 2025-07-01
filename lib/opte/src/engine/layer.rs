@@ -15,7 +15,6 @@ use super::packet::BodyTransformError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
-use super::packet::MblkPacketData;
 use super::packet::Packet;
 use super::port::PortBuilder;
 use super::port::Transforms;
@@ -850,7 +849,7 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         let flow_before = *pkt.flow();
         self.layer_process_entry_probe(dir, pkt.flow());
-        pkt.meta_mut().stats.new_layer();
+        pkt.meta_internal_mut().stats.new_layer();
         let res = match dir {
             Direction::Out => self.process_out(ectx, pkt, xforms, ameta),
             Direction::In => self.process_in(ectx, pkt, xforms, ameta),
@@ -891,7 +890,7 @@ impl Layer {
         };
 
         if let Some(stat) = stat {
-            pkt.meta_mut().stats.push(stat.into());
+            pkt.meta_internal_mut().stats.push(stat.into());
         }
 
         match action {
@@ -914,7 +913,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(Direction::In, pkt.meta_view())? {
+                if let Some(bt) = desc.gen_bt(Direction::In, pkt.meta())? {
                     pkt.body_transform(Direction::In, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -939,7 +938,7 @@ impl Layer {
         use Direction::In;
 
         self.stats.vals.in_lft_miss += 1;
-        let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
+        let rule = self.rules_in.find_match(pkt.flow(), pkt, ameta);
 
         let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
@@ -950,7 +949,7 @@ impl Layer {
             (self.default_in.into(), Arc::clone(&self.default_in_stat))
         };
 
-        pkt.meta_mut().stats.push(stat.into());
+        pkt.meta_internal_mut().stats.push(stat.into());
         let flow_before = *pkt.flow();
 
         match action {
@@ -965,7 +964,8 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
@@ -1004,35 +1004,31 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(
-                    In,
-                    &flow_before,
-                    pkt.meta_view(),
-                    ameta,
-                ) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(ht) => ht,
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
+                let ht =
+                    match action.gen_ht(In, &flow_before, pkt.meta(), ameta) {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(ht) => ht,
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_ht_failure(
+                                ectx.user_ctx,
+                                In,
+                                pkt.flow(),
+                                &e,
+                            );
+                            return Err(LayerError::GenHdrTransform {
+                                layer: self.name,
+                                err: e,
                             });
                         }
-                    },
-
-                    Err(e) => {
-                        self.record_gen_ht_failure(
-                            ectx.user_ctx,
-                            In,
-                            pkt.flow(),
-                            &e,
-                        );
-                        return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
-                            err: e,
-                        });
-                    }
-                };
+                    };
 
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1086,8 +1082,7 @@ impl Layer {
                 }
 
                 let desc =
-                    match action.gen_desc(&flow_before, pkt.meta_view(), ameta)
-                    {
+                    match action.gen_desc(&flow_before, pkt.meta(), ameta) {
                         Ok(aord) => match aord {
                             AllowOrDeny::Allow(desc) => desc,
 
@@ -1122,12 +1117,13 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(In, pkt.meta_view())? {
+                if let Some(bt) = desc.gen_bt(In, pkt.meta())? {
                     pkt.body_transform(In, &*bt)?;
                     xforms.body.push(bt);
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
                 // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1148,7 +1144,7 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                match action.gen_packet(pkt.meta_view()) {
+                match action.gen_packet(pkt.meta()) {
                     Ok(AllowOrDeny::Allow(pkt)) => {
                         Ok(LayerResult::Hairpin(pkt))
                     }
@@ -1199,7 +1195,7 @@ impl Layer {
         };
 
         if let Some(stat) = stat {
-            pkt.meta_mut().stats.push(stat.into());
+            pkt.meta_internal_mut().stats.push(stat.into());
         }
 
         match action {
@@ -1222,9 +1218,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) =
-                    desc.gen_bt(Direction::Out, pkt.meta_view())?
-                {
+                if let Some(bt) = desc.gen_bt(Direction::Out, pkt.meta())? {
                     pkt.body_transform(Direction::Out, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1249,7 +1243,7 @@ impl Layer {
         use Direction::Out;
 
         self.stats.vals.out_lft_miss += 1;
-        let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
+        let rule = self.rules_out.find_match(pkt.flow(), pkt, ameta);
 
         let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
@@ -1260,7 +1254,7 @@ impl Layer {
             (self.default_out.into(), Arc::clone(&self.default_out_stat))
         };
 
-        pkt.meta_mut().stats.push(stat.into());
+        pkt.meta_internal_mut().stats.push(stat.into());
         let flow_before = *pkt.flow();
 
         match action {
@@ -1275,7 +1269,8 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1321,35 +1316,31 @@ impl Layer {
             },
 
             Action::Static(action) => {
-                let ht = match action.gen_ht(
-                    Out,
-                    &flow_before,
-                    pkt.meta_view(),
-                    ameta,
-                ) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(ht) => ht,
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
+                let ht =
+                    match action.gen_ht(Out, &flow_before, pkt.meta(), ameta) {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(ht) => ht,
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_ht_failure(
+                                ectx.user_ctx,
+                                Out,
+                                pkt.flow(),
+                                &e,
+                            );
+                            return Err(LayerError::GenHdrTransform {
+                                layer: self.name,
+                                err: e,
                             });
                         }
-                    },
-
-                    Err(e) => {
-                        self.record_gen_ht_failure(
-                            ectx.user_ctx,
-                            Out,
-                            pkt.flow(),
-                            &e,
-                        );
-                        return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
-                            err: e,
-                        });
-                    }
-                };
+                    };
 
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1402,11 +1393,11 @@ impl Layer {
                     });
                 }
 
-                let stat = pkt.meta_mut().stats.new_layer_lft(ectx.stats);
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
                 let desc =
-                    match action.gen_desc(&flow_before, pkt.meta_view(), ameta)
-                    {
+                    match action.gen_desc(&flow_before, pkt.meta(), ameta) {
                         Ok(aord) => match aord {
                             AllowOrDeny::Allow(desc) => desc,
 
@@ -1440,7 +1431,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(Out, pkt.meta_view())? {
+                if let Some(bt) = desc.gen_bt(Out, pkt.meta())? {
                     pkt.body_transform(Out, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1465,7 +1456,7 @@ impl Layer {
             }
 
             Action::Hairpin(action) => {
-                match action.gen_packet(pkt.meta_view()) {
+                match action.gen_packet(pkt.meta()) {
                     Ok(AllowOrDeny::Allow(pkt)) => {
                         Ok(LayerResult::Hairpin(pkt))
                     }
@@ -1693,11 +1684,11 @@ impl RuleTable {
     fn find_match(
         &mut self,
         ifid: &InnerFlowId,
-        pmeta: &MblkPacketData,
+        pkt: &Packet<MblkFullParsed>,
         ameta: &ActionMeta,
     ) -> Option<&RuleTableEntry> {
         for rte in self.rules.iter_mut() {
-            if rte.rule.is_match(pmeta, ameta) {
+            if rte.rule.is_match(pkt, ameta) {
                 rte.hits += 1;
                 Self::rule_match_probe(
                     self.port_c.as_c_str(),
@@ -1973,7 +1964,7 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let ameta = ActionMeta::new();
         let ifid = *pmeta.flow();
-        assert!(rule_table.find_match(&ifid, pmeta.meta(), &ameta).is_some());
+        assert!(rule_table.find_match(&ifid, &pmeta, &ameta).is_some());
     }
 }
 // TODO Reinstate

@@ -28,10 +28,11 @@ use super::ip::v4::Ipv4Mut;
 use super::ip::v6::Ipv6Mut;
 use super::ip::v6::v6_set_next_header;
 use super::packet::BodyTransform;
+use super::packet::FullParsed;
 use super::packet::InnerFlowId;
-use super::packet::MblkPacketData;
+use super::packet::MblkFullParsed;
 use super::packet::MblkPacketDataView;
-use super::packet::PacketData;
+use super::packet::Packet;
 use super::packet::Pullup;
 use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
@@ -611,11 +612,13 @@ impl HdrTransform {
     /// [`HdrTransformError::MissingHeader`] is returned.
     pub fn run<T: Read + Pullup>(
         &self,
-        meta: &mut PacketData<T>,
+        pkt: &mut Packet<FullParsed<T>>,
     ) -> Result<bool, HdrTransformError>
     where
         T::Chunk: ByteSliceMut,
     {
+        let meta = pkt.meta_internal_mut();
+
         self.outer_ether
             .act_on_option::<InlineHeader<Ethernet, ValidEthernet<_>>, _>(
                 &mut meta.headers.outer_eth,
@@ -1104,7 +1107,7 @@ impl Rule<Ready> {
 impl Rule<Finalized> {
     pub fn is_match(
         &self,
-        meta: &MblkPacketData,
+        pkt: &Packet<MblkFullParsed>,
         action_meta: &ActionMeta,
     ) -> bool {
         #[cfg(debug_assertions)]
@@ -1126,13 +1129,13 @@ impl Rule<Finalized> {
 
             Some(preds) => {
                 for p in &preds.hdr_preds {
-                    if !p.is_match(meta, action_meta) {
+                    if !p.is_match(pkt, action_meta) {
                         return false;
                     }
                 }
 
                 for p in &preds.data_preds {
-                    if !p.is_match(meta) {
+                    if !p.is_match(pkt) {
                         return false;
                     }
                 }
@@ -1207,7 +1210,6 @@ fn rule_matching() {
         .unwrap()
         .to_full_meta();
     pkt.compute_checksums();
-    let meta = pkt.meta();
 
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
@@ -1215,14 +1217,14 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(meta, &ameta));
+    assert!(r1.is_match(&pkt, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
-    let meta = pkt.meta_mut();
+    let meta = pkt.meta_internal_mut();
     if let Some(L3::Ipv4(v4)) = &mut meta.headers.inner_l3 {
         v4.set_source(new_src_ip);
     }
 
-    assert!(!r1.is_match(meta, &ameta));
+    assert!(!r1.is_match(&pkt, &ameta));
 }
