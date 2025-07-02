@@ -810,10 +810,7 @@ pub(crate) struct FlowStatBuilder {
 
 impl FlowStatBuilder {
     pub(crate) fn new() -> Self {
-        Self {
-            parents: Vec::with_capacity(0),
-            layer_end: 0,
-        }
+        Self { parents: Vec::with_capacity(0), layer_end: 0 }
     }
 
     pub(crate) fn reserve(&mut self, capacity: usize) {
