@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 /// Opaque identifier for tracking unique stat objects.
 #[derive(Copy, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Debug)]
-pub struct StatId(u64);
+struct StatId(u64);
 
 impl StatId {
     fn new(val: &mut u64) -> Self {
@@ -54,19 +54,19 @@ pub enum Action {
 /// flow's 5-tuple.
 pub struct FlowStat {
     /// The direction of this flow half.
-    pub dir: Direction,
+    dir: Direction,
     /// The other half of this flow.
-    pub partner: InnerFlowId,
+    partner: InnerFlowId,
     /// `TableStat`s to whom we must return our own `stats`.
-    pub parents: Box<[StatParent]>,
+    parents: Box<[StatParent]>,
     /// The cached list of IDs of reachable `RootStat` entries.
-    pub bases: BTreeSet<Uuid>,
+    bases: BTreeSet<Uuid>,
 
     /// Actual stats associated with this flow.
-    pub shared: Arc<SharedFlowStat>,
+    shared: Arc<SharedFlowStat>,
 
     /// When was this flow last updated?
-    pub last_hit: AtomicU64,
+    last_hit: AtomicU64,
 }
 
 impl FlowStat {
@@ -85,17 +85,18 @@ impl FlowStat {
 
 /// Packet counters shared by both halves of a flow. Each 5-tuple references
 /// this struct through a [`FlowStat`].
-pub struct SharedFlowStat {
+struct SharedFlowStat {
     /// Counters associated with this flow.
-    pub stats: PacketCounter,
+    stats: PacketCounter,
 
+    #[expect(unused)]
     /// Estimated TCP state from monitoring a flow.
     ///
     /// XXX: TODO
-    pub tcp: Option<TcpState>,
+    tcp: Option<TcpState>,
 
     /// The direction this flow was opened on.
-    pub first_dir: Direction,
+    first_dir: Direction,
 }
 
 impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
@@ -103,6 +104,7 @@ impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
         ApiFlowStat {
             partner: value.partner,
             dir: value.dir,
+            first_dir: value.shared.first_dir,
             bases: value.bases.iter().copied().collect(),
             stats: (&value.shared.stats).into(),
         }
@@ -111,7 +113,7 @@ impl From<&FlowStat> for ApiFlowStat<InnerFlowId> {
 
 /// Stat objects which can be a parent to a non-root node.
 #[derive(Clone, Debug)]
-pub enum StatParent {
+pub(crate) enum StatParent {
     Root(Arc<RootStat>),
     Internal(Arc<InternalStat>),
 }
@@ -154,29 +156,20 @@ impl StatParent {
         }
     }
 
-    /// Allow a packet which will track local stats via a UFT entry.
-    pub fn allow(&self) {
-        self.allow_at(Moment::now());
-    }
-
-    /// Allow a packet (at a given timestamp) which will track local stats via
-    /// a UFT entry.
-    pub fn allow_at(&self, time: Moment) {
+    /// Allow a packet (at a given timestamp), without recording packet size/counts.
+    ///
+    /// This should be used when a flow will track such local stats via a UFT
+    /// entry.
+    fn allow_at(&self, time: Moment) {
         if let Self::Root(r) = self {
             r.record_hit(time);
         }
         self.inner().allow();
     }
 
-    /// Record an action for a packet which will ultimately be dropped or
-    /// hairpinned.
-    pub fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
-        self.act_at(action, pkt_size, direction, Moment::now());
-    }
-
     /// Record an action for a packet (at a given time) which will ultimately
-    /// be dropped or hairpinned.
-    pub fn act_at(
+    /// be dropped or hairpinned. E.g., when no UFT will be created for a packet.
+    fn act_at(
         &self,
         action: Action,
         pkt_size: u64,
@@ -190,7 +183,7 @@ impl StatParent {
     }
 
     /// Add a weak child reference to this stat object.
-    pub fn append_child(&self, child: impl Into<StatChild>) {
+    fn append_child(&self, child: impl Into<StatChild>) {
         let mut p_children = self.inner().children.write();
         p_children.push(child.into());
     }
@@ -198,7 +191,7 @@ impl StatParent {
 
 /// Stat objects which can be a child to a non-leaf node.
 #[derive(Clone, Debug)]
-pub enum StatChild {
+enum StatChild {
     Internal(Weak<InternalStat>),
     Flow(Weak<FlowStat>),
 }
@@ -260,15 +253,18 @@ pub struct RootStat {
     /// The control-plane ID associated with these counters.
     pub id: Uuid,
     /// When was a hit last recorded?
-    pub last_hit: AtomicU64,
+    last_hit: AtomicU64,
     body: TableStat,
 }
 
 impl RootStat {
+    /// Update the `last_hit` time of this stat.
     fn record_hit(&self, time: Moment) {
         self.last_hit.store(time.raw(), Ordering::Relaxed);
     }
 
+    /// Retrieve hit/packet stats reported by this stat object and all of
+    /// its live children.
     fn combined_stats(&self) -> ApiFullCounter {
         let mut visited = BTreeSet::new();
 
@@ -299,8 +295,8 @@ impl RootStat {
 
 /// Temporary counters associated with an LFT entry.
 #[derive(Debug)]
-pub struct InternalStat {
-    pub parents: Box<[StatParent]>,
+pub(crate) struct InternalStat {
+    parents: Box<[StatParent]>,
     body: TableStat,
 }
 
@@ -324,10 +320,16 @@ impl core::fmt::Debug for TableStat {
 }
 
 impl TableStat {
+    /// Allow a packet (at a given timestamp), without recording packet size/counts.
+    ///
+    /// This should be used when a flow will track such local stats via a UFT
+    /// entry.
     fn allow(&self) {
         self.stats.allow.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record an action for a packet (at a given time) which will ultimately
+    /// be dropped or hairpinned. E.g., when no UFT will be created for a packet.
     fn act(&self, action: Action, pkt_size: u64, direction: Direction) {
         self.stats.packets.hit(direction, pkt_size);
         match action {
@@ -342,14 +344,14 @@ impl TableStat {
 /// Packet count/byte counters.
 ///
 /// Base component of any counter set in OPTE.
-pub struct PacketCounter {
-    pub id: StatId,
-    pub created_at: Moment,
+struct PacketCounter {
+    id: StatId,
+    created_at: Moment,
 
-    pub pkts_in: AtomicU64,
-    pub bytes_in: AtomicU64,
-    pub pkts_out: AtomicU64,
-    pub bytes_out: AtomicU64,
+    pkts_in: AtomicU64,
+    bytes_in: AtomicU64,
+    pkts_out: AtomicU64,
+    bytes_out: AtomicU64,
 }
 
 impl PacketCounter {
@@ -375,6 +377,7 @@ impl PacketCounter {
         bytes.fetch_add(pkt_size, Ordering::Relaxed);
     }
 
+    /// Increment the values of `into` using all matching counters in `self`.
     fn combine(&self, into: &Self) {
         into.pkts_in
             .fetch_add(self.pkts_in.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -392,6 +395,7 @@ impl PacketCounter {
         );
     }
 
+    /// Increment the values of `into` using all matching counters in `self`.
     fn combine_api(&self, into: &mut ApiPktCounter) {
         into.pkts_in += self.pkts_in.load(Ordering::Relaxed);
         into.bytes_in += self.bytes_in.load(Ordering::Relaxed);
@@ -430,6 +434,7 @@ impl FullCounter {
         }
     }
 
+    /// Increment the values of `into` using all matching counters in `self`.
     fn combine(&self, into: &Self) {
         self.packets.combine(&into.packets);
         into.allow
@@ -440,6 +445,7 @@ impl FullCounter {
             .fetch_add(self.hairpin.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
+    /// Increment the values of `into` using all matching counters in `self`.
     fn combine_api(&self, into: &mut ApiFullCounter) {
         self.packets.combine_api(&mut into.packets);
         into.allow += self.allow.load(Ordering::Relaxed);
@@ -780,7 +786,7 @@ impl StatTree {
     }
 }
 
-/// Return the underlying stats of decision-making rules which allowed a flow.
+/// Return the underlying stat IDs of decision-making rules which allowed a flow.
 fn get_base_ids(parents: &[StatParent]) -> BTreeSet<Uuid> {
     let mut out = BTreeSet::new();
 
@@ -803,27 +809,33 @@ pub(crate) struct FlowStatBuilder {
 }
 
 impl FlowStatBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            // TODO: do we want this cfg'able?
-            parents: Vec::with_capacity(16),
+            parents: Vec::with_capacity(0),
             layer_end: 0,
         }
     }
 
+    pub(crate) fn reserve(&mut self, capacity: usize) {
+        self.parents.reserve(capacity);
+    }
+
     /// Push a parent onto this flow.
-    pub fn push(&mut self, parent: StatParent) {
+    pub(crate) fn push(&mut self, parent: StatParent) {
         self.parents.push(parent);
     }
 
     /// Mark all current parents as [`Action::Allow`].
-    pub fn new_layer(&mut self) {
+    pub(crate) fn new_layer(&mut self) {
         self.layer_end = self.parents.len();
     }
 
     /// Mark all current parents as [`Action::Allow`], moving them all into
     /// a new [`InternalStat`].
-    pub fn new_layer_lft(&mut self, tree: &mut StatTree) -> Arc<InternalStat> {
+    pub(crate) fn new_layer_lft(
+        &mut self,
+        tree: &mut StatTree,
+    ) -> Arc<InternalStat> {
         let out = tree.new_intermediate(self.parents.split_off(self.layer_end));
         self.parents.push(Arc::clone(&out).into());
         self.new_layer();
@@ -831,7 +843,7 @@ impl FlowStatBuilder {
     }
 
     /// Return a list of stat parents if this packet is bound for flow creation.
-    pub fn terminate(
+    pub(crate) fn terminate(
         &mut self,
         action: Action,
         pkt_size: u64,

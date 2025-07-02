@@ -1556,6 +1556,8 @@ impl<N: NetworkImpl> Port<N> {
                     .as_mut()
                     .expect("lock should be held on this codepath");
 
+                pkt.meta_internal_mut().stats.reserve(16);
+
                 let res = self.process_in_miss(
                     data,
                     epoch,
@@ -1573,6 +1575,8 @@ impl<N: NetworkImpl> Port<N> {
                 let data = lock
                     .as_mut()
                     .expect("lock should be held on this codepath");
+
+                pkt.meta_internal_mut().stats.reserve(16);
 
                 let res =
                     self.process_out_miss(data, epoch, &mut pkt, &mut ameta);

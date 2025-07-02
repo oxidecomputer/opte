@@ -16,6 +16,7 @@ use uuid::Uuid;
 pub struct FlowStat<FlowId> {
     pub partner: FlowId,
     pub dir: Direction,
+    pub first_dir: Direction,
     pub bases: Vec<Uuid>,
     pub stats: PacketCounter,
 }
