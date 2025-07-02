@@ -376,10 +376,6 @@ pub struct TcpFlowEntryDump<Flow> {
     pub hits: u64,
     pub inbound_ufid: Option<Flow>,
     pub tcp_state: TcpFlowStateDump,
-    pub segs_in: u64,
-    pub segs_out: u64,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

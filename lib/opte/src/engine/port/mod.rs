@@ -1428,7 +1428,6 @@ impl<N: NetworkImpl> Port<N> {
                         self.name_cstr.as_c_str(),
                         tcp,
                         dir,
-                        pkt_len,
                         ufid_in,
                     ) {
                         Ok(TcpState::Closed) => Some(Arc::clone(tcp_flow)),
@@ -2174,7 +2173,6 @@ impl<N: NetworkImpl> Port<N> {
         tcp_flows: &mut FlowTable<TcpFlowEntryState>,
         tcp: &impl TcpRef<V>,
         dir: &TcpDirection,
-        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         // Create a new entry and find its current state. In
         // this case it should always be `SynSent`, unless we're
@@ -2200,14 +2198,11 @@ impl<N: NetworkImpl> Port<N> {
             let (ufid_out, tfes) = match *dir {
                 TcpDirection::In { ufid_in, ufid_out } => (
                     ufid_out,
-                    TcpFlowEntryState::new_inbound(
-                        *ufid_out, *ufid_in, tfs, pkt_len,
-                    ),
+                    TcpFlowEntryState::new_inbound(*ufid_out, *ufid_in, tfs),
                 ),
-                TcpDirection::Out { ufid_out } => (
-                    ufid_out,
-                    TcpFlowEntryState::new_outbound(*ufid_out, tfs, pkt_len),
-                ),
+                TcpDirection::Out { ufid_out } => {
+                    (ufid_out, TcpFlowEntryState::new_outbound(*ufid_out, tfs))
+                }
             };
             match tcp_flows.add_and_return(*ufid_out, tfes) {
                 Ok(entry) => Ok(TcpMaybeClosed::NewState(tcp_state, entry)),
@@ -2248,7 +2243,6 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         tcp: &impl TcpRef<V>,
         dir: &TcpDirection,
-        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let (ufid_out, ufid_in) = match *dir {
             TcpDirection::In { ufid_in, ufid_out } => (ufid_out, Some(ufid_in)),
@@ -2267,7 +2261,6 @@ impl<N: NetworkImpl> Port<N> {
             self.name_cstr.as_c_str(),
             tcp,
             dir.dir(),
-            pkt_len,
             ufid_in,
         );
 
@@ -2317,7 +2310,6 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         pmeta: &MblkPacketData,
         ufid_in: &InnerFlowId,
-        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         // All TCP flows are keyed with respect to the outbound Flow
         // ID, therefore we mirror the flow. This value must represent
@@ -2334,18 +2326,13 @@ impl<N: NetworkImpl> Port<N> {
 
         let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
-        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
+        match self.update_tcp_entry(data, tcp, &dir) {
             // We need to create a new TCP entry here because we can't call
             // `process_in_miss` on the already-modified packet.
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
-            ) => self.create_new_tcp_entry(
-                &mut data.tcp_flows,
-                tcp,
-                &dir,
-                pkt_len,
-            ),
+            ) => self.create_new_tcp_entry(&mut data.tcp_flows, tcp, &dir),
             v => v,
         }
     }
@@ -2454,12 +2441,7 @@ impl<N: NetworkImpl> Port<N> {
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta_internal().headers.is_inner_tcp() {
-            match self.process_in_tcp(
-                data,
-                pkt.meta_internal(),
-                ufid_in,
-                pkt_len,
-            ) {
+            match self.process_in_tcp(data, pkt.meta_internal(), ufid_in) {
                 Ok(TcpMaybeClosed::Closed { .. }) => {
                     Ok(InternalProcessResult::Modified)
                 }
@@ -2553,21 +2535,15 @@ impl<N: NetworkImpl> Port<N> {
         data: &mut PortData,
         ufid_out: &InnerFlowId,
         pmeta: &MblkPacketData,
-        pkt_len: u64,
     ) -> result::Result<TcpMaybeClosed, ProcessError> {
         let tcp = pmeta.headers.inner_tcp().unwrap();
         let dir = TcpDirection::Out { ufid_out };
 
-        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
+        match self.update_tcp_entry(data, tcp, &dir) {
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
-            ) => self.create_new_tcp_entry(
-                &mut data.tcp_flows,
-                tcp,
-                &dir,
-                pkt_len,
-            ),
+            ) => self.create_new_tcp_entry(&mut data.tcp_flows, tcp, &dir),
             other => other,
         }
     }
@@ -2593,7 +2569,6 @@ impl<N: NetworkImpl> Port<N> {
                 data,
                 pkt.flow(),
                 pkt.meta_internal(),
-                pkt_len,
             ) {
                 Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
                     tcp_closed = true;
@@ -2961,10 +2936,6 @@ pub struct TcpFlowEntryStateInner {
     // the network, not after it's processed.
     inbound_ufid: Option<InnerFlowId>,
     tcp_state: TcpFlowState,
-    segs_in: u64,
-    segs_out: u64,
-    bytes_in: u64,
-    bytes_out: u64,
 }
 
 pub struct TcpFlowEntryState {
@@ -2976,17 +2947,12 @@ impl TcpFlowEntryState {
         outbound_ufid: InnerFlowId,
         inbound_ufid: InnerFlowId,
         tcp_state: TcpFlowState,
-        bytes_in: u64,
     ) -> Self {
         Self {
             inner: KMutex::new(TcpFlowEntryStateInner {
                 outbound_ufid,
                 inbound_ufid: Some(inbound_ufid),
                 tcp_state,
-                segs_in: 1,
-                segs_out: 0,
-                bytes_in,
-                bytes_out: 0,
             }),
         }
     }
@@ -2994,17 +2960,12 @@ impl TcpFlowEntryState {
     fn new_outbound(
         outbound_ufid: InnerFlowId,
         tcp_state: TcpFlowState,
-        bytes_out: u64,
     ) -> Self {
         Self {
             inner: KMutex::new(TcpFlowEntryStateInner {
                 outbound_ufid,
                 inbound_ufid: None,
                 tcp_state,
-                segs_in: 0,
-                segs_out: 1,
-                bytes_in: 0,
-                bytes_out,
             }),
         }
     }
@@ -3020,21 +2981,9 @@ impl TcpFlowEntryState {
         port_name: &CStr,
         tcp: &impl TcpRef<V>,
         dir: Direction,
-        pkt_len: u64,
         ufid_in: Option<&InnerFlowId>,
     ) -> result::Result<TcpState, TcpFlowStateError> {
         let mut tfes = self.inner.lock();
-        match dir {
-            Direction::In => {
-                tfes.segs_in += 1;
-                tfes.bytes_in += pkt_len;
-            }
-            Direction::Out => {
-                tfes.segs_out += 1;
-                tfes.bytes_out += pkt_len;
-            }
-        }
-
         if let Some(ufid_in) = ufid_in {
             // We need to store the UFID of the inbound packet
             // before it was processed so that we can retire the
@@ -3080,10 +3029,6 @@ impl Dump for TcpFlowEntryStateInner {
             hits,
             inbound_ufid: self.inbound_ufid,
             tcp_state: TcpFlowStateDump::from(self.tcp_state),
-            segs_in: self.segs_in,
-            segs_out: self.segs_out,
-            bytes_in: self.bytes_in,
-            bytes_out: self.bytes_out,
         }
     }
 }

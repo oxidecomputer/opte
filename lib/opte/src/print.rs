@@ -283,16 +283,7 @@ fn print_tcp_flow(
     id: &InnerFlowId,
     entry: &TcpFlowEntryDump,
 ) -> std::io::Result<()> {
-    writeln!(
-        t,
-        "{id}\t{}\t{}\t{}\t{}\t{}\t{}",
-        entry.tcp_state.tcp_state,
-        entry.hits,
-        entry.segs_in,
-        entry.segs_out,
-        entry.bytes_in,
-        entry.bytes_out,
-    )
+    writeln!(t, "{id}\t{}\t{}", entry.tcp_state.tcp_state, entry.hits,)
 }
 
 /// Output a horizontal rule in bold to the given writer.
