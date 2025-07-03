@@ -175,7 +175,8 @@ pub trait ActionDesc {
     /// Generate a body transformation.
     ///
     /// An action may optionally generate a [`BodyTransform`] in
-    /// order to act on the body of the packet.
+    /// order to act on the body of the packet. This function is called
+    /// *before* the generated [`HdrTransform`] is applied.
     fn gen_bt(
         &self,
         _dir: Direction,

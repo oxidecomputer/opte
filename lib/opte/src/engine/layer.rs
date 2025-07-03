@@ -866,23 +866,23 @@ impl Layer {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *pkt.flow() == FLOW_ID_DEFAULT {
+        if pkt.flow() == &FLOW_ID_DEFAULT {
             return self.process_in_rules(ectx, pkt, xforms, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let (action, stat) = match self.ft.get_in(&flow) {
+        let flow = pkt.flow();
+        let (action, stat) = match self.ft.get_in(flow) {
             EntryState::Dirty(ActionDescEntry::Desc(action), stat)
                 if action.is_valid() =>
             {
-                self.ft.mark_clean(Direction::In, &flow);
+                self.ft.mark_clean(Direction::In, flow);
                 (Some(ActionDescEntry::Desc(action)), Some(stat))
             }
             EntryState::Dirty(_, _) => {
                 // NoOps are included in this case as we can't ask the actor whether
                 // it remains valid: the simplest method to do so is to rerun lookup.
-                self.ft.remove_in(&flow);
+                self.ft.remove_in(flow);
                 (None, None)
             }
             EntryState::Clean(action, stat) => (Some(action), Some(stat)),
@@ -903,6 +903,8 @@ impl Layer {
                 self.stats.vals.in_lft_hit += 1;
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In);
+                let bt = desc.gen_bt(Direction::In, pkt.meta())?;
+
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -913,7 +915,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(Direction::In, pkt.meta())? {
+                if let Some(bt) = bt {
                     pkt.body_transform(Direction::In, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -971,9 +973,16 @@ impl Layer {
                 // the "top" of layer represents how the client sees
                 // the traffic, and the "bottom" of the layer
                 // represents how the network sees the traffic.
-                let flow_out = pkt.flow().mirror();
-                let desc = ActionDescEntry::NoOp;
-                self.ft.add_pair(desc, *pkt.flow(), flow_out, stat);
+                //
+                // No transformation occurs in a `StatefulAllow`, unlike
+                // `Stateful(x)`. The mirror flow is computed from the
+                // initial state.
+                self.ft.add_pair(
+                    ActionDescEntry::NoOp,
+                    flow_before,
+                    flow_before.mirror(),
+                    stat,
+                );
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -981,7 +990,7 @@ impl Layer {
             Action::Deny => {
                 self.stats.vals.in_deny += 1;
                 let reason = if rule.is_some() {
-                    self.rule_deny_probe(In, pkt.flow());
+                    self.rule_deny_probe(In, &flow_before);
                     DenyReason::Rule
                 } else {
                     DenyReason::Default
@@ -990,18 +999,20 @@ impl Layer {
                 Ok(LayerResult::Deny { name: self.name, reason })
             }
 
-            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
-                Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
+            Action::Meta(action) => {
+                match action.mod_meta(&flow_before, ameta) {
+                    Ok(res) => match res {
+                        AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Action,
-                    }),
-                },
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
+                    },
 
-                Err(msg) => Err(LayerError::ModMeta(msg)),
-            },
+                    Err(msg) => Err(LayerError::ModMeta(msg)),
+                }
+            }
 
             Action::Static(action) => {
                 let ht =
@@ -1020,7 +1031,7 @@ impl Layer {
                             self.record_gen_ht_failure(
                                 ectx.user_ctx,
                                 In,
-                                pkt.flow(),
+                                &flow_before,
                                 &e,
                             );
                             return Err(LayerError::GenHdrTransform {
@@ -1098,15 +1109,22 @@ impl Layer {
                             self.record_gen_desc_failure(
                                 ectx.user_ctx,
                                 In,
-                                pkt.flow(),
+                                &flow_before,
                                 &e,
                             );
                             return Err(LayerError::GenDesc(e));
                         }
                     };
 
-                let flow_before = *pkt.flow();
+                // Generate the transforms, and then roll up our stats into an
+                // internal node. This allows for correct accounting in the event
+                // of an error.
                 let ht_in = desc.gen_ht(In);
+                let bt = desc.gen_bt(In, pkt.meta())?;
+
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
+
                 pkt.hdr_transform(&ht_in)?;
                 xforms.hdr.push(ht_in);
                 ht_probe(
@@ -1117,13 +1135,10 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(In, pkt.meta())? {
+                if let Some(bt) = bt {
                     pkt.body_transform(In, &*bt)?;
                     xforms.body.push(bt);
                 }
-
-                let stat =
-                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
                 // The outbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1171,23 +1186,23 @@ impl Layer {
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *pkt.flow() == FLOW_ID_DEFAULT {
+        if pkt.flow() == &FLOW_ID_DEFAULT {
             return self.process_out_rules(ectx, pkt, xforms, ameta);
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let (action, stat) = match self.ft.get_out(&flow) {
+        let flow = pkt.flow();
+        let (action, stat) = match self.ft.get_out(flow) {
             EntryState::Dirty(ActionDescEntry::Desc(action), stat)
                 if action.is_valid() =>
             {
-                self.ft.mark_clean(Direction::Out, &flow);
+                self.ft.mark_clean(Direction::Out, flow);
                 (Some(ActionDescEntry::Desc(action)), Some(stat))
             }
             EntryState::Dirty(_, _) => {
                 // NoOps are included in this case as we can't ask the actor whether
                 // it remains valid: the simplest method to do so is to rerun lookup.
-                self.ft.remove_out(&flow);
+                self.ft.remove_out(flow);
                 (None, None)
             }
             EntryState::Clean(action, stat) => (Some(action), Some(stat)),
@@ -1208,6 +1223,8 @@ impl Layer {
                 self.stats.vals.out_lft_hit += 1;
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out);
+                let bt = desc.gen_bt(Direction::Out, pkt.meta())?;
+
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1218,7 +1235,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(Direction::Out, pkt.meta())? {
+                if let Some(bt) = bt {
                     pkt.body_transform(Direction::Out, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1272,18 +1289,13 @@ impl Layer {
                 let stat =
                     pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
 
-                // The inbound flow ID must be calculated _after_ the
-                // header transformation. Remember, the "top"
-                // (outbound) of layer represents how the client sees
-                // the traffic, and the "bottom" (inbound) of the
-                // layer represents how the network sees the traffic.
-                // The final step is to mirror the IPs and ports to
-                // reflect the traffic direction change.
-                let flow_in = pkt.flow().mirror();
+                // No transformation occurs in a `StatefulAllow`, unlike
+                // `Stateful(x)`. The mirror flow is computed from the
+                // initial state.
                 self.ft.add_pair(
                     ActionDescEntry::NoOp,
-                    flow_in,
-                    *pkt.flow(),
+                    flow_before.mirror(),
+                    flow_before,
                     stat,
                 );
                 self.stats.vals.flows += 1;
@@ -1293,7 +1305,7 @@ impl Layer {
             Action::Deny => {
                 self.stats.vals.out_deny += 1;
                 let reason = if rule.is_some() {
-                    self.rule_deny_probe(Out, pkt.flow());
+                    self.rule_deny_probe(Out, &flow_before);
                     DenyReason::Rule
                 } else {
                     DenyReason::Default
@@ -1302,18 +1314,20 @@ impl Layer {
                 Ok(LayerResult::Deny { name: self.name, reason })
             }
 
-            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
-                Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
+            Action::Meta(action) => {
+                match action.mod_meta(&flow_before, ameta) {
+                    Ok(res) => match res {
+                        AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Action,
-                    }),
-                },
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
+                    },
 
-                Err(msg) => Err(LayerError::ModMeta(msg)),
-            },
+                    Err(msg) => Err(LayerError::ModMeta(msg)),
+                }
+            }
 
             Action::Static(action) => {
                 let ht =
@@ -1332,7 +1346,7 @@ impl Layer {
                             self.record_gen_ht_failure(
                                 ectx.user_ctx,
                                 Out,
-                                pkt.flow(),
+                                &flow_before,
                                 &e,
                             );
                             return Err(LayerError::GenHdrTransform {
@@ -1393,9 +1407,6 @@ impl Layer {
                     });
                 }
 
-                let stat =
-                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
-
                 let desc =
                     match action.gen_desc(&flow_before, pkt.meta(), ameta) {
                         Ok(aord) => match aord {
@@ -1413,14 +1424,22 @@ impl Layer {
                             self.record_gen_desc_failure(
                                 ectx.user_ctx,
                                 Out,
-                                pkt.flow(),
+                                &flow_before,
                                 &e,
                             );
                             return Err(LayerError::GenDesc(e));
                         }
                     };
 
+                // Generate the transforms, and then roll up our stats into an
+                // internal node. This allows for correct accounting in the event
+                // of an error.
                 let ht_out = desc.gen_ht(Out);
+                let bt = desc.gen_bt(Out, pkt.meta())?;
+
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
+
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
                 ht_probe(
@@ -1431,7 +1450,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(bt) = desc.gen_bt(Out, pkt.meta())? {
+                if let Some(bt) = bt {
                     pkt.body_transform(Out, &*bt)?;
                     xforms.body.push(bt);
                 }
