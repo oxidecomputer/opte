@@ -2348,6 +2348,8 @@ impl<N: NetworkImpl> Port<N> {
         use Direction::In;
 
         self.stats.vals.in_uft_miss.incr(1);
+        let pkt_len = pkt.len() as u64;
+
         let mut xforms = Transforms::new();
         let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
 
@@ -2379,11 +2381,17 @@ impl<N: NetworkImpl> Port<N> {
                 false,
             ),
 
-            // TODO: Errors as a decision?!
-            Err(e) => return Err(ProcessError::Layer(e)),
+            Err(e) => {
+                _ = pkt.meta_internal_mut().stats.terminate(
+                    StatAction::Error,
+                    pkt_len,
+                    In,
+                    false,
+                );
+                return Err(ProcessError::Layer(e));
+            }
         };
 
-        let pkt_len = pkt.len() as u64;
         let Some(stat_parents) = pkt.meta_internal_mut().stats.terminate(
             ipr.stat_action(),
             pkt_len,
@@ -2558,9 +2566,9 @@ impl<N: NetworkImpl> Port<N> {
         use Direction::Out;
 
         self.stats.vals.out_uft_miss.incr(1);
-        let mut tcp_closed = false;
-
         let pkt_len = pkt.len() as u64;
+
+        let mut tcp_closed = false;
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
@@ -2658,8 +2666,15 @@ impl<N: NetworkImpl> Port<N> {
                 false,
             ),
 
-            // TODO: Errors as a decision?!
-            Err(e) => return Err(ProcessError::Layer(e)),
+            Err(e) => {
+                _ = pkt.meta_internal_mut().stats.terminate(
+                    StatAction::Error,
+                    pkt_len,
+                    Out,
+                    false,
+                );
+                return Err(ProcessError::Layer(e));
+            }
         };
 
         let Some(stat_parents) = pkt.meta_internal_mut().stats.terminate(

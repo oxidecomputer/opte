@@ -43,16 +43,17 @@ impl StatId {
 
 /// Reduced form of an action for stats tracking purposes.
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Hash, Default)]
-pub enum Action {
+pub(crate) enum Action {
     #[default]
     Allow,
     Deny,
     Hairpin,
+    Error,
 }
 
 /// Packet counters and additional information associated with an accepted
 /// flow's 5-tuple.
-pub struct FlowStat {
+pub(crate) struct FlowStat {
     /// The direction of this flow half.
     dir: Direction,
     /// The other half of this flow.
@@ -336,6 +337,7 @@ impl TableStat {
             Action::Allow => &self.stats.allow,
             Action::Deny => &self.stats.deny,
             Action::Hairpin => &self.stats.hairpin,
+            Action::Error => &self.stats.error,
         }
         .fetch_add(1, Ordering::Relaxed);
     }
@@ -421,6 +423,7 @@ struct FullCounter {
     allow: AtomicU64,
     deny: AtomicU64,
     hairpin: AtomicU64,
+    error: AtomicU64,
     packets: PacketCounter,
 }
 
@@ -430,6 +433,7 @@ impl FullCounter {
             allow: 0.into(),
             deny: 0.into(),
             hairpin: 0.into(),
+            error: 0.into(),
             packets: PacketCounter::from_next_id(id),
         }
     }
@@ -443,6 +447,8 @@ impl FullCounter {
             .fetch_add(self.deny.load(Ordering::Relaxed), Ordering::Relaxed);
         into.hairpin
             .fetch_add(self.hairpin.load(Ordering::Relaxed), Ordering::Relaxed);
+        into.error
+            .fetch_add(self.error.load(Ordering::Relaxed), Ordering::Relaxed);
     }
 
     /// Increment the values of `into` using all matching counters in `self`.
@@ -451,6 +457,7 @@ impl FullCounter {
         into.allow += self.allow.load(Ordering::Relaxed);
         into.deny += self.deny.load(Ordering::Relaxed);
         into.hairpin += self.hairpin.load(Ordering::Relaxed);
+        into.error += self.error.load(Ordering::Relaxed);
     }
 
     #[inline]
@@ -466,6 +473,7 @@ impl From<&FullCounter> for ApiFullCounter {
             allow: val.allow.load(Ordering::Relaxed),
             deny: val.deny.load(Ordering::Relaxed),
             hairpin: val.hairpin.load(Ordering::Relaxed),
+            error: val.error.load(Ordering::Relaxed),
         }
     }
 }
@@ -860,7 +868,7 @@ impl FlowStatBuilder {
                     .for_each(|v| v.act_at(action, pkt_size, direction, now));
                 None
             }
-            Action::Deny | Action::Hairpin => {
+            Action::Deny | Action::Hairpin | Action::Error => {
                 let (accepted, last_layer) =
                     self.parents.split_at(self.layer_end);
                 accepted.iter().for_each(|v| {

@@ -35,5 +35,6 @@ pub struct FullCounter {
     pub allow: u64,
     pub deny: u64,
     pub hairpin: u64,
+    pub error: u64,
     pub packets: PacketCounter,
 }
