@@ -31,3 +31,10 @@ pub static NAT_VALID_IGW_V6: Uuid =
     Uuid::from_fields(0x01de_f00d, 0x7777, 0x0003, &3u64.to_be_bytes());
 pub static NAT_NONE: Uuid =
     Uuid::from_fields(0x01de_f00d, 0x7777, 0x0003, &255u64.to_be_bytes());
+
+pub static DESTINATION_INTERNET: Uuid =
+    Uuid::from_fields(0x01de_f00d, 0x7777, 0x0004, &0u64.to_be_bytes());
+pub static DESTINATION_VPC_LOCAL: Uuid =
+    Uuid::from_fields(0x01de_f00d, 0x7777, 0x0004, &1u64.to_be_bytes());
+pub static DESTINATION_VPC_PEER: Uuid =
+    Uuid::from_fields(0x01de_f00d, 0x7777, 0x0004, &2u64.to_be_bytes());
