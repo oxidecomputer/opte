@@ -120,16 +120,6 @@ impl<V: ByteSlice> ValidL3<V> {
         .to_be_bytes()
     }
 
-    /// Return whether the IP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    #[inline]
-    pub fn has_ip_csum(&self) -> bool {
-        match self {
-            ValidL3::Ipv4(i4) => i4.checksum() != 0,
-            _ => false,
-        }
-    }
-
     #[inline]
     pub fn validate(&self, bytes_after: usize) -> Result<(), ParseError> {
         match self {
