@@ -270,7 +270,7 @@ pub fn print_tcp_flows_into(
 ) -> std::io::Result<()> {
     let mut t = TabWriter::new(writer);
 
-    writeln!(t, "FLOW\tSTATE\tHITS\tSEGS IN\tSEGS OUT\tBYTES IN\tBYTES OUT")?;
+    writeln!(t, "FLOW\tSTATE\tHITS")?;
     for (flow_id, entry) in &flows.flows {
         print_tcp_flow(&mut t, flow_id, entry)?;
     }
