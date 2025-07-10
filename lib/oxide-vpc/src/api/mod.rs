@@ -368,7 +368,7 @@ impl From<PhysNet> for GuestPhysAddr {
 ///   abstraction, it's simply allowing one subnet to talk to another.
 ///   There is no separate VPC router process, the real routing is done
 ///   by the underlay.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Debug, Copy, Deserialize, Serialize, Eq, PartialEq)]
 pub enum RouterTarget {
     Drop,
     InternetGateway(Option<Uuid>),
@@ -430,7 +430,7 @@ impl Display for RouterTarget {
 }
 
 /// The class of router which a rule belongs to.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Debug, Copy, Deserialize, Serialize, Eq, PartialEq)]
 pub enum RouterClass {
     /// The rule belongs to the shared VPC-wide router.
     System,
@@ -581,7 +581,7 @@ pub struct ClearVirt2BoundaryReq {
     pub tep: Vec<TunnelEndpoint>,
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Route {
     pub dest: IpCidr,
     pub target: RouterTarget,
