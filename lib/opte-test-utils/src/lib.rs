@@ -16,7 +16,6 @@ pub mod pcap;
 pub mod port_state;
 
 // Let's make our lives easier and pub use a bunch of stuff.
-pub use opte::ExecCtx;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
@@ -63,6 +62,7 @@ pub use opte::ingot::types::Emit;
 pub use opte::ingot::types::EmitDoesNotRelyOnBufContents;
 pub use opte::ingot::types::HeaderLen;
 pub use opte::ingot::udp::Udp;
+pub use opte::provider::Providers;
 pub use oxide_vpc::api::AddFwRuleReq;
 pub use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
 pub use oxide_vpc::api::DhcpCfg;
@@ -72,6 +72,7 @@ pub use oxide_vpc::api::IpCfg;
 pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
 pub use oxide_vpc::api::PhysNet;
+use oxide_vpc::api::Route;
 pub use oxide_vpc::api::RouterClass;
 pub use oxide_vpc::api::RouterTarget;
 pub use oxide_vpc::api::SNat4Cfg;
@@ -257,8 +258,8 @@ fn oxide_net_builder(
     v2p: Arc<Virt2Phys>,
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
-    #[allow(clippy::arc_with_non_send_sync)]
-    let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
+    let ectx =
+        Arc::new(Providers { log: Box::new(opte::provider::PrintlnLog) });
     let name_cstr = std::ffi::CString::new(name).unwrap();
     let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
 
@@ -269,11 +270,11 @@ fn oxide_net_builder(
     let dhcp = base_dhcp_config();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
+    gateway::setup(&mut pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
-    router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
+    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, v2b, one_limit)
+    overlay::setup(&mut pb, cfg, v2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -372,9 +373,12 @@ pub fn oxide_net_setup2(
     // on same subnet.
     router::add_entry(
         &port,
-        IpCidr::Ip4(cfg.ipv4().vpc_subnet),
-        RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
-        RouterClass::System,
+        Route {
+            dest: IpCidr::Ip4(cfg.ipv4().vpc_subnet),
+            target: RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
+            class: RouterClass::System,
+            stat_id: None,
+        },
     )
     .unwrap();
 
@@ -457,7 +461,7 @@ fn set_default_fw_rules(pav: &mut PortAndVps, cfg: &VpcCfg) {
         format!("dir=in action=allow priority=65534 hosts=vni={}", cfg.vni,);
     firewall::set_fw_rules(
         &pav.port,
-        &SetFwRulesReq {
+        SetFwRulesReq {
             port_name: pav.port.name().to_string(),
             rules: vec![
                 vpc_in.parse().unwrap(),

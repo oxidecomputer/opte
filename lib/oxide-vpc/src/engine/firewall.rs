@@ -18,6 +18,7 @@ use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
+use crate::api::stat::*;
 use crate::engine::overlay::ACTION_META_VNI;
 use alloc::collections::BTreeSet;
 use alloc::string::ToString;
@@ -50,48 +51,57 @@ pub fn setup(
     pb: &mut PortBuilder,
     ft_limit: NonZeroU32,
 ) -> Result<(), OpteError> {
-    let fw_layer = Firewall::create_layer(pb.name(), ft_limit);
+    // The inbound side of the firewall is a filtering layer, only
+    // traffic explicitly allowed should pass. By setting the
+    // default inbound action to deny we effectively implement the
+    // implied "implied deny inbound" rule as speficied in RFD 63
+    // §2.8.1.
+    //
+    // RFD 63 §2.8.1 also states that all outbond traffic should
+    // be allowed by default, aka the "implied allow outbound"
+    // rule. Therefore, we set the default outbound action to
+    // allow.
+    let actions = LayerActions {
+        default_in: DefaultAction::Deny,
+        default_in_stat_id: Some(FW_DEFAULT_IN),
+        default_out: DefaultAction::StatefulAllow,
+        default_out_stat_id: Some(FW_DEFAULT_OUT),
+        ..Default::default()
+    };
+
+    let fw_layer = Layer::new(FW_LAYER_NAME, pb, actions, ft_limit);
     pb.add_layer(fw_layer, Pos::First)
 }
 
 pub fn add_fw_rule(
     port: &Port<VpcNetwork>,
-    req: &AddFwRuleReq,
+    req: AddFwRuleReq,
 ) -> Result<(), OpteError> {
-    let action = match req.rule.action {
-        FirewallAction::Allow => Action::StatefulAllow,
-        FirewallAction::Deny => Action::Deny,
-    };
-
-    let rule = from_fw_rule(req.rule.clone(), action);
-    port.add_rule(FW_LAYER_NAME, req.rule.direction, rule)
+    let dir = req.rule.direction;
+    let rule = from_fw_rule(req.rule);
+    port.add_rule(FW_LAYER_NAME, dir, rule)
 }
 
 pub fn rem_fw_rule(
     port: &Port<VpcNetwork>,
-    req: &RemFwRuleReq,
+    req: RemFwRuleReq,
 ) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 
 pub fn set_fw_rules(
     port: &Port<VpcNetwork>,
-    req: &SetFwRulesReq,
+    req: SetFwRulesReq,
 ) -> Result<(), OpteError> {
     let mut in_rules = vec![];
     let mut out_rules = vec![];
 
-    for fwr in &req.rules {
-        let action = match fwr.action {
-            FirewallAction::Allow => Action::StatefulAllow,
-            FirewallAction::Deny => Action::Deny,
-        };
-
-        let rule = from_fw_rule(fwr.clone(), action);
-        if fwr.direction == Direction::In {
-            in_rules.push(rule);
-        } else {
-            out_rules.push(rule);
+    for fwr in req.rules {
+        let dir = fwr.direction;
+        let rule = from_fw_rule(fwr);
+        match dir {
+            Direction::In => in_rules.push(rule),
+            Direction::Out => out_rules.push(rule),
         }
     }
 
@@ -100,16 +110,23 @@ pub fn set_fw_rules(
 
 pub struct Firewall {}
 
-pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
-    let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
-    let proto_preds = fw_rule.filters.protocol().into_predicates();
-    let port_pred = fw_rule.filters.ports().into_predicate();
+pub fn from_fw_rule(fw_rule: FirewallRule) -> Rule<Finalized> {
+    let FirewallRule { direction, filters, action, priority, stat_id } =
+        fw_rule;
+
+    let action = match action {
+        FirewallAction::Allow => Action::StatefulAllow,
+        FirewallAction::Deny => Action::Deny,
+    };
+    let addr_pred = filters.hosts().into_predicate(direction);
+    let proto_preds = filters.protocol().into_predicates();
+    let port_pred = filters.ports().into_predicate();
 
     if addr_pred.is_none() && proto_preds.is_empty() && port_pred.is_none() {
-        return Rule::match_any(fw_rule.priority, action);
+        return Rule::match_any_with_id(priority, action, stat_id);
     }
 
-    let mut rule = Rule::new(fw_rule.priority, action);
+    let mut rule = Rule::new_with_id(priority, action, stat_id);
 
     rule.add_predicates(proto_preds);
 
@@ -122,28 +139,6 @@ pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     }
 
     rule.finalize()
-}
-
-impl Firewall {
-    pub fn create_layer(port_name: &str, ft_limit: NonZeroU32) -> Layer {
-        // The inbound side of the firewall is a filtering layer, only
-        // traffic explicitly allowed should pass. By setting the
-        // default inbound action to deny we effectively implement the
-        // implied "implied deny inbound" rule as speficied in RFD 63
-        // §2.8.1.
-        //
-        // RFD 63 §2.8.1 also states that all outbond traffic should
-        // be allowed by default, aka the "implied allow outbound"
-        // rule. Therefore, we set the default outbound action to
-        // allow.
-        let actions = LayerActions {
-            actions: vec![],
-            default_in: DefaultAction::Deny,
-            default_out: DefaultAction::StatefulAllow,
-        };
-
-        Layer::new(FW_LAYER_NAME, port_name, actions, ft_limit)
-    }
 }
 
 impl ProtoFilter {

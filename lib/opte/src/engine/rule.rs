@@ -28,11 +28,11 @@ use super::ip::v4::Ipv4Mut;
 use super::ip::v6::Ipv6Mut;
 use super::ip::v6::v6_set_next_header;
 use super::packet::BodyTransform;
+use super::packet::FullParsed;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
-use super::packet::MblkPacketData;
+use super::packet::MblkPacketDataView;
 use super::packet::Packet;
-use super::packet::PacketData;
 use super::packet::Pullup;
 use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
@@ -68,6 +68,7 @@ use opte_api::Direction;
 use opte_api::RuleDump;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 use zerocopy::ByteSliceMut;
 
 /// A marker trait indicating a type is an entry acuired from a [`Resource`].
@@ -174,12 +175,12 @@ pub trait ActionDesc {
     /// Generate a body transformation.
     ///
     /// An action may optionally generate a [`BodyTransform`] in
-    /// order to act on the body of the packet.
+    /// order to act on the body of the packet. This function is called
+    /// *before* the generated [`HdrTransform`] is applied.
     fn gen_bt(
         &self,
         _dir: Direction,
-        _meta: &MblkPacketData,
-        _payload_seg: &[u8],
+        _meta: MblkPacketDataView,
     ) -> Result<Option<Box<dyn BodyTransform>>, GenBtError> {
         Ok(None)
     }
@@ -276,7 +277,7 @@ impl StaticAction for Identity {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        _pkt_meta: MblkPacketDataView,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -601,7 +602,7 @@ impl HdrTransform {
     }
 
     /// Run this header transformation against the passed in
-    /// [`PacketData`], mutating it in place.
+    /// [`Packet`], mutating it in place.
     ///
     /// Returns whether the inner checksum needs recomputed.
     ///
@@ -612,11 +613,13 @@ impl HdrTransform {
     /// [`HdrTransformError::MissingHeader`] is returned.
     pub fn run<T: Read + Pullup>(
         &self,
-        meta: &mut PacketData<T>,
+        pkt: &mut Packet<FullParsed<T>>,
     ) -> Result<bool, HdrTransformError>
     where
         T::Chunk: ByteSliceMut,
     {
+        let meta = pkt.meta_internal_mut();
+
         self.outer_ether
             .act_on_option::<InlineHeader<Ethernet, ValidEthernet<_>>, _>(
                 &mut meta.headers.outer_eth,
@@ -705,7 +708,7 @@ pub trait StatefulAction: Display {
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<MblkFullParsed>,
+        pkt: MblkPacketDataView,
         meta: &mut ActionMeta,
     ) -> GenDescResult;
 
@@ -725,7 +728,7 @@ pub trait StaticAction: Display {
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &MblkPacketData,
+        packet_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 
@@ -797,7 +800,9 @@ pub trait HairpinAction: Display {
     /// modifications made by previous layers up to this point.
     /// This also provides access to a reader over the packet body,
     /// positioned after the parsed metadata.
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult;
+    ///
+    /// [`Packet`]: super::packet::Packet
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult;
 
     /// Return the predicates implicit to this action.
     ///
@@ -987,6 +992,7 @@ pub struct Rule<S: RuleState> {
     state: S,
     action: Action,
     priority: u16,
+    stat_id: Option<Uuid>,
 }
 
 impl PartialEq for Rule<Finalized> {
@@ -1001,6 +1007,10 @@ impl<S: RuleState> Rule<S> {
     pub fn action(&self) -> &Action {
         &self.action
     }
+
+    pub fn stat_id(&self) -> Option<&Uuid> {
+        self.stat_id.as_ref()
+    }
 }
 
 impl Rule<Ready> {
@@ -1010,9 +1020,22 @@ impl Rule<Ready> {
     /// any implicit predicates dictated by the action. Additional
     /// predicates may be added along with the action's implicit ones.
     pub fn new(priority: u16, action: Action) -> Self {
+        Rule::new_with_id(priority, action, None)
+    }
+
+    pub fn new_with_id(
+        priority: u16,
+        action: Action,
+        stat_id: Option<Uuid>,
+    ) -> Self {
         let (hdr_preds, data_preds) = action.implicit_preds();
 
-        Rule { state: Ready { hdr_preds, data_preds }, action, priority }
+        Rule {
+            state: Ready { hdr_preds, data_preds },
+            action,
+            priority,
+            stat_id,
+        }
     }
 
     /// Create a new rule that matches anything.
@@ -1023,7 +1046,15 @@ impl Rule<Ready> {
     /// useful for making intentions clear that this rule is to match
     /// anything.
     pub fn match_any(priority: u16, action: Action) -> Rule<Finalized> {
-        Rule { state: Finalized { preds: None }, action, priority }
+        Rule::match_any_with_id(priority, action, None)
+    }
+
+    pub fn match_any_with_id(
+        priority: u16,
+        action: Action,
+        stat_id: Option<Uuid>,
+    ) -> Rule<Finalized> {
+        Rule { state: Finalized { preds: None }, action, priority, stat_id }
     }
 
     /// Add a single [`Predicate`] to the end of the list.
@@ -1069,6 +1100,7 @@ impl Rule<Ready> {
             state: Finalized { preds },
             priority: self.priority,
             action: self.action,
+            stat_id: self.stat_id,
         }
     }
 }
@@ -1076,7 +1108,7 @@ impl Rule<Ready> {
 impl Rule<Finalized> {
     pub fn is_match(
         &self,
-        meta: &MblkPacketData,
+        pkt: &Packet<MblkFullParsed>,
         action_meta: &ActionMeta,
     ) -> bool {
         #[cfg(debug_assertions)]
@@ -1098,13 +1130,13 @@ impl Rule<Finalized> {
 
             Some(preds) => {
                 for p in &preds.hdr_preds {
-                    if !p.is_match(meta, action_meta) {
+                    if !p.is_match(pkt, action_meta) {
                         return false;
                     }
                 }
 
                 for p in &preds.data_preds {
-                    if !p.is_match(meta) {
+                    if !p.is_match(pkt) {
                         return false;
                     }
                 }
@@ -1142,6 +1174,7 @@ fn rule_matching() {
     use crate::engine::GenericUlp;
     use crate::engine::ip::v4::Ipv4;
     use crate::engine::ip::v4::Ipv4Mut;
+    use crate::engine::packet::Packet;
     use crate::engine::predicate::Ipv4AddrMatch;
     use crate::engine::predicate::Predicate;
     use ingot::ethernet::Ethertype;
@@ -1178,7 +1211,6 @@ fn rule_matching() {
         .unwrap()
         .to_full_meta();
     pkt.compute_checksums();
-    let meta = pkt.meta();
 
     r1.add_predicate(Predicate::InnerSrcIp4(vec![Ipv4AddrMatch::Exact(
         src_ip,
@@ -1186,14 +1218,14 @@ fn rule_matching() {
     let r1 = r1.finalize();
 
     let ameta = ActionMeta::new();
-    assert!(r1.is_match(meta, &ameta));
+    assert!(r1.is_match(&pkt, &ameta));
 
     let new_src_ip = "10.11.11.99".parse().unwrap();
 
-    let meta = pkt.meta_mut();
+    let meta = pkt.meta_internal_mut();
     if let Some(L3::Ipv4(v4)) = &mut meta.headers.inner_l3 {
         v4.set_source(new_src_ip);
     }
 
-    assert!(!r1.is_match(meta, &ameta));
+    assert!(!r1.is_match(&pkt, &ameta));
 }

@@ -37,6 +37,8 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
 }
 
 /// Build a packet capture file from a series of [`Packet<T>`].
+///
+/// [`Packet<T>`]: opte::engine::packet::Packet
 pub struct PcapBuilder {
     file: File,
 }

@@ -24,6 +24,7 @@ use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::Ports;
+use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
@@ -119,9 +120,12 @@ impl OptePort {
         let adm = OpteHdl::open()?;
         adm.add_router_entry(&AddRouterEntryReq {
             port_name: self.name.clone(),
-            dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
-            target: RouterTarget::Ip(dest.parse().unwrap()),
-            class: RouterClass::System,
+            route: Route {
+                dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
+                target: RouterTarget::Ip(dest.parse().unwrap()),
+                class: RouterClass::System,
+                stat_id: None,
+            },
         })?;
         Ok(())
     }
@@ -139,6 +143,7 @@ impl OptePort {
                 action: FirewallAction::Allow,
                 priority: 0,
                 filters,
+                stat_id: None,
             },
         })?;
 

@@ -106,7 +106,7 @@ impl NetworkImpl for VpcNetwork {
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>,
     {
-        match (dir, pkt.meta().inner_ether().ethertype()) {
+        match (dir, pkt.meta().headers.inner_eth.ethertype()) {
             (Direction::Out, Ethertype::ARP) => self.handle_arp_out(pkt),
 
             _ => Ok(HdlPktAction::Deny),

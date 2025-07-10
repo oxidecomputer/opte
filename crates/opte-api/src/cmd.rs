@@ -5,11 +5,15 @@
 // Copyright 2025 Oxide Computer Company
 
 use super::API_VERSION;
+use super::FlowStat;
+use super::FullCounter;
 use super::RuleId;
 use super::TcpState;
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -18,6 +22,7 @@ use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
 use serde::Serialize;
+use uuid::Uuid;
 
 pub const XDE_IOC: u32 = 0xde777700;
 pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
@@ -50,6 +55,10 @@ pub enum OpteCmd {
     SetExternalIps = 80,     // set xde external IPs for a port
     AllowCidr = 90,          // allow ip block through gateway tx/rx
     RemoveCidr = 91,         // deny ip block through gateway tx/rx
+    ListRootStat = 100,      // list the ids of all registered root stats
+    ListFlowStat = 101,      // list the flow-keys of all current flows
+    DumpRootStat = 102,      // request current counter set(s) with a given ID
+    DumpFlowStat = 103,      // request flow stats for one or more flows
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -82,6 +91,10 @@ impl TryFrom<c_int> for OpteCmd {
             80 => Ok(Self::SetExternalIps),
             90 => Ok(Self::AllowCidr),
             91 => Ok(Self::RemoveCidr),
+            100 => Ok(Self::ListRootStat),
+            101 => Ok(Self::ListFlowStat),
+            102 => Ok(Self::DumpRootStat),
+            103 => Ok(Self::DumpFlowStat),
             _ => Err(()),
         }
     }
@@ -261,6 +274,13 @@ pub struct NoResp {
 
 impl CmdOk for NoResp {}
 
+/// Arbitrary request directed at a port which requires no additional
+/// selectors.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PortReq {
+    pub port_name: String,
+}
+
 /// Dump various information about a layer, for use in debugging or
 /// administrative purposes.
 #[derive(Debug, Deserialize, Serialize)]
@@ -296,10 +316,7 @@ pub struct DumpLayerResp<Flow> {
 
 impl<T: Debug + Serialize> CmdOk for DumpLayerResp<T> {}
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ListLayersReq {
-    pub port_name: String,
-}
+pub type ListLayersReq = PortReq;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct LayerDesc {
@@ -324,10 +341,7 @@ pub struct ListLayersResp {
 
 impl CmdOk for ListLayersResp {}
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ClearUftReq {
-    pub port_name: String,
-}
+pub type ClearUftReq = PortReq;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ClearLftReq {
@@ -335,10 +349,7 @@ pub struct ClearLftReq {
     pub layer_name: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpUftReq {
-    pub port_name: String,
-}
+pub type DumpUftReq = PortReq;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpUftResp<Flow> {
@@ -358,10 +369,7 @@ pub struct UftEntryDump {
     pub summary: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpTcpFlowsReq {
-    pub port_name: String,
-}
+pub type DumpTcpFlowsReq = PortReq;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpTcpFlowsResp<Flow> {
@@ -373,10 +381,6 @@ pub struct TcpFlowEntryDump<Flow> {
     pub hits: u64,
     pub inbound_ufid: Option<Flow>,
     pub tcp_state: TcpFlowStateDump,
-    pub segs_in: u64,
-    pub segs_out: u64,
-    pub bytes_in: u64,
-    pub bytes_out: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -410,3 +414,69 @@ pub struct RuleDump {
     pub data_predicates: Vec<String>,
     pub action: String,
 }
+
+pub type ListRootStatReq = PortReq;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListRootStatResp {
+    pub root_ids: Vec<Uuid>,
+}
+
+impl CmdOk for ListRootStatResp {}
+
+pub type ListFlowStatReq = PortReq;
+
+#[derive(Debug, Deserialize, Serialize, Ord, Eq, PartialEq, PartialOrd)]
+pub struct FlowPair<Flow: Ord + Eq> {
+    pub inbound: Flow,
+    pub outbound: Flow,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ListFlowStatResp<Flow: Ord + Eq> {
+    pub flow_ids: BTreeSet<FlowPair<Flow>>,
+}
+
+impl<Flow: Debug + Serialize + Ord + Eq> CmdOk for ListFlowStatResp<Flow> {}
+
+/// Request the current state of some (or all) root stats contained
+/// in a port.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpRootStatReq {
+    /// The name of the target port.
+    pub port_name: String,
+    /// The set of root stat IDs to query.
+    ///
+    /// If empty, collect the state of all stats.
+    pub root_ids: BTreeSet<Uuid>,
+}
+
+/// The current state of queried root stats.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpRootStatResp {
+    /// The set of queried root stats.
+    pub root_stats: BTreeMap<Uuid, FullCounter>,
+}
+
+impl CmdOk for DumpRootStatResp {}
+
+/// Request the current state of some (or all) flow stats contained
+/// in a port.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpFlowStatReq<Flow: Ord> {
+    /// The name of the target port.
+    pub port_name: String,
+    /// The set of flow-keys to query.
+    ///
+    /// If empty, collect the state of all flows.
+    pub flow_ids: BTreeSet<Flow>,
+}
+
+/// The current state of queried flow stats.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpFlowStatResp<Flow: Ord> {
+    /// The set of queried flow stats.
+    pub flow_stats: BTreeMap<Flow, FlowStat<Flow>>,
+}
+
+impl<Flow: Ord + Debug + Serialize> CmdOk for DumpFlowStatResp<Flow> {}

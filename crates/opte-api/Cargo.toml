@@ -17,6 +17,7 @@ ingot.workspace = true
 ipnetwork = { workspace = true, optional = true }
 postcard.workspace = true
 serde.workspace = true
+uuid.workspace = true
 
 [dependencies.smoltcp]
 workspace = true

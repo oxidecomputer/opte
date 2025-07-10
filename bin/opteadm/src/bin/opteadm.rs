@@ -10,6 +10,7 @@ use clap::Parser;
 use opte::api::API_VERSION;
 use opte::api::Direction;
 use opte::api::DomainName;
+use opte::api::FlowPair;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
@@ -45,6 +46,7 @@ use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
@@ -275,6 +277,42 @@ enum Command {
         /// inbound or outbound traffic.
         #[arg(long = "dir")]
         direction: Option<Direction>,
+    },
+
+    /// Return the IDs of all registered stat objects.
+    ListRootStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+    },
+
+    /// Return the IDs of all current flows.
+    ListFlowStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+    },
+
+    /// Request the current state of root stats contained in a port.
+    DumpRootStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+        // /// A comma-separated list of stat UUIDs of interest. If omitted,
+        // /// request all available stats.
+        // #[arg(long)]
+        // ids: Uuid,
+    },
+
+    /// Return the IDs of all current flows.
+    DumpFlowStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+        // /// A comma-separated list of flowkeys of interest. If omitted,
+        // /// request all available stats.
+        // #[arg(long)]
+        // ids: Vec<InnerFlowId>,
     },
 }
 
@@ -632,6 +670,7 @@ fn main() -> anyhow::Result<()> {
                 filters: filters.into(),
                 action,
                 priority,
+                stat_id: None,
             };
             hdl.add_firewall_rule(&AddFwRuleReq { port_name: port, rule })?;
         }
@@ -767,16 +806,16 @@ fn main() -> anyhow::Result<()> {
         Command::AddRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                AddRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = AddRouterEntryReq { port_name: port, route };
             hdl.add_router_entry(&req)?;
         }
 
         Command::DelRouterEntry {
             route: RouterRule { port, dest, target, class },
         } => {
-            let req =
-                DelRouterEntryReq { port_name: port, dest, target, class };
+            let route = Route { dest, target, class, stat_id: None };
+            let req = DelRouterEntryReq { port_name: port, route };
             if let DelRouterEntryResp::NotFound = hdl.del_router_entry(&req)? {
                 anyhow::bail!(
                     "could not delete entry -- no matching rule found"
@@ -857,6 +896,37 @@ fn main() -> anyhow::Result<()> {
                             )
                         });
                 })?;
+            }
+        }
+
+        Command::ListRootStats { port } => {
+            let vals = hdl.list_root_stats(&port)?;
+
+            for val in vals.root_ids {
+                println!("{val}");
+            }
+        }
+
+        Command::ListFlowStats { port } => {
+            let vals = hdl.list_flow_stats(&port)?;
+
+            println!("Inbound -> Outbound");
+            for FlowPair { inbound, outbound } in vals.flow_ids {
+                println!("{inbound} -> {outbound}");
+            }
+        }
+
+        Command::DumpRootStats { port } => {
+            let vals = hdl.dump_root_stats(&port, [])?;
+            for (id, stat) in vals.root_stats {
+                println!("{id}:\n\t{stat:?}");
+            }
+        }
+
+        Command::DumpFlowStats { port } => {
+            let vals = hdl.dump_flow_stats(&port, [])?;
+            for (id, stat) in vals.flow_stats {
+                println!("{id}:\n\t{stat:?}");
             }
         }
     }

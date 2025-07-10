@@ -9,15 +9,23 @@ use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
 use opte::api::CmdOk;
 use opte::api::Direction;
+use opte::api::DumpFlowStatReq;
+use opte::api::DumpFlowStatResp;
 use opte::api::DumpLayerReq;
 use opte::api::DumpLayerResp;
+use opte::api::DumpRootStatReq;
+use opte::api::DumpRootStatResp;
 use opte::api::DumpTcpFlowsReq;
 use opte::api::DumpTcpFlowsResp;
 use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
 pub use opte::api::InnerFlowId;
+use opte::api::ListFlowStatReq;
+use opte::api::ListFlowStatResp;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
+use opte::api::ListRootStatReq;
+use opte::api::ListRootStatResp;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -52,6 +60,7 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Errors related to administering the OPTE driver.
 #[derive(Debug, Error)]
@@ -366,6 +375,68 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&DumpUftReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Return the IDs of all registered stat objects.
+    pub fn list_root_stats(
+        &self,
+        port_name: &str,
+    ) -> Result<ListRootStatResp, Error> {
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            OpteCmd::ListRootStat,
+            Some(&ListRootStatReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Return the IDs of all current flows.
+    pub fn list_flow_stats(
+        &self,
+        port_name: &str,
+    ) -> Result<ListFlowStatResp<InnerFlowId>, Error> {
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            OpteCmd::ListFlowStat,
+            Some(&ListFlowStatReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Request the current state of some (or all) root stats contained
+    /// in a port.
+    ///
+    /// An empty `stat_ids` will request all present stats.
+    pub fn dump_root_stats(
+        &self,
+        port_name: &str,
+        stat_ids: impl IntoIterator<Item = Uuid>,
+    ) -> Result<DumpRootStatResp, Error> {
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            OpteCmd::DumpRootStat,
+            Some(&DumpRootStatReq {
+                port_name: port_name.to_string(),
+                root_ids: stat_ids.into_iter().collect(),
+            }),
+        )
+    }
+
+    /// Request the current state of some (or all) flow stats contained
+    /// in a port.
+    ///
+    /// An empty `flow_keys` will request all present flows.
+    pub fn dump_flow_stats(
+        &self,
+        port_name: &str,
+        flow_keys: impl IntoIterator<Item = InnerFlowId>,
+    ) -> Result<DumpFlowStatResp<InnerFlowId>, Error> {
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            OpteCmd::DumpFlowStat,
+            Some(&DumpFlowStatReq {
+                port_name: port_name.to_string(),
+                flow_ids: flow_keys.into_iter().collect(),
+            }),
         )
     }
 }

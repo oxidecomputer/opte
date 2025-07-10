@@ -12,8 +12,7 @@ use super::headers::UlpGenericModify;
 use super::headers::UlpHeaderAction;
 use super::headers::UlpMetaModify;
 use super::packet::InnerFlowId;
-use super::packet::MblkFullParsed;
-use super::packet::Packet;
+use super::packet::MblkPacketDataView;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
@@ -243,13 +242,14 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
     fn gen_icmp_desc(
         &self,
         nat: SNatAlloc<T>,
-        pkt: &Packet<MblkFullParsed>,
+        meta: MblkPacketDataView,
     ) -> GenDescResult {
-        let meta = pkt.meta();
-
         let echo_ident = match T::MESSAGE_PROTOCOL {
             Protocol::ICMP => {
-                let icmp = meta.inner_icmp().ok_or(GenIcmpErr::MetaNotFound)?;
+                let icmp = meta
+                    .headers
+                    .inner_icmp()
+                    .ok_or(GenIcmpErr::MetaNotFound)?;
 
                 Ok(if icmp.ty() == IcmpV4Type::ECHO_REQUEST {
                     icmp.echo_id()
@@ -258,8 +258,10 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
                 })
             }
             Protocol::ICMPv6 => {
-                let icmp6 =
-                    meta.inner_icmp6().ok_or(GenIcmpErr::MetaNotFound)?;
+                let icmp6 = meta
+                    .headers
+                    .inner_icmp6()
+                    .ok_or(GenIcmpErr::MetaNotFound)?;
 
                 Ok(if icmp6.ty() == IcmpV6Type::ECHO_REQUEST {
                     icmp6.echo_id()
@@ -306,7 +308,7 @@ where
     fn gen_desc(
         &self,
         flow_id: &InnerFlowId,
-        pkt: &Packet<MblkFullParsed>,
+        pkt: MblkPacketDataView,
         _meta: &mut ActionMeta,
     ) -> GenDescResult {
         let proto = flow_id.protocol();
@@ -480,6 +482,7 @@ mod test {
     use ingot::types::HeaderLen;
 
     use crate::ddi::mblk::MsgBlk;
+    use crate::engine::Packet;
     use crate::engine::ether::Ethernet;
     use crate::engine::ether::EthernetRef;
     use crate::engine::ip::v4::Ipv4;
@@ -559,8 +562,9 @@ mod test {
         // ================================================================
         // Verify descriptor generation.
         // ================================================================
-        let flow_out = InnerFlowId::from(pkt.meta());
-        let desc = match snat.gen_desc(&flow_out, &pkt, &mut action_meta) {
+        let flow_out = InnerFlowId::from(pkt.headers());
+        let desc = match snat.gen_desc(&flow_out, pkt.meta(), &mut action_meta)
+        {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
@@ -570,26 +574,20 @@ mod test {
         // Verify outbound header transformation
         // ================================================================
         let out_ht = desc.gen_ht(Direction::Out);
-        out_ht.run(pkt.meta_mut()).unwrap();
+        out_ht.run(&mut pkt).unwrap();
 
-        let pmo = pkt.meta();
-        let ether_meta = pmo.inner_ether();
+        let pmo = pkt.headers();
+        let ether_meta = &pmo.inner_eth;
         assert_eq!(ether_meta.source(), priv_mac);
         assert_eq!(ether_meta.destination(), dest_mac);
 
-        let ip4_meta = match pmo.inner_ip4() {
-            Some(v) => v,
-            _ => panic!("expect Ipv4Meta"),
-        };
+        let ip4_meta = pmo.inner_ip4().unwrap();
 
         assert_eq!(ip4_meta.source(), pub_ip);
         assert_eq!(ip4_meta.destination(), outside_ip);
         assert_eq!(ip4_meta.protocol(), IpProtocol::TCP);
 
-        let tcp_meta = match pmo.inner_tcp() {
-            Some(v) => v,
-            _ => panic!("expect TcpMeta"),
-        };
+        let tcp_meta = pmo.inner_tcp().unwrap();
 
         assert_eq!(tcp_meta.source(), pub_port);
         assert_eq!(tcp_meta.destination(), outside_port);
@@ -624,26 +622,20 @@ mod test {
         pkt.compute_checksums();
 
         let in_ht = desc.gen_ht(Direction::In);
-        in_ht.run(pkt.meta_mut()).unwrap();
+        in_ht.run(&mut pkt).unwrap();
 
-        let pmi = pkt.meta();
-        let ether_meta = pmi.inner_ether();
+        let pmi = pkt.headers();
+        let ether_meta = &pmi.inner_eth;
         assert_eq!(ether_meta.source(), dest_mac);
         assert_eq!(ether_meta.destination(), priv_mac);
 
-        let ip4_meta = match pmi.inner_ip4() {
-            Some(v) => v,
-            _ => panic!("expect Ipv4Meta"),
-        };
+        let ip4_meta = pmi.inner_ip4().unwrap();
 
         assert_eq!(ip4_meta.source(), outside_ip);
         assert_eq!(ip4_meta.destination(), priv_ip);
         assert_eq!(ip4_meta.protocol(), IpProtocol::TCP);
 
-        let tcp_meta = match pmi.inner_tcp() {
-            Some(v) => v,
-            _ => panic!("expect TcpMeta"),
-        };
+        let tcp_meta = pmi.inner_tcp().unwrap();
 
         assert_eq!(tcp_meta.source(), outside_port);
         assert_eq!(tcp_meta.destination(), priv_port);

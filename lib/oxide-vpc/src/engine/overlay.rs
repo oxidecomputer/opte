@@ -15,6 +15,7 @@ use crate::api::PhysNet;
 use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
+use crate::api::stat::*;
 use crate::cfg::VpcCfg;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
@@ -48,7 +49,7 @@ use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::MblkPacketData;
+use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::port::meta::ActionMeta;
@@ -65,24 +66,29 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use opte::engine::stat::RootStat;
 use poptrie::Poptrie;
 
 pub const OVERLAY_LAYER_NAME: &str = "overlay";
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
     v2b: Arc<Virt2Boundary>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
-    let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.phys_ip,
-        cfg.vni,
+    let internet_stat = pb.stats_mut().new_root(Some(DESTINATION_INTERNET));
+    let vpc_local_stat = pb.stats_mut().new_root(Some(DESTINATION_VPC_LOCAL));
+    let encap = Action::Static(Arc::new(EncapAction {
+        phys_ip_src: cfg.phys_ip,
+        vni: cfg.vni,
         v2p,
         v2b,
-    )));
+        internet_stat,
+        vpc_local_stat,
+    }));
 
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
@@ -91,14 +97,14 @@ pub fn setup(
         actions: vec![encap, decap],
         default_in: DefaultAction::Deny,
         default_out: DefaultAction::Deny,
+        ..Default::default()
     };
 
-    let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(OVERLAY_LAYER_NAME, pb, actions, ft_limit);
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
-    layer.add_rule(Direction::Out, encap_rule);
+    layer.add_rule(Direction::Out, encap_rule, pb.stats_mut());
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap());
-    layer.add_rule(Direction::In, decap_rule);
+    layer.add_rule(Direction::In, decap_rule, pb.stats_mut());
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
     pb.add_layer(layer, Pos::Last)
@@ -176,17 +182,9 @@ pub struct EncapAction {
     vni: Vni,
     v2p: Arc<Virt2Phys>,
     v2b: Arc<Virt2Boundary>,
-}
 
-impl EncapAction {
-    pub fn new(
-        phys_ip_src: Ipv6Addr,
-        vni: Vni,
-        v2p: Arc<Virt2Phys>,
-        v2b: Arc<Virt2Boundary>,
-    ) -> Self {
-        Self { phys_ip_src, vni, v2p, v2b }
-    }
+    internet_stat: Arc<RootStat>,
+    vpc_local_stat: Arc<RootStat>,
 }
 
 impl fmt::Display for EncapAction {
@@ -201,7 +199,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        mut pkt: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -235,6 +233,7 @@ impl StaticAction for EncapAction {
 
         let (is_internal, phys_target) = match target {
             RouterTargetInternal::InternetGateway(_) => {
+                pkt.push_stat(Arc::clone(&self.internet_stat));
                 match self.v2b.get(&flow_id.dst_ip()) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
@@ -258,30 +257,38 @@ impl StaticAction for EncapAction {
                 }
             }
 
-            RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
-                Some(phys) => (
-                    true,
-                    PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni },
-                ),
+            RouterTargetInternal::Ip(virt_ip) => {
+                pkt.push_stat(Arc::clone(&self.vpc_local_stat));
+                match self.v2p.get(&virt_ip) {
+                    Some(phys) => (
+                        true,
+                        PhysNet {
+                            ether: phys.ether,
+                            ip: phys.ip,
+                            vni: self.vni,
+                        },
+                    ),
 
-                // The router target has specified a VPC IP we do not
-                // currently know about; this could be for two
-                // reasons:
-                //
-                // 1. No such IP currently exists in the guest's VPC.
-                //
-                // 2. The destination IP exists in the guest's VPC,
-                //    but we do not yet have a mapping for it.
-                //
-                // We cannot differentiate these cases from the point
-                // of view of this code without more information from
-                // the control plane; rather we drop the packet. If we
-                // are dealing with scenario (2), the control plane
-                // should eventually provide us with a mapping.
-                None => return Ok(AllowOrDeny::Deny),
-            },
+                    // The router target has specified a VPC IP we do not
+                    // currently know about; this could be for two
+                    // reasons:
+                    //
+                    // 1. No such IP currently exists in the guest's VPC.
+                    //
+                    // 2. The destination IP exists in the guest's VPC,
+                    //    but we do not yet have a mapping for it.
+                    //
+                    // We cannot differentiate these cases from the point
+                    // of view of this code without more information from
+                    // the control plane; rather we drop the packet. If we
+                    // are dealing with scenario (2), the control plane
+                    // should eventually provide us with a mapping.
+                    None => return Ok(AllowOrDeny::Deny),
+                }
+            }
 
             RouterTargetInternal::VpcSubnet(_) => {
+                pkt.push_stat(Arc::clone(&self.vpc_local_stat));
                 match self.v2p.get(&flow_id.dst_ip()) {
                     Some(phys) => (
                         true,
@@ -387,10 +394,10 @@ impl StaticAction for DecapAction {
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        pkt_meta: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        match pkt_meta.outer_encap_geneve_vni_and_origin() {
+        match pkt_meta.headers.outer_encap_geneve_vni_and_origin() {
             Some((vni, oxide_external_pkt)) => {
                 // We only conditionally add this metadata because the
                 // `Address::VNI` filter uses it to select VPC-originated

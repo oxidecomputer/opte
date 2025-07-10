@@ -12,7 +12,7 @@ use crate::engine::checksum::HeaderChecksum;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
-use crate::engine::packet::MblkPacketData;
+use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::Ipv6AddrMatch;
 use alloc::string::String;
 use ingot::ethernet::Ethertype;
@@ -109,8 +109,8 @@ impl HairpinAction for Icmpv6EchoReply {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        let Some(icmp6) = meta.inner_icmp6() else {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
+        let Some(icmp6) = meta.headers.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
@@ -234,11 +234,11 @@ impl HairpinAction for RouterAdvertisement {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         use smoltcp::time::Duration;
         use smoltcp::wire::NdiscRouterFlags;
 
-        let Some(icmp6) = meta.inner_icmp6() else {
+        let Some(icmp6) = meta.headers.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
@@ -250,7 +250,7 @@ impl HairpinAction for RouterAdvertisement {
 
         // Collect the src / dst IP addresses, which are needed to emit the
         // resulting ICMPv6 packet using `smoltcp`.
-        let Some(ip6) = meta.inner_ip6() else {
+        let Some(ip6) = meta.headers.inner_ip6() else {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
             return Err(GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {meta:?}",
@@ -350,7 +350,7 @@ impl HairpinAction for RouterAdvertisement {
         let ip6 = Ipv6 {
             source: *self.ip(),
             // Safety: We match on this being Some(_) above, so unwrap is safe.
-            destination: meta.inner_ip6().unwrap().source(),
+            destination: meta.headers.inner_ip6().unwrap().source(),
             next_header: IngotIpProto::ICMP_V6,
             payload_len: reply_len as u16,
 
@@ -552,8 +552,8 @@ impl HairpinAction for NeighborAdvertisement {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        let Some(icmp6) = meta.inner_icmp6() else {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
+        let Some(icmp6) = meta.headers.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
             // should be impossible, but we avoid panicking given the kernel
@@ -564,7 +564,7 @@ impl HairpinAction for NeighborAdvertisement {
         };
 
         // Sanity check that this is actually in IPv6 packet.
-        let metadata = meta.inner_ip6().ok_or_else(|| {
+        let metadata = meta.headers.inner_ip6().ok_or_else(|| {
             // We got the ICMPv6 metadata above but no IPv6 somehow?
             GenErr::Unexpected(format!(
                 "Expected IPv6 packet metadata, but found: {meta:?}",
