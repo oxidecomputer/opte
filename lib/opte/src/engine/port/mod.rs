@@ -1007,7 +1007,7 @@ impl<N: NetworkImpl> Port<N> {
         Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
     }
 
-    /// XXX TEST METHOD
+    #[cfg(any(test, feature = "std"))]
     pub fn dump_flow_stats(&self) -> Result<String> {
         let data = self.data.read();
         check_state!(
@@ -1746,6 +1746,12 @@ impl<N: NetworkImpl> Port<N> {
             .tcp_flows
             .get(flow)
             .map(|entry| entry.state().tcp_state())
+    }
+
+    /// Provides read access to all port stats.
+    pub fn read_stats<T>(&self, f: impl FnOnce(&StatTree) -> T) -> T {
+        let data = self.data.read();
+        f(&data.flow_stats)
     }
 }
 

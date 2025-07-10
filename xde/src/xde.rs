@@ -872,28 +872,25 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
-        // TEMP
-        OpteCmd::DumpFlowStats => {
-            let resp = flow_stats_hdlr(&mut env);
+        OpteCmd::ListRootStat => {
+            let resp = list_root_stats_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
-    }
-}
 
-// TODO: this is just sufficient for a demo. Develop the actual interface.
-#[unsafe(no_mangle)]
-fn flow_stats_hdlr(
-    env: &mut IoctlEnvelope,
-) -> Result<oxide_vpc::api::DumpFlowStatsResp, OpteError> {
-    let req: oxide_vpc::api::DumpUftReq = env.copy_in_req()?;
-    let state = get_xde_state();
-    let devs = state.devs.read();
-    match devs.get_by_name(&req.port_name) {
-        Some(dev) => dev
-            .port
-            .dump_flow_stats()
-            .map(|data| oxide_vpc::api::DumpFlowStatsResp { data }),
-        None => Err(OpteError::PortNotFound(req.port_name)),
+        OpteCmd::ListFlowStat => {
+            let resp = list_flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpRootStat => {
+            let resp = dump_root_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpFlowStat => {
+            let resp = dump_flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
     }
 }
 
@@ -2804,6 +2801,88 @@ fn remove_cidr_hdlr(
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
+}
+
+#[unsafe(no_mangle)]
+fn list_root_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::ListRootStatResp, OpteError> {
+    let req: opte::api::ListRootStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    Ok(opte::api::ListRootStatResp {
+        root_ids: dev.port.read_stats(|stats| stats.all_root_ids().collect()),
+    })
+}
+
+#[unsafe(no_mangle)]
+fn list_flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::ListFlowStatResp<InnerFlowId>, OpteError> {
+    let req: opte::api::ListFlowStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    Ok(opte::api::ListFlowStatResp {
+        flow_ids: dev.port.read_stats(|stats| stats.all_flow_pairs().collect()),
+    })
+}
+
+#[unsafe(no_mangle)]
+fn dump_root_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::DumpRootStatResp, OpteError> {
+    let req: opte::api::DumpRootStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let root_stats = dev.port.read_stats(|stats| {
+        if req.root_ids.is_empty() {
+            stats.all_root_stats().collect()
+        } else {
+            req.root_ids
+                .iter()
+                .filter_map(|k| stats.root_stat(k).map(|v| (*k, v)))
+                .collect()
+        }
+    });
+
+    Ok(opte::api::DumpRootStatResp { root_stats })
+}
+
+#[unsafe(no_mangle)]
+fn dump_flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::DumpFlowStatResp<InnerFlowId>, OpteError> {
+    let req: opte::api::DumpFlowStatReq<InnerFlowId> = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let flow_stats = dev.port.read_stats(|stats| {
+        if req.flow_ids.is_empty() {
+            stats.all_flow_stats().collect()
+        } else {
+            req.flow_ids
+                .iter()
+                .filter_map(|k| stats.flow_stat(k).map(|v| (*k, v)))
+                .collect()
+        }
+    });
+
+    Ok(opte::api::DumpFlowStatResp { flow_stats })
 }
 
 #[unsafe(no_mangle)]

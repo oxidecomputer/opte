@@ -649,14 +649,6 @@ pub struct FirewallRule {
     pub stat_id: Option<Uuid>,
 }
 
-// TEMP
-#[derive(Debug, Deserialize, Serialize)]
-pub struct DumpFlowStatsResp {
-    pub data: String,
-}
-
-impl CmdOk for DumpFlowStatsResp {}
-
 impl FromStr for FirewallRule {
     type Err = String;
 

@@ -1457,6 +1457,7 @@ dependencies = [
  "postcard",
  "serde",
  "thiserror 2.0.12",
+ "uuid",
 ]
 
 [[package]]
@@ -1485,6 +1486,7 @@ dependencies = [
  "serde",
  "tabwriter",
  "thiserror 2.0.12",
+ "uuid",
 ]
 
 [[package]]

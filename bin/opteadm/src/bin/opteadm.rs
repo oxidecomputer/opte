@@ -10,6 +10,7 @@ use clap::Parser;
 use opte::api::API_VERSION;
 use opte::api::Direction;
 use opte::api::DomainName;
+use opte::api::FlowPair;
 use opte::api::IpAddr;
 use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
@@ -32,7 +33,6 @@ use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
-use oxide_vpc::api::DumpFlowStatsResp;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
@@ -279,11 +279,40 @@ enum Command {
         direction: Option<Direction>,
     },
 
-    /// XXX TEMP
-    DumpFlowStats {
-        /// The OPTE port to read...
+    /// Return the IDs of all registered stat objects.
+    ListRootStats {
+        /// The OPTE port to query.
         #[arg(short)]
         port: String,
+    },
+
+    /// Return the IDs of all current flows.
+    ListFlowStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+    },
+
+    /// Request the current state of root stats contained in a port.
+    DumpRootStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+        // /// A comma-separated list of stat UUIDs of interest. If omitted,
+        // /// request all available stats.
+        // #[arg(long)]
+        // ids: Uuid,
+    },
+
+    /// Return the IDs of all current flows.
+    DumpFlowStats {
+        /// The OPTE port to query.
+        #[arg(short)]
+        port: String,
+        // /// A comma-separated list of flowkeys of interest. If omitted,
+        // /// request all available stats.
+        // #[arg(long)]
+        // ids: Vec<InnerFlowId>,
     },
 }
 
@@ -870,10 +899,35 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        // XXX TEMP
+        Command::ListRootStats { port } => {
+            let vals = hdl.list_root_stats(&port)?;
+
+            for val in vals.root_ids {
+                println!("{val}");
+            }
+        }
+
+        Command::ListFlowStats { port } => {
+            let vals = hdl.list_flow_stats(&port)?;
+
+            println!("Inbound -> Outbound");
+            for FlowPair { inbound, outbound } in vals.flow_ids {
+                println!("{inbound} -> {outbound}");
+            }
+        }
+
+        Command::DumpRootStats { port } => {
+            let vals = hdl.dump_root_stats(&port, [])?;
+            for (id, stat) in vals.root_stats {
+                println!("{id}:\n\t{stat:?}");
+            }
+        }
+
         Command::DumpFlowStats { port } => {
-            let DumpFlowStatsResp { data } = hdl.dump_flowstats(&port)?;
-            println!("{data}");
+            let vals = hdl.dump_flow_stats(&port, [])?;
+            for (id, stat) in vals.flow_stats {
+                println!("{id}:\n\t{stat:?}");
+            }
         }
     }
 

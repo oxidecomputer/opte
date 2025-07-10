@@ -14,6 +14,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
+#[cfg(any(test, feature = "std"))]
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::sync::Weak;
@@ -21,6 +22,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 use opte_api::Direction;
+use opte_api::FlowPair;
 use opte_api::FlowStat as ApiFlowStat;
 use opte_api::FullCounter as ApiFullCounter;
 use opte_api::PacketCounter as ApiPktCounter;
@@ -739,6 +741,11 @@ impl StatTree {
         });
     }
 
+    /// Return the IDs of all present roots.
+    pub fn all_root_ids(&self) -> impl Iterator<Item = Uuid> {
+        self.roots.keys().copied()
+    }
+
     /// Return a snapshot of collated stats for a given root.
     ///
     /// This will include the values of all downstream children,
@@ -753,11 +760,36 @@ impl StatTree {
     /// but may be susceptible to partial reads between individual counters.
     pub fn all_root_stats(
         &self,
-    ) -> impl Iterator<Item = (&Uuid, ApiFullCounter)> {
-        self.roots.iter().map(|(k, v)| (k, v.combined_stats()))
+    ) -> impl Iterator<Item = (Uuid, ApiFullCounter)> {
+        self.roots.iter().map(|(k, v)| (*k, v.combined_stats()))
     }
 
-    // TEMP
+    /// Return the IDs of all present flows.
+    pub fn all_flow_pairs(
+        &self,
+    ) -> impl Iterator<Item = FlowPair<InnerFlowId>> {
+        self.flows.iter().map(|(k, v)| match v.dir {
+            Direction::In => FlowPair { inbound: *k, outbound: v.partner },
+            Direction::Out => FlowPair { outbound: *k, inbound: v.partner },
+        })
+    }
+
+    /// Return a snapshot of stats for a given flow.
+    pub fn flow_stat(
+        &self,
+        id: &InnerFlowId,
+    ) -> Option<ApiFlowStat<InnerFlowId>> {
+        self.flows.get(id).map(|v| ApiFlowStat::from(v.as_ref()))
+    }
+
+    /// Return a snapshot of collated stats for all present flows.
+    pub fn all_flow_stats(
+        &self,
+    ) -> impl Iterator<Item = (InnerFlowId, ApiFlowStat<InnerFlowId>)> {
+        self.flows.iter().map(|(k, v)| (*k, ApiFlowStat::from(v.as_ref())))
+    }
+
+    #[cfg(any(test, feature = "std"))]
     pub fn dump(&self) -> String {
         let mut out = String::new();
         out.push_str("--Roots--\n");
