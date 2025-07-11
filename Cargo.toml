@@ -47,7 +47,7 @@ clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.6"
 ctor = "0.4"
-darling = "0.20"
+darling = "0.21"
 dyn-clone = "1.0"
 heapless = "0.8"
 ingot = "0.1.0"
