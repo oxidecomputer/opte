@@ -50,7 +50,7 @@ ctor = "0.4"
 darling = "0.21"
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = "0.1.0"
+ingot = "0.1.1"
 ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.14", default-features = false }
 libc = "0.2"
