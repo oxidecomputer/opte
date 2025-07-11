@@ -610,30 +610,6 @@ impl<T: Read + Pullup> PacketData<T> {
     {
         self.body.body_mut()
     }
-
-    /// Return whether the IP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ip_csum(&self) -> bool {
-        match &self.headers.inner_l3 {
-            Some(L3::Ipv4(v4)) => v4.checksum() != 0,
-            Some(L3::Ipv6(_)) => false,
-            None => false,
-        }
-    }
-
-    /// Return whether the ULP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    pub fn has_ulp_csum(&self) -> bool {
-        let csum = match &self.headers.inner_ulp {
-            Some(Ulp::Tcp(t)) => t.checksum(),
-            Some(Ulp::Udp(u)) => u.checksum(),
-            Some(Ulp::IcmpV4(i4)) => i4.checksum(),
-            Some(Ulp::IcmpV6(i6)) => i6.checksum(),
-            None => return false,
-        };
-
-        csum != 0
-    }
 }
 
 impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
@@ -1223,7 +1199,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         }
     }
 
-    pub fn body_csum(&mut self) -> Option<Checksum> {
+    pub fn body_csum(&self) -> Option<Checksum> {
         self.state.body_csum
     }
 
@@ -1249,32 +1225,48 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        // If we know that no transform touched a field which features in
-        // an inner transport cksum (L4/L3 src/dst, most realistically),
-        // and no body transform occurred then we can exit early.
-        if !self.checksums_dirty() && !self.state.body_modified {
-            return;
-        }
-
-        // Flag to indicate if an IP header/ULP checksums were
-        // provided. If the checksum is zero, it's assumed heardware
-        // checksum offload is being used, and OPTE should not update
-        // the checksum.
-        let update_ip = self.state.meta.has_ip_csum();
-        let update_ulp = self.state.meta.has_ulp_csum();
-
-        // We expect that any body transform will necessarily invalidate
-        // the body_csum. Recompute from scratch.
-        if self.state.body_modified && (update_ip || update_ulp) {
+        // We expect that any body transform will necessarily invalidate the
+        // body_csum (and that of all headers). Recompute from scratch.
+        if self.state.body_modified {
             return self.compute_checksums();
         }
 
-        // Start by reusing the known checksum of the body.
-        let mut body_csum = self.body_csum().unwrap_or_default();
+        // If we know that no transform touched a field which features in an
+        // inner transport cksum (L4/L3 src/dst, most realistically) then we
+        // can exit early.
+        if !self.checksums_dirty() {
+            return;
+        }
 
-        // If a ULP exists, then compute and set its checksum.
-        if let (true, Some(ulp)) =
-            (update_ulp, &mut self.state.meta.headers.inner_ulp)
+        // In future we will want to factor in the offload information
+        // contained in the mblk_t. I would say that this gives us a perfect
+        // view on which checksums (other than UDP) have been omitted, but:
+        //
+        // * IP is in the unfortunate position where the `HCK_IPV4_HDRCKSUM`
+        //   (requesting offload) and `HCK_IPV4_HDRCKSUM_OK` (the NIC verified
+        //   the checksum) flags map to the same value, 0x01. We can't
+        //   differentiate them.
+        // * Interpretation of `HCK_FULLCKSUM` is direction-sensitive. When
+        //   going *to* the NIC, this means the checksum is omitted (and we can
+        //   avoid doing anything here). When coming *from* the NIC, this means
+        //   there is a checksum in place, and the recipient should verify it
+        //   (and we should update it!). These are *not the same* as
+        //   `Direction::Out/In` -- the port loopback path means that we can be
+        //   `Direction::In` without ever having touched the NIC.
+        //
+        // In any case, because we advertise full checksum offloads it doesn't
+        // matter if we have modified a zero-checksum-meaning-omitted -- the
+        // recipient (NIC, or `mac_hw_emul` before we handoff in local
+        // loopback) will disregard these contents.
+        //
+        // It's important to note that XDE/OPTE does not advertise support
+        // for partial checksums. In this case, we would need to check for the
+        // relevant flags and determine whether to invert the checksum as we
+        // start and end processing.
+
+        // If a ULP exists and provided a checksum, then update it.
+        if let Some(mut body_csum) = self.body_csum()
+            && let Some(ulp) = self.state.meta.headers.inner_ulp.as_mut()
         {
             let mut csum = body_csum;
             // Unwrap: Can't have a ULP without an IP.
@@ -1341,9 +1333,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         }
 
         // Compute and fill in the IPv4 header checksum.
-        if let (true, Some(l3)) =
-            (update_ip, &mut self.state.meta.headers.inner_l3)
-        {
+        if let Some(l3) = &mut self.state.meta.headers.inner_l3 {
             l3.compute_checksum();
         }
     }

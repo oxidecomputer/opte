@@ -115,20 +115,6 @@ impl<B: ByteSlice> ValidUlp<B> {
         .to_be_bytes()
     }
 
-    /// Return whether the ULP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    #[inline]
-    pub fn has_ulp_csum(&self) -> bool {
-        let csum = match self {
-            ValidUlp::Tcp(t) => t.checksum(),
-            ValidUlp::Udp(u) => u.checksum(),
-            ValidUlp::IcmpV4(i4) => i4.checksum(),
-            ValidUlp::IcmpV6(i6) => i6.checksum(),
-        };
-
-        csum != 0
-    }
-
     #[inline]
     pub fn ip_protocol(&self) -> IpProtocol {
         match self {
@@ -448,16 +434,16 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidNoEncap<V> {
 
     #[inline]
     fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
+        // See the discussion on Packet<FullParsed<T>>::update_checksums on the
+        // validity of these updates when senders have requested offloads.
         if let Some(l3) = self.inner_l3.as_mut() {
             if let (Some(ulp), Some(body_csum)) =
                 (self.inner_ulp.as_mut(), body_csum)
-                && ulp.has_ulp_csum()
             {
                 ulp.compute_checksum(body_csum, l3);
             }
-            if l3.has_ip_csum() {
-                l3.compute_checksum();
-            }
+
+            l3.compute_checksum();
         }
     }
 
@@ -580,15 +566,13 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 
     #[inline]
     fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
-        if let Some(body_csum) = body_csum
-            && self.inner_ulp.has_ulp_csum()
-        {
+        // See the discussion on Packet<FullParsed<T>>::update_checksums on the
+        // validity of these updates when senders have requested offloads.
+        if let Some(body_csum) = body_csum {
             self.inner_ulp.compute_checksum(body_csum, &self.inner_l3);
         }
 
-        if self.inner_l3.has_ip_csum() {
-            self.inner_l3.compute_checksum();
-        }
+        self.inner_l3.compute_checksum();
     }
 
     #[inline]
@@ -628,10 +612,6 @@ impl<V: ByteSliceMut> LightweightMeta<V> for ValidGeneveOverV6<V> {
 fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
     match ulp {
         ValidUlp::IcmpV4(icmp) => {
-            if icmp.checksum() == 0 {
-                return None;
-            }
-
             let mut csum = Checksum::from(HeaderChecksum::wrap(
                 icmp.checksum().to_be_bytes(),
             ));
@@ -642,10 +622,6 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             Some(csum)
         }
         ValidUlp::IcmpV6(icmp) => {
-            if icmp.checksum() == 0 {
-                return None;
-            }
-
             let mut csum = Checksum::from(HeaderChecksum::wrap(
                 icmp.checksum().to_be_bytes(),
             ));
@@ -656,10 +632,6 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             Some(csum)
         }
         ValidUlp::Tcp(tcp) => {
-            if tcp.checksum() == 0 {
-                return None;
-            }
-
             let mut csum = Checksum::from(HeaderChecksum::wrap(
                 tcp.checksum().to_be_bytes(),
             ));
@@ -677,6 +649,9 @@ fn csum_minus_hdr<V: ByteSlice>(ulp: &ValidUlp<V>) -> Option<Checksum> {
             Some(csum)
         }
         ValidUlp::Udp(udp) => {
+            // In all other uses of the Internet checksum, zero is a valid
+            // output value. UDP has explicitly chosen to mark `0` as meaning
+            // a *lack* of a checksum.
             if udp.checksum() == 0 {
                 return None;
             }
