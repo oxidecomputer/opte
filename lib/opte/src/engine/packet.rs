@@ -1242,9 +1242,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // contained in the mblk_t. I would say that this gives us a perfect
         // view on which checksums (other than UDP) have been omitted, but:
         //
-        // * IP is in the unfortunate position where `HCK_IPV4_HDRCKSUM`
+        // * IP is in the unfortunate position where the `HCK_IPV4_HDRCKSUM`
         //   (requesting offload) and `HCK_IPV4_HDRCKSUM_OK` (the NIC verified
-        //   the checksum) are identical.
+        //   the checksum) flags map to the same value, 0x01. We can't
+        //   differentiate them.
         // * Interpretation of `HCK_FULLCKSUM` is direction-sensitive. When
         //   going *to* the NIC, this means the checksum is omitted (and we can
         //   avoid doing anything here). When coming *from* the NIC, this means
