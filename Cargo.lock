@@ -447,9 +447,9 @@ checksum = "4f211af61d8efdd104f96e57adf5e426ba1bc3ed7a4ead616e15e5881fd79c4d"
 
 [[package]]
 name = "darling"
-version = "0.20.11"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7f46116c46ff9ab3eb1597a45688b6715c6e628b5c133e288e709a29bcb4ee"
+checksum = "a79c4acb1fd5fa3d9304be4c76e031c54d2e92d172a393e24b19a14fe8532fe9"
 dependencies = [
  "darling_core",
  "darling_macro",
@@ -457,9 +457,9 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.20.11"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
+checksum = "74875de90daf30eb59609910b84d4d368103aaec4c924824c6799b28f77d6a1d"
 dependencies = [
  "fnv",
  "ident_case",
@@ -471,9 +471,9 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
-version = "0.20.11"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc34b93ccb385b40dc71c6fceac4b2ad23662c7eeb248cf10d529b7e055b6ead"
+checksum = "e79f8e61677d5df9167cd85265f8e5f64b215cdea3fb55eebc3e622e44c7a146"
 dependencies = [
  "darling_core",
  "quote",
@@ -1044,9 +1044,9 @@ dependencies = [
 
 [[package]]
 name = "ingot"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bf487a5cb3a9d3346e5b7dac34193ba0b2aefe5d1c196e8caf454c19e200a04"
+checksum = "3a17a93829808685f3b6882763901d7489efc1155ad4ae568499d1b303067ca6"
 dependencies = [
  "bitflags 2.9.1",
  "ingot-macros",
@@ -1058,12 +1058,12 @@ dependencies = [
 
 [[package]]
 name = "ingot-macros"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f13f59bddb02b9927bdf5e20a7204c92bcff649496f54a591091c0c2cb27cbf"
+checksum = "c4c94e8b5b5e08b71943d585acdb6062daaeb6b19de82ebb377c7c9cbeff44bb"
 dependencies = [
  "darling",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -1072,9 +1072,9 @@ dependencies = [
 
 [[package]]
 name = "ingot-types"
-version = "0.1.0"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31cffa0c771a619697bc33dff4fb4771a6f87b0f6864793a3efac4e8ee50c78"
+checksum = "2d0d55db2f1de52564cc3781ffd5a7ebb7f2c6e1888841c2fa54231a9498db5f"
 dependencies = [
  "ingot-macros",
  "macaddr",
