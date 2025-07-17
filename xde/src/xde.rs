@@ -2008,6 +2008,8 @@ fn xde_mc_tx_one<'a>(
         return;
     };
 
+    let optimal_mss_estimate = u32::from(ETHERNET_MTU) - non_eth_payl_bytes;
+
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
@@ -2081,11 +2083,23 @@ fn xde_mc_tx_one<'a>(
                 return;
             };
 
-            // Boost MSS to use full jumbo frames if we know our path
-            // can be served purely on internal links.
+            // Boost MSS to use full jumbo frames if we know our path can be
+            // served purely on internal links AND the guest has not chosen an
+            // MSS which is less than their MTU would admit.
             // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+            //
+            // Suboptimal MSS has a significant performance impact when it crops
+            // up, because we're in all likelihood increasing the
+            // packets-per-second which OPTE must process at the receive side.
+            // Working around this requires that we introduce GRO, or that we
+            // include the MSS in-band somehow to reattach to the packet at rx
+            // (which would allow us to keep boosting the MSS for such packets
+            // on the underlay). This could be via a custom IPv6 extension on
+            // the underlay, or a geneve TLV. That signalling would need some
+            // amount of validation against illumos and sidecar.
+            let mss_is_suboptimal = offload_req.mss < optimal_mss_estimate;
             let mut flags = offload_req.flags;
-            let mss = if mtu_unrestricted {
+            let mss = if mtu_unrestricted && !mss_is_suboptimal {
                 src_dev.underlay_capab.mtu - encap_len - non_eth_payl_bytes
             } else {
                 offload_req.mss
