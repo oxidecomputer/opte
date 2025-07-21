@@ -1205,12 +1205,31 @@ impl<N: NetworkImpl> Port<N> {
     pub fn process<'a, M>(
         &self,
         dir: Direction,
+        pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
+    ) -> result::Result<ProcessResult, ProcessError>
+    where
+        M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
+    {
+        let mut meta = ActionMeta::new();
+        self.process_meta(dir, pkt, &mut meta)
+    }
+
+    /// Process the packet, passing in/out `ActionMeta` used by OPTE.
+    ///
+    /// # States
+    ///
+    /// This command is valid only for [`PortState::Running`].
+    #[inline(always)]
+    pub fn process_meta<'a, M>(
+        &self,
+        dir: Direction,
         // TODO: might want to pass in a &mut to an enum
         // which can advance to (and hold) light->full-fat metadata.
         // My gutfeel is that there's a perf cost here -- this struct
         // is pretty large, but expressing the transform on a &mut is also
         // less than ideal.
         mut pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
+        ameta: &mut ActionMeta,
     ) -> result::Result<ProcessResult, ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
@@ -1490,7 +1509,6 @@ impl<N: NetworkImpl> Port<N> {
 
         // (2)/(3) Full-fat metadata is required.
         let mut pkt = pkt.to_full_meta();
-        let mut ameta = ActionMeta::new();
 
         let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
@@ -1517,7 +1535,7 @@ impl<N: NetworkImpl> Port<N> {
                     epoch,
                     &mut pkt,
                     &flow_before,
-                    &mut ameta,
+                    ameta,
                 );
 
                 drop(lock);
@@ -1530,8 +1548,7 @@ impl<N: NetworkImpl> Port<N> {
                     .as_mut()
                     .expect("lock should be held on this codepath");
 
-                let res =
-                    self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
+                let res = self.process_out_miss(data, epoch, &mut pkt, ameta);
 
                 drop(lock);
 
@@ -1555,7 +1572,7 @@ impl<N: NetworkImpl> Port<N> {
             }
             InternalProcessResult::Hairpin(v) => Ok(ProcessResult::Hairpin(v)),
             InternalProcessResult::Modified => pkt
-                .emit_spec(&ameta)
+                .emit_spec(ameta)
                 .map_err(|_| ProcessError::BadEmitSpec)
                 .map(ProcessResult::Modified),
         });
