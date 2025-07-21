@@ -3,9 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Copyright 2025 Oxide Computer Company
+
+use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::string::ToString;
 
 /// A value meant to be used in the [`ActionMeta`] map.
 ///
@@ -24,13 +25,13 @@ use alloc::string::ToString;
 pub trait ActionMetaValue: Sized {
     const KEY: &'static str;
 
-    fn key(&self) -> String {
-        Self::KEY.to_string()
+    fn key(&self) -> Cow<'static, str> {
+        Cow::Borrowed(Self::KEY)
     }
 
     /// Create a representation of the value to be used in
     /// [`ActionMeta`].
-    fn as_meta(&self) -> String;
+    fn as_meta(&self) -> Cow<'static, str>;
 
     /// Attempt to create a value assuming that `s` was created
     /// with [`Self::as_meta()`].
@@ -52,7 +53,7 @@ pub trait ActionMetaValue: Sized {
 /// rather than a given dataplane design.
 #[derive(Default)]
 pub struct ActionMeta {
-    inner: BTreeMap<String, String>,
+    inner: BTreeMap<Cow<'static, str>, Cow<'static, str>>,
 }
 
 impl ActionMeta {
@@ -68,20 +69,24 @@ impl ActionMeta {
     /// Insert the key-value pair into the map, replacing any
     /// existing key-value pair. Return the value being replaced,
     /// or `None`.
-    pub fn insert(&mut self, key: String, val: String) -> Option<String> {
+    pub fn insert(
+        &mut self,
+        key: Cow<'static, str>,
+        val: Cow<'static, str>,
+    ) -> Option<Cow<'static, str>> {
         self.inner.insert(key, val)
     }
 
     /// Remove the key-value pair with the specified key. Return
     /// the value, or `None` if no such entry exists.
-    pub fn remove(&mut self, key: &str) -> Option<String> {
+    pub fn remove(&mut self, key: &str) -> Option<Cow<'static, str>> {
         self.inner.remove(key)
     }
 
     /// Get a reference to the value with the given key, or `None`
     /// if no such entry exists.
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.inner.get(key)
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.inner.get(key).map(|v| &**v)
     }
 
     /// Records whether this packet's destination can be reached using only
@@ -110,7 +115,7 @@ struct InternalTarget(bool);
 impl ActionMetaValue for InternalTarget {
     const KEY: &'static str = "opte:internal-target";
 
-    fn as_meta(&self) -> String {
+    fn as_meta(&self) -> Cow<'static, str> {
         (if self.0 { "1" } else { "0" }).into()
     }
 
