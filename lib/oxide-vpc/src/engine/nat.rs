@@ -144,7 +144,7 @@ fn create_nat_rules(
     let mut out_igw_nat_miss = Rule::new(NO_EIP_PRIORITY, Action::Deny);
     out_igw_nat_miss.add_predicate(Predicate::Meta(
         RouterTargetClass::KEY.to_string(),
-        RouterTargetClass::InternetGateway.as_meta(),
+        RouterTargetClass::InternetGateway.as_meta().into_owned(),
     ));
     out_rules.push(out_igw_nat_miss.finalize());
 
@@ -204,7 +204,9 @@ fn setup_ipv4_nat(
             ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(gw).as_meta(),
+                RouterTargetInternal::InternetGateway(gw)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(out_nat.finalize());
         }
@@ -250,7 +252,9 @@ fn setup_ipv4_nat(
             ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+                RouterTargetInternal::InternetGateway(igw_id)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(out_nat.finalize());
         }
@@ -296,7 +300,9 @@ fn setup_ipv4_nat(
             ]));
             rule.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+                RouterTargetInternal::InternetGateway(igw_id)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(rule.finalize());
         }
@@ -353,7 +359,9 @@ fn setup_ipv6_nat(
             ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(gw).as_meta(),
+                RouterTargetInternal::InternetGateway(gw)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(out_nat.finalize());
         }
@@ -399,7 +407,9 @@ fn setup_ipv6_nat(
             ]));
             out_nat.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+                RouterTargetInternal::InternetGateway(igw_id)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(out_nat.finalize());
         }
@@ -445,7 +455,9 @@ fn setup_ipv6_nat(
             ]));
             rule.add_predicate(Predicate::Meta(
                 RouterTargetInternal::KEY.to_string(),
-                RouterTargetInternal::InternetGateway(igw_id).as_meta(),
+                RouterTargetInternal::InternetGateway(igw_id)
+                    .as_meta()
+                    .into_owned(),
             ));
             out_rules.push(rule.finalize());
         }
