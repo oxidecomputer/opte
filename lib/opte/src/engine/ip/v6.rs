@@ -6,7 +6,6 @@
 
 //! IPv6 Headers.
 
-use alloc::vec::Vec;
 use crate::engine::headers::HeaderActionError;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
@@ -14,6 +13,7 @@ use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
+use alloc::vec::Vec;
 use ingot::Ingot;
 use ingot::ip::Ecn;
 use ingot::ip::IpProtocol;

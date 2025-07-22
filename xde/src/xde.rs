@@ -159,6 +159,7 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
+use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::NonNull;
@@ -174,6 +175,7 @@ use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
+use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::HeaderLen;
 use ingot::udp::Udp;
 use opte::ExecCtx;
@@ -214,8 +216,8 @@ use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
-use opte::engine::ip::v6::Ipv6;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -2081,11 +2083,27 @@ fn xde_mc_tx_one<'a>(
                 return;
             };
 
-            // Boost MSS to use full jumbo frames if we know our path
-            // can be served purely on internal links.
-            // Recall that SDU does not include L2 size, hence 'non_eth_payl'
+            // 'MSS boosting' is performed here -- we set a 9k (minus overheads)
+            // MSS for compatible TCP traffic. This is a kind of 'pseudo-GRO',
+            // sending larger frames internally rather than having the NIC/OS
+            // reassemble them. However, guests may reject carried packets if
+            // the embedded MSS value / `gso_size` is larger than the agreed-
+            // upon MSS for the connection itself.
+            // The Oxide VPC reserves an IPv6EH to carry this signal.
             let mut flags = offload_req.flags;
             let mss = if mtu_unrestricted {
+                if flags.intersects(MblkOffloadFlags::HW_LSO_FLAGS)
+                    && let Some(my_mss) = u16::try_from(offload_req.mss)
+                        .and_then(NonZeroU16::try_from)
+                        .ok()
+                {
+                    // XXX: Super unsafe for testing.
+                    let slot: &mut [u8; 2] =
+                        (&mut out_pkt[58..=59]).try_into().unwrap();
+                    *slot = my_mss.get().to_be_bytes();
+                }
+
+                // Recall that SDU does not include L2 size, hence 'non_eth_payl'
                 src_dev.underlay_capab.mtu - encap_len - non_eth_payl_bytes
             } else {
                 offload_req.mss
@@ -2106,6 +2124,7 @@ fn xde_mc_tx_one<'a>(
 
             out_pkt.request_offload(flags.shift_in(), mss);
 
+            // XXX The emitspec should probably be responsible for this now.
             let tun_meoi = mac_ether_offload_info_t {
                 meoi_flags: MacEtherOffloadFlags::L2INFO_SET
                     | MacEtherOffloadFlags::L3INFO_SET
@@ -2114,8 +2133,13 @@ fn xde_mc_tx_one<'a>(
                 meoi_l2hlen: u8::try_from(Ethernet::MINIMUM_LENGTH)
                     .expect("14B < u8::MAX"),
                 meoi_l3proto: Ethertype::IPV6.0,
-                meoi_l3hlen: u16::try_from(Ipv6::MINIMUM_LENGTH)
-                    .expect("40B < u16::MAX"),
+                meoi_l3hlen: u16::try_from(encap_len).expect("78B < u16::MAX")
+                    - u16::try_from(
+                        Udp::MINIMUM_LENGTH
+                            + Geneve::MINIMUM_LENGTH
+                            + Ethernet::MINIMUM_LENGTH,
+                    )
+                    .expect("30B < u16::MAX"),
                 meoi_l4proto: IpProtocol::UDP.0,
                 meoi_l4hlen: u8::try_from(Udp::MINIMUM_LENGTH)
                     .expect("8B < u8::MAX"),
@@ -2482,6 +2506,10 @@ fn xde_rx_one(
         }
     };
 
+    let non_payl_bytes = u32::from(ulp_meoi.meoi_l2hlen)
+        + u32::from(ulp_meoi.meoi_l3hlen)
+        + u32::from(ulp_meoi.meoi_l4hlen);
+
     // Determine where to send packet based on Geneve VNI and
     // destination MAC address.
     let vni = meta.outer_encap.vni();
@@ -2500,9 +2528,30 @@ fn xde_rx_one(
         return Some(pkt);
     };
 
+    // XXX: awful, awful code.
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let mss_estimate = usize::from(ETHERNET_MTU)
-        - (&meta.inner_l3, &meta.inner_ulp).packet_length();
+    let recovered_mss = if is_tcp && let Some(ehs) = meta.outer_v6.1.raw() {
+        let mut out = None;
+        for el in ehs.iter(Some(meta.outer_v6.next_header())) {
+            let Ok(el) = el else { break };
+
+            // XXX: Cheating a bit: we know at this point it's Destopts.
+            if let ValidLowRentV6Eh::IpV6Ext6564(el) = el {
+                let Some(a) = el.1.raw() else { continue };
+                let Some(opt) = a.get(0..4) else { continue };
+
+                if opt[0] == 0x1e && opt[1] == 2 {
+                    out = NonZeroU16::try_from(u16::from_be_bytes([
+                        opt[2], opt[3],
+                    ]))
+                    .ok();
+                }
+            }
+        }
+        out
+    } else {
+        None
+    };
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
@@ -2519,18 +2568,23 @@ fn xde_rx_one(
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
             let len = npkt.byte_len();
+            let pay_len = len
+                - usize::try_from(non_payl_bytes)
+                    .expect("usize > 32b on x86_64");
 
             // Due to possible pseudo-GRO, we need to inform mac/viona on how
             // it can split up this packet, if the guest cannot receive it
             // (e.g., no GRO/large frame support).
             // HW_LSO will cause viona to treat this packet as though it were
             // a locally delivered segment making use of LSO.
-            if is_tcp
-                && len > usize::from(ETHERNET_MTU) + Ethernet::MINIMUM_LENGTH
+            if let Some(mss) = recovered_mss
+                // The last segment could be smaller than the original MSS as
+                // well, which we should catch.
+                && pay_len > usize::from(mss.get())
             {
                 npkt.request_offload(
                     MblkOffloadFlags::HW_LSO,
-                    mss_estimate as u32,
+                    u32::from(mss.get()),
                 );
             }
 

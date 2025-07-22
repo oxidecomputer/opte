@@ -20,7 +20,7 @@ use super::headers::HeaderAction;
 use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
 use super::ip::L3Repr;
-use super::ip::v4::Ipv4;
+use super::ip::v6::Ipv6;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
@@ -1869,9 +1869,12 @@ impl Transforms {
                             ethertype: Ethertype(eth.ether_type.into()),
                         };
                         let ip_repr = L3Repr::from(&ip);
+                        let ip_len = ip_repr.packet_length();
                         let (l3_extra_bytes, ip_len_offset) = match ip {
-                            IpPush::Ip4(_) => (Ipv4::MINIMUM_LENGTH, 2),
-                            IpPush::Ip6(_) => (0, 4),
+                            IpPush::Ip4(_) => (ip_len, 2),
+                            IpPush::Ip6(_) => {
+                                (ip_len - Ipv6::MINIMUM_LENGTH, 4)
+                            }
                         };
 
                         let encap_sz = encap_repr.packet_length();

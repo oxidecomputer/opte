@@ -230,7 +230,7 @@ impl DError for MismatchError {
             *v = self.expected;
         }
         if let Some(v) = data.get_mut(1) {
-            *v = self.expected;
+            *v = self.actual;
         }
     }
 }
