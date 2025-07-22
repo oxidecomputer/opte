@@ -12,8 +12,11 @@ use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
 use super::geneve::OxideOption;
+use super::ip::L3Repr;
+use super::ip::v4::Ipv4;
 use super::ip::v4::Ipv4Mod;
 use super::ip::v4::Ipv4Push;
+use super::ip::v6::Ipv6;
 use super::ip::v6::Ipv6Mod;
 use super::ip::v6::Ipv6Push;
 use super::tcp::TcpMod;
@@ -27,6 +30,10 @@ use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptionType;
 use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
+use ingot::ip::IpV6Ext6564;
+use ingot::ip::Ipv4Flags;
+use ingot::ip::LowRentV6EhRepr;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
@@ -53,10 +60,59 @@ pub trait ModifyAction<HdrM> {
     fn modify(&self, meta: &mut HdrM);
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpPush {
     Ip4(Ipv4Push),
     Ip6(Ipv6Push),
+}
+
+impl From<&IpPush> for L3Repr {
+    fn from(value: &IpPush) -> Self {
+        match value {
+            IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
+                protocol: IpProtocol(u8::from(v4.proto)),
+                source: v4.src,
+                destination: v4.dst,
+                flags: Ipv4Flags::DONT_FRAGMENT,
+                ..Default::default()
+            }),
+            IpPush::Ip6(v6) => {
+                let ulp = IpProtocol(u8::from(v6.proto));
+                let (exts, next_header) =
+                    if v6.exts.is_empty() {
+                        (vec![], ulp)
+                    } else {
+                        let first = v6.exts.first().unwrap().ip_protocol();
+                        let mut out = vec![];
+                        for (i, ext) in v6.exts.iter().enumerate() {
+                            let next_header = v6
+                                .exts
+                                .get(i + 1)
+                                .map(|v| v.ip_protocol())
+                                .unwrap_or(ulp);
+
+                            let data = ext.serialise();
+                            let ext_len = u8::try_from((data.len() + 2) / 8)
+                                .expect("Hmm.")
+                                - 1;
+
+                            out.push(LowRentV6EhRepr::IpV6Ext6564(
+                                IpV6Ext6564 { next_header, ext_len, data },
+                            ));
+                        }
+                        (out, first)
+                    };
+
+                L3Repr::Ipv6(Ipv6 {
+                    next_header,
+                    source: v6.src,
+                    destination: v6.dst,
+                    v6ext: Repeated::new(exts),
+                    ..Default::default()
+                })
+            }
+        }
+    }
 }
 
 impl From<Ipv4Push> for IpPush {

@@ -21,7 +21,6 @@ use super::headers::IpPush;
 use super::headers::UlpHeaderAction;
 use super::ip::L3Repr;
 use super::ip::v4::Ipv4;
-use super::ip::v6::Ipv6;
 use super::layer;
 use super::layer::Layer;
 use super::layer::LayerError;
@@ -86,7 +85,6 @@ use core::sync::atomic::Ordering::SeqCst;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
-use ingot::ip::IpProtocol;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
@@ -1786,13 +1784,13 @@ impl Transforms {
 
                 // All outer layers must be pushed (or popped/ignored) at the same
                 // time for compilation. No modifications are permissable.
-                fn store_outer_push<P: Copy, M>(
+                fn store_outer_push<P: Clone, M>(
                     tx: &HeaderAction<P, M>,
                     still_permissable: &mut bool,
                     slot: &mut Option<P>,
                 ) {
                     match tx {
-                        HeaderAction::Push(p) => *slot = Some(*p),
+                        HeaderAction::Push(p) => *slot = Some(p.clone()),
                         HeaderAction::Pop => *slot = None,
                         HeaderAction::Modify(_) => *still_permissable = false,
                         HeaderAction::Ignore => {}
@@ -1870,30 +1868,10 @@ impl Transforms {
                             source: eth.src,
                             ethertype: Ethertype(eth.ether_type.into()),
                         };
-                        let (ip_repr, l3_extra_bytes, ip_len_offset) = match ip
-                        {
-                            IpPush::Ip4(v4) => (
-                                L3Repr::Ipv4(Ipv4 {
-                                    protocol: IpProtocol(v4.proto.into()),
-                                    source: v4.src,
-                                    destination: v4.dst,
-                                    total_len: Ipv4::MINIMUM_LENGTH as u16,
-                                    ..Default::default()
-                                }),
-                                Ipv4::MINIMUM_LENGTH,
-                                2,
-                            ),
-                            IpPush::Ip6(v6) => (
-                                L3Repr::Ipv6(Ipv6 {
-                                    next_header: IpProtocol(v6.proto.into()),
-                                    source: v6.src,
-                                    destination: v6.dst,
-                                    payload_len: 0,
-                                    ..Default::default()
-                                }),
-                                0,
-                                4,
-                            ),
+                        let ip_repr = L3Repr::from(&ip);
+                        let (l3_extra_bytes, ip_len_offset) = match ip {
+                            IpPush::Ip4(_) => (Ipv4::MINIMUM_LENGTH, 2),
+                            IpPush::Ip6(_) => (0, 4),
                         };
 
                         let encap_sz = encap_repr.packet_length();

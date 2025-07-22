@@ -18,7 +18,6 @@ use super::packet::ParseError;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4Flags;
 use ingot::types::ByteSlice;
 use ingot::types::Header;
 use ingot::types::InlineHeader;
@@ -266,26 +265,6 @@ impl<T: ByteSlice> HasInnerCksum for L3<T> {
 
 impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
     fn push(&self) -> L3<T> {
-        match self {
-            IpPush::Ip4(v4) => L3::Ipv4(
-                Ipv4 {
-                    protocol: IpProtocol(u8::from(v4.proto)),
-                    source: v4.src,
-                    destination: v4.dst,
-                    flags: Ipv4Flags::DONT_FRAGMENT,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-            IpPush::Ip6(v6) => L3::Ipv6(
-                Ipv6 {
-                    next_header: IpProtocol(u8::from(v6.proto)),
-                    source: v6.src,
-                    destination: v6.dst,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-        }
+        L3Repr::from(self).into()
     }
 }

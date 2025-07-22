@@ -6,6 +6,7 @@
 
 //! IPv6 Headers.
 
+use alloc::vec::Vec;
 use crate::engine::headers::HeaderActionError;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
@@ -124,12 +125,73 @@ impl<V: ByteSlice> ValidIpv6<V> {
 }
 
 #[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Push {
     pub src: Ipv6Addr,
     pub dst: Ipv6Addr,
     pub proto: Protocol,
+    pub exts: Vec<Ipv6Extension>,
+}
+
+/// Simplified representation of an individual IPv6 extension, used as part
+/// of a push spec.
+#[derive(
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum Ipv6Extension {
+    DestinationOpts(Vec<Ipv6Option>),
+    HopByHopOpts(Vec<Ipv6Option>),
+}
+
+impl Ipv6Extension {
+    pub fn ip_protocol(&self) -> IpProtocol {
+        match self {
+            Self::DestinationOpts(_) => IpProtocol::IPV6_DEST_OPTS,
+            Self::HopByHopOpts(_) => IpProtocol::IPV6_HOP_BY_HOP,
+        }
+    }
+
+    // TODO: testing, should be something more ingoty.
+    // TODO: no restriction on opt len (< 256?)
+    pub fn serialise(&self) -> Vec<u8> {
+        let mut bytes = vec![];
+
+        let opts = match self {
+            Self::DestinationOpts(o) => o,
+            Self::HopByHopOpts(o) => o,
+        };
+
+        for opt in opts {
+            bytes.push(opt.code);
+            bytes.push(opt.data.len().try_into().expect("Hmm."));
+            bytes.extend_from_slice(&opt.data);
+        }
+
+        let plus_overhead = bytes.len() + 2;
+        if plus_overhead % 8 != 0 {
+            let target_size = (plus_overhead / 8) + 8;
+            let pad = target_size - plus_overhead;
+            if pad == 1 {
+                bytes.push(0);
+            } else {
+                bytes.push(1);
+                bytes.push((pad - 2) as u8);
+                bytes.resize(target_size - 2, 0);
+            }
+        }
+
+        bytes
+    }
+}
+
+/// Simplified representation of an IPv6 Option.
+#[derive(
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub struct Ipv6Option {
+    pub code: u8,
+    pub data: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

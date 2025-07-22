@@ -43,6 +43,8 @@ use opte::engine::headers::IpPush;
 use opte::engine::ip::v4::Protocol;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
+use opte::engine::ip::v6::Ipv6Extension;
+use opte::engine::ip::v6::Ipv6Option;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
@@ -201,7 +203,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -326,6 +328,17 @@ impl StaticAction for EncapAction {
                 src: self.phys_ip_src,
                 dst: phys_target.ip,
                 proto: Protocol::UDP,
+                exts: if pkt_meta.is_inner_tcp() && is_internal {
+                    // XXX: Allocate space in which we can include the MSS.
+                    //      when needed. This will not always be filled!!
+                    vec![Ipv6Extension::DestinationOpts(vec![Ipv6Option {
+                        code: 0x1E,
+                        data: vec![0x00; 2],
+                    }])]
+                    // vec![]
+                } else {
+                    vec![]
+                },
             })),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
