@@ -7,6 +7,8 @@
 //! IPv6 Headers.
 
 use crate::engine::headers::HeaderActionError;
+use crate::engine::headers::Validate;
+use crate::engine::headers::ValidateErr;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
 use crate::engine::predicate::MatchExact;
@@ -17,6 +19,7 @@ use alloc::vec::Vec;
 use ingot::Ingot;
 use ingot::ip::Ecn;
 use ingot::ip::IpProtocol;
+use ingot::ip::IpV6Ext6564;
 use ingot::ip::IpV6Ext6564Mut;
 use ingot::ip::IpV6Ext6564Ref;
 use ingot::ip::IpV6ExtFragmentMut;
@@ -134,6 +137,33 @@ pub struct Ipv6Push {
     pub exts: Vec<Ipv6Extension>,
 }
 
+impl Validate for Ipv6Push {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        for (i, ext) in self.exts.iter().enumerate() {
+            if i != 0 && matches!(ext, Ipv6Extension::HopByHopOpts(_)) {
+                // RFC 9276
+                return Err(ValidateErr {
+                    msg: "hop by hop options must be the first \
+                          extension header if present"
+                        .into(),
+                    location: "ipv6.exts".into(),
+                    source: None,
+                });
+            }
+
+            if let Err(e) = ext.validate() {
+                return Err(ValidateErr {
+                    msg: "illegal extension".into(),
+                    location: format!("ipv6.exts[{i}]").into(),
+                    source: Some(e.into()),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Simplified representation of an individual IPv6 extension, used as part
 /// of a push spec.
 #[derive(
@@ -153,7 +183,6 @@ impl Ipv6Extension {
     }
 
     // TODO: testing, should be something more ingoty.
-    // TODO: no restriction on opt len (< 256?)
     pub fn serialise(&self) -> Vec<u8> {
         let mut bytes = vec![];
 
@@ -183,15 +212,93 @@ impl Ipv6Extension {
 
         bytes
     }
+
+    pub fn wire_length(&self) -> usize {
+        match self {
+            Self::DestinationOpts(opts) | Self::HopByHopOpts(opts) => {
+                // Serialisation pads each option list at the end
+                // to form an 8B boundary.
+                let unpadded = IpV6Ext6564::MINIMUM_LENGTH
+                    + opts.iter().map(|v| v.wire_length()).sum::<usize>();
+                let remainder = unpadded % 8;
+
+                if remainder == 0 { unpadded } else { unpadded + 8 - remainder }
+            }
+        }
+    }
 }
 
-/// Simplified representation of an IPv6 Option.
+impl Validate for Ipv6Extension {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        let (class, options) = match self {
+            Self::DestinationOpts(v) => ("destination_opts", v),
+            Self::HopByHopOpts(v) => ("hop_by_hop_opts", v),
+        };
+
+        for (i, opt) in options.iter().enumerate() {
+            if let Err(e) = opt.validate() {
+                return Err(ValidateErr {
+                    location: format!("{class}[{i}]").into(),
+                    msg: "illegal option".into(),
+                    source: Some(e.into()),
+                });
+            }
+        }
+
+        // u8 tracks len in 8B blocks *after the first*.
+        // Hence, max 256 8-octet blocks.
+        static MAX_EH_LEN: usize = 256 * 8;
+        let my_len = self.wire_length();
+
+        if my_len > MAX_EH_LEN {
+            return Err(ValidateErr {
+                msg: format!(
+                    "extension header is too long \
+                    ({my_len}B vs max {MAX_EH_LEN}B)"
+                )
+                .into(),
+                location: class.into(),
+                source: None,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Simplified representation of an arbitrary IPv6 Option (used in destination
+/// and hop-by-hop extensions).
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Option {
     pub code: u8,
     pub data: Vec<u8>,
+}
+
+impl Ipv6Option {
+    pub fn wire_length(&self) -> usize {
+        self.data.len() + 2 * size_of::<u8>()
+    }
+}
+
+impl Validate for Ipv6Option {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        if self.data.len() <= usize::from(u8::MAX) {
+            Ok(())
+        } else {
+            Err(ValidateErr {
+                location: "data".into(),
+                msg: format!(
+                    "option is too long ({}B vs max {}B)",
+                    self.data.len(),
+                    u8::MAX
+                )
+                .into(),
+                source: None,
+            })
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

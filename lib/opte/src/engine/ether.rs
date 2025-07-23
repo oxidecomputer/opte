@@ -11,6 +11,7 @@ use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::headers::Validate;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -217,6 +218,12 @@ pub struct EtherMeta {
 impl PushAction<EtherMeta> for EtherMeta {
     fn push(&self) -> EtherMeta {
         EtherMeta { dst: self.dst, src: self.src, ether_type: self.ether_type }
+    }
+}
+
+impl Validate for EtherMeta {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        Ok(())
     }
 }
 

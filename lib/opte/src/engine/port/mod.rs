@@ -1773,7 +1773,9 @@ impl Transforms {
                     slot: &mut Option<P>,
                 ) {
                     match tx {
-                        HeaderAction::Push(p) => *slot = Some(p.clone()),
+                        HeaderAction::Push(p) => {
+                            *slot = Some(p.clone().into_inner())
+                        }
                         HeaderAction::Pop => *slot = None,
                         HeaderAction::Modify(_) => *still_permissable = false,
                         HeaderAction::Ignore => {}

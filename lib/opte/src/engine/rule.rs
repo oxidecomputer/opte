@@ -462,16 +462,28 @@ impl CompiledTransform {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum CompiledEncap {
+    /// All outer layers of the packet should be removed.
     Pop,
     // TODO: can we cache these in an Arc'd buffer?
+    /// All full set of outer layers should be puhed in front of the packet
+    /// after field modifications are applied.
     Push {
+        /// Outer Ethernet header.
         eth: EtherMeta,
+        /// Outer IP header, including extensions.
         ip: IpPush,
+        /// Outer encap layer(s).
         encap: EncapPush,
+        /// A cached serialised form of `(eth, ip, encap)`.
         bytes: Vec<u8>,
+        /// The offset of the payload/total length field in the IP header.
         l3_len_offset: usize,
+        /// Bytes consumed by the IP header and/or its extensions which must
+        /// be accounted for in the payload/total length.
         l3_extra_bytes: usize,
+        /// The offset of the total length field in the UDP header.
         l4_len_offset: usize,
+        /// The number of bytes consumed by encapsulation.
         encap_sz: usize,
     },
 }

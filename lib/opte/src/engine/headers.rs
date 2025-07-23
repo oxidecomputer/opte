@@ -19,11 +19,17 @@ use super::ip::v4::Ipv4Push;
 use super::ip::v6::Ipv6;
 use super::ip::v6::Ipv6Mod;
 use super::ip::v6::Ipv6Push;
+use super::rule::GenHtError;
 use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use core::error::Error;
 use core::fmt;
+use core::ops::Deref;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
@@ -64,6 +70,15 @@ pub trait ModifyAction<HdrM> {
 pub enum IpPush {
     Ip4(Ipv4Push),
     Ip6(Ipv6Push),
+}
+
+impl Validate for IpPush {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        match self {
+            Self::Ip4(v) => v.validate(),
+            Self::Ip6(v) => v.validate(),
+        }
+    }
 }
 
 impl From<&IpPush> for L3Repr {
@@ -198,6 +213,13 @@ impl PushAction<EncapMeta> for EncapPush {
 impl From<GenevePush> for EncapPush {
     fn from(gp: GenevePush) -> Self {
         Self::Geneve(gp)
+    }
+}
+
+impl Validate for EncapPush {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // We do not yet define/support pushing any Geneve options.
+        Ok(())
     }
 }
 
@@ -512,7 +534,7 @@ where
 /// The action to take for a particular header transposition.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
 pub enum HeaderAction<P, M> {
-    Push(P),
+    Push(Valid<P>),
     Pop,
     Modify(M),
     #[default]
@@ -570,6 +592,69 @@ impl<P, M> HeaderAction<P, M> {
             (a @ HeaderAction::Modify(..), Some(h)) => h.act_on(a),
             (_, None) => Err(HeaderActionError::MissingHeader),
         }
+    }
+}
+
+/// Header actions which require sanity checking before they can be used.
+pub trait Validate {
+    fn validate(&self) -> Result<(), ValidateErr>;
+}
+
+/// An error message and location encountered while validating a packet transform.
+#[derive(Debug)]
+pub struct ValidateErr {
+    pub msg: Cow<'static, str>,
+    pub location: Cow<'static, str>,
+    pub source: Option<Box<dyn Error>>,
+}
+
+impl fmt::Display for ValidateErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ValidateErr { msg, location, source: _source } = self;
+        write!(f, "invalid {location} ({msg})")
+    }
+}
+
+impl Error for ValidateErr {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_deref()
+    }
+}
+
+impl From<ValidateErr> for GenHtError {
+    fn from(value: ValidateErr) -> Self {
+        let mut out = value.to_string();
+        let mut source = value.source();
+        while let Some(inner) = source {
+            out = format!("{out}: {inner}");
+            source = inner.source();
+        }
+
+        GenHtError::Unexpected { msg: out }
+    }
+}
+
+/// Header actions which have been successfully sanity checked.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Valid<T>(T);
+
+impl<T: Validate> Valid<T> {
+    pub fn validated(value: T) -> Result<Self, ValidateErr> {
+        value.validate().map(|_| Self(value))
+    }
+}
+
+impl<T> Valid<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Valid<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

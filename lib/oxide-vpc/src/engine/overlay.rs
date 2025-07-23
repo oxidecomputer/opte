@@ -40,6 +40,7 @@ use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
+use opte::engine::headers::Valid;
 use opte::engine::ip::v4::Protocol;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
@@ -319,27 +320,32 @@ impl StaticAction for EncapAction {
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
-            outer_ether: HeaderAction::Push(EtherMeta {
-                src: MacAddr::ZERO,
-                dst: MacAddr::ZERO,
-                ether_type: EtherType::Ipv6,
-            }),
-            outer_ip: HeaderAction::Push(IpPush::from(Ipv6Push {
-                src: self.phys_ip_src,
-                dst: phys_target.ip,
-                proto: Protocol::UDP,
-                exts: if pkt_meta.is_inner_tcp() && is_internal {
-                    // XXX: Allocate space in which we can include the MSS.
-                    //      when needed. This will not always be filled!!
-                    vec![Ipv6Extension::DestinationOpts(vec![Ipv6Option {
-                        code: 0x1E,
-                        data: vec![0x00; 2],
-                    }])]
-                    // vec![]
-                } else {
-                    vec![]
+            outer_ether: HeaderAction::Push(
+                Valid::validated(EtherMeta {
+                    src: MacAddr::ZERO,
+                    dst: MacAddr::ZERO,
+                    ether_type: EtherType::Ipv6,
+                })
+                .expect("Ethernet validation is infallible"),
+            ),
+            outer_ip: HeaderAction::Push(Valid::validated(IpPush::from(
+                Ipv6Push {
+                    src: self.phys_ip_src,
+                    dst: phys_target.ip,
+                    proto: Protocol::UDP,
+                    exts: if pkt_meta.is_inner_tcp() && is_internal {
+                        // XXX: Allocate space in which we can include the MSS.
+                        //      when needed. This will not always be filled!!
+                        vec![Ipv6Extension::DestinationOpts(vec![Ipv6Option {
+                            code: 0x1E,
+                            data: vec![0x00; 2],
+                        }])]
+                        // vec![]
+                    } else {
+                        vec![]
+                    },
                 },
-            })),
+            ))?),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -356,10 +362,12 @@ impl StaticAction for EncapAction {
             // It's worth keeping in mind that Chelsio's RSS picks us a ring
             // based on Toeplitz hash of the 5-tuple, so we need to write into
             // there regardless. I don't believe it *looks* at v6 flowid.
-            outer_encap: HeaderAction::Push(EncapPush::from(GenevePush {
-                vni: phys_target.vni,
-                entropy: flow_id.crc32() as u16,
-            })),
+            outer_encap: HeaderAction::Push(Valid::validated(
+                EncapPush::from(GenevePush {
+                    vni: phys_target.vni,
+                    entropy: flow_id.crc32() as u16,
+                }),
+            )?),
             inner_ether: HeaderAction::Modify(EtherMod {
                 dst: Some(phys_target.ether),
                 ..Default::default()
