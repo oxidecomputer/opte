@@ -413,7 +413,7 @@ impl StaticAction for DecapAction {
                 // is filled.
                 if !oxide_external_pkt {
                     action_meta
-                        .insert(ACTION_META_VNI.into(), vni.to_string().into());
+                        .insert(ACTION_META_VNI.to_string(), vni.to_string());
                 }
             }
 

@@ -258,7 +258,7 @@ impl MetaAction for VpcMeta {
         match self.vpc_mappings.ip_to_vni(&flow.dst_ip()) {
             Some(vni) => {
                 action_meta
-                    .insert(ACTION_META_VNI.into(), vni.to_string().into());
+                    .insert(ACTION_META_VNI.to_string(), vni.to_string());
                 Ok(AllowOrDeny::Allow(()))
             }
 
