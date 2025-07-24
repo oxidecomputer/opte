@@ -465,8 +465,8 @@ pub enum CompiledEncap {
     /// All outer layers of the packet should be removed.
     Pop,
     // TODO: can we cache these in an Arc'd buffer?
-    /// All full set of outer layers should be puhed in front of the packet
-    /// after field modifications are applied.
+    /// A full set of outer layers which should be pushed in front of the
+    /// packet after field modifications are applied.
     Push {
         /// Outer Ethernet header.
         eth: EtherMeta,
@@ -529,14 +529,14 @@ impl CompiledEncap {
             .try_into()
             .expect("exact no bytes");
 
-        *l3_len_slot = (l3_len as u16).to_be_bytes();
+        *l3_len_slot = u16::try_from(l3_len).unwrap_or(u16::MAX).to_be_bytes();
 
         let l4_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
             [*l4_len_offset..l4_len_offset + core::mem::size_of::<u16>()])
             .try_into()
             .expect("exact no bytes");
 
-        *l4_len_slot = (l4_len as u16).to_be_bytes();
+        *l4_len_slot = u16::try_from(l4_len).unwrap_or(u16::MAX).to_be_bytes();
 
         if let Some(mut prepend) = prepend {
             pkt.copy_offload_info_to(&mut prepend);

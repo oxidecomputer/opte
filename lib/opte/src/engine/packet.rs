@@ -984,9 +984,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                         v4.total_len = (v4.ihl as u16) * 4 + inner_sz;
                     }
                     Some(L3Repr::Ipv6(v6)) => {
-                        // XXX BAD, NO.
-                        v6.payload_len = inner_sz
-                            .saturating_add(v6.v6ext.packet_length() as u16);
+                        v6.payload_len = inner_sz.saturating_add(
+                            u16::try_from(v6.v6ext.packet_length())
+                                .unwrap_or(u16::MAX),
+                        );
                     }
                     _ => {}
                 }
