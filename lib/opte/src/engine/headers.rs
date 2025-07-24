@@ -37,9 +37,7 @@ use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptionType;
 use ingot::geneve::ValidGeneve;
 use ingot::ip::IpProtocol;
-use ingot::ip::IpV6Ext6564;
 use ingot::ip::Ipv4Flags;
-use ingot::ip::LowRentV6EhRepr;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
@@ -56,8 +54,12 @@ use serde::Serialize;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-pub trait PushAction<HdrM> {
-    fn push(&self) -> HdrM;
+/// A type that is meant to be used as an argument to a [`Transform`]
+/// implementation.
+pub trait PushAction<HdrP> {
+    /// Produce a concrete header specification from a simplified
+    /// representation, assuming that `self` has already been validated.
+    fn push(&self) -> HdrP;
 }
 
 /// A type that is meant to be used as an argument to a
@@ -93,30 +95,22 @@ impl From<&IpPush> for L3Repr {
             }),
             IpPush::Ip6(v6) => {
                 let ulp = IpProtocol(u8::from(v6.proto));
-                let (exts, next_header) =
-                    if v6.exts.is_empty() {
-                        (vec![], ulp)
-                    } else {
-                        let first = v6.exts.first().unwrap().ip_protocol();
-                        let mut out = vec![];
-                        for (i, ext) in v6.exts.iter().enumerate() {
-                            let next_header = v6
-                                .exts
-                                .get(i + 1)
-                                .map(|v| v.ip_protocol())
-                                .unwrap_or(ulp);
+                let (exts, next_header) = if v6.exts.is_empty() {
+                    (vec![], ulp)
+                } else {
+                    let first = v6.exts.first().unwrap().ip_protocol();
+                    let mut out = vec![];
+                    for (i, ext) in v6.exts.iter().enumerate() {
+                        let next_header = v6
+                            .exts
+                            .get(i + 1)
+                            .map(|v| v.ip_protocol())
+                            .unwrap_or(ulp);
 
-                            let data = ext.serialise();
-                            let ext_len = u8::try_from((data.len() + 2) / 8)
-                                .expect("Hmm.")
-                                - 1;
-
-                            out.push(LowRentV6EhRepr::IpV6Ext6564(
-                                IpV6Ext6564 { next_header, ext_len, data },
-                            ));
-                        }
-                        (out, first)
-                    };
+                        out.push(ext.as_repr(next_header));
+                    }
+                    (out, first)
+                };
 
                 L3Repr::Ipv6(Ipv6 {
                     next_header,
@@ -600,7 +594,8 @@ pub trait Validate {
     fn validate(&self) -> Result<(), ValidateErr>;
 }
 
-/// An error message and location encountered while validating a packet transform.
+/// An error message and location encountered while validating a packet
+/// transform.
 #[derive(Debug)]
 pub struct ValidateErr {
     pub msg: Cow<'static, str>,

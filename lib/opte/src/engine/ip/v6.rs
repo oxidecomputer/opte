@@ -67,6 +67,17 @@ pub struct Ipv6 {
     pub v6ext: Repeated<LowRentV6EhRepr>,
 }
 
+#[derive(Debug, Clone, Ingot, Eq, PartialEq)]
+#[ingot(impl_default)]
+pub struct WireIpv6Option {
+    #[ingot(zerocopy)]
+    pub opt_type: Ipv6OptionType,
+    pub opt_len: u8,
+
+    #[ingot(var_len = "opt_len")]
+    pub data: Vec<u8>,
+}
+
 impl MatchExactVal for Ipv6Addr {}
 impl MatchPrefixVal for Ipv6Cidr {}
 
@@ -141,7 +152,7 @@ impl Validate for Ipv6Push {
     fn validate(&self) -> Result<(), ValidateErr> {
         for (i, ext) in self.exts.iter().enumerate() {
             if i != 0 && matches!(ext, Ipv6Extension::HopByHopOpts(_)) {
-                // RFC 9276
+                // RFC 9673
                 return Err(ValidateErr {
                     msg: "hop by hop options must be the first \
                           extension header if present"
@@ -182,35 +193,54 @@ impl Ipv6Extension {
         }
     }
 
-    // TODO: testing, should be something more ingoty.
-    pub fn serialise(&self) -> Vec<u8> {
-        let mut bytes = vec![];
+    /// Convert this extension for serialisation.
+    ///
+    /// This method assumes that `self` has been validated.
+    pub fn as_repr(&self, next_header: IpProtocol) -> LowRentV6EhRepr {
+        let total = self.wire_length();
+        let body_len = total - LowRentV6EhRepr::MINIMUM_LENGTH;
+        let mut data = Vec::with_capacity(body_len);
 
+        // This method is heavily specialised for the two supported EH
+        // classes.
         let opts = match self {
             Self::DestinationOpts(o) => o,
             Self::HopByHopOpts(o) => o,
         };
 
         for opt in opts {
-            bytes.push(opt.code);
-            bytes.push(opt.data.len().try_into().expect("Hmm."));
-            bytes.extend_from_slice(&opt.data);
+            let old_len = data.len();
+            data.resize(old_len + WireIpv6Option::MINIMUM_LENGTH, 0);
+            let (mut wire_opt, ..) =
+                ValidWireIpv6Option::parse(&mut data[old_len..])
+                    .expect("buf was resized to have sufficient bytes");
+            wire_opt.set_opt_type(opt.code);
+            wire_opt.set_opt_len(opt.data.len().try_into().unwrap_or(u8::MAX));
+            data.extend_from_slice(&opt.data);
         }
 
-        let plus_overhead = bytes.len() + 2;
-        if plus_overhead % 8 != 0 {
-            let target_size = (plus_overhead / 8) + 8;
-            let pad = target_size - plus_overhead;
-            if pad == 1 {
-                bytes.push(0);
-            } else {
-                bytes.push(1);
-                bytes.push((pad - 2) as u8);
-                bytes.resize(target_size - 2, 0);
-            }
+        let pre_pad_len = data.len();
+        let pad = body_len - pre_pad_len;
+        if pad == 1 {
+            data.push(Ipv6OptionType::PAD_1.0);
+        } else if pad != 0 {
+            data.resize(body_len, 0);
+            let (mut wire_opt, _, rest) =
+                ValidWireIpv6Option::parse(&mut data[pre_pad_len..])
+                    .expect("buf was resized to have sufficient bytes");
+            wire_opt.set_opt_type(Ipv6OptionType::PAD_N);
+            wire_opt.set_opt_len(
+                u8::try_from(rest.len()).expect(
+                    "padding to 8B boundary means `0 <= rest.len() <= 6`",
+                ),
+            );
         }
 
-        bytes
+        // The EH length counts the number of 8-octet chunks *after the
+        // first*.
+        let ext_len = u8::try_from((total / 8) - 1).unwrap_or(u8::MAX);
+
+        LowRentV6EhRepr::IpV6Ext6564(IpV6Ext6564 { next_header, ext_len, data })
     }
 
     pub fn wire_length(&self) -> usize {
@@ -266,19 +296,75 @@ impl Validate for Ipv6Extension {
     }
 }
 
+ingot::types::zerocopy_type!(
+    /// Indicator of the format of an IPv6 Destination or hop-by-hop option.
+    #[derive(Default, Serialize, Deserialize)]
+    pub struct Ipv6OptionType(pub u8)
+);
+
+/// The action which should be taken by a processing node when an option
+/// type is not recognised.
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IfUnknown {
+    Skip = 0b00,
+    Discard = 0b01,
+    DiscardSignal = 0b10,
+    DiscardSignalUnicast = 0b11,
+}
+
+#[expect(
+    clippy::unusual_byte_groupings,
+    reason = "bits [0:2] encode semantics"
+)]
+impl Ipv6OptionType {
+    pub const PAD_1: Self = Self(0b00_0_00000);
+    pub const PAD_N: Self = Self(0b00_0_00001);
+    pub const JUMBO: Self = Self(0b11_0_00010);
+    pub const TUNNEL_ENCAP_LIMIT: Self = Self(0b00_0_00100);
+    pub const PDM: Self = Self(0b00_0_01111);
+    pub const MINIMUM_PMTU: Self = Self(0b00_1_10000);
+
+    pub const EXPERIMENT_0: Self = Self(0b00_0_11110);
+    pub const EXPERIMENT_1: Self = Self(0b00_1_11110);
+    pub const EXPERIMENT_2: Self = Self(0b01_0_11110);
+    pub const EXPERIMENT_3: Self = Self(0b01_1_11110);
+    pub const EXPERIMENT_4: Self = Self(0b10_0_11110);
+    pub const EXPERIMENT_5: Self = Self(0b10_1_11110);
+    pub const EXPERIMENT_6: Self = Self(0b11_0_11110);
+    pub const EXPERIMENT_7: Self = Self(0b11_1_11110);
+
+    pub fn can_change_in_flight(self) -> bool {
+        (self.0 & 0b0010_0000) != 0
+    }
+
+    pub fn action_if_unknown(self) -> IfUnknown {
+        match self.0 >> 6 {
+            v if v == IfUnknown::Skip as u8 => IfUnknown::Skip,
+            v if v == IfUnknown::Discard as u8 => IfUnknown::Discard,
+            v if v == IfUnknown::DiscardSignal as u8 => {
+                IfUnknown::DiscardSignal
+            }
+            v if v == IfUnknown::DiscardSignalUnicast as u8 => {
+                IfUnknown::DiscardSignalUnicast
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// Simplified representation of an arbitrary IPv6 Option (used in destination
 /// and hop-by-hop extensions).
 #[derive(
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Option {
-    pub code: u8,
+    pub code: Ipv6OptionType,
     pub data: Vec<u8>,
 }
 
 impl Ipv6Option {
     pub fn wire_length(&self) -> usize {
-        self.data.len() + 2 * size_of::<u8>()
+        self.data.len() + WireIpv6Option::MINIMUM_LENGTH
     }
 }
 

@@ -46,6 +46,7 @@ use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::ip::v6::Ipv6Extension;
 use opte::engine::ip::v6::Ipv6Option;
+use opte::engine::ip::v6::Ipv6OptionType;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
@@ -333,14 +334,26 @@ impl StaticAction for EncapAction {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
+                    // Allocate space in which we can include the MSS, when
+                    // needed during MSS boosting. It's theoretically doable to
+                    // gate this on seeing an unexpectedly high/low MSS option
+                    // in the TCP handshake, but there are problems in doing so:
+                    // * The MSS for the flow is negotiated, but the UFT entry
+                    //   containing this transform does not know the other side.
+                    // * UFT invalidation means we may rerun this transform in
+                    //   the middle of a flow.
+                    // So, emit it unconditionally for VPC-internal TCP traffic,
+                    // which could need the original MSS to be carried when LSO
+                    // is in use.
+                    //
+                    // Ideally, this would instead be a Geneve option. Sidecar
+                    // needs to know how to forward options it does not understand
+                    // for this to be feasible (i.e., to minimise PHV use).
                     exts: if pkt_meta.is_inner_tcp() && is_internal {
-                        // XXX: Allocate space in which we can include the MSS.
-                        //      when needed. This will not always be filled!!
                         vec![Ipv6Extension::DestinationOpts(vec![Ipv6Option {
-                            code: 0x1E,
+                            code: Ipv6OptionType::EXPERIMENT_0,
                             data: vec![0x00; 2],
                         }])]
-                        // vec![]
                     } else {
                         vec![]
                     },

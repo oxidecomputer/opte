@@ -217,7 +217,7 @@ pub struct EtherMeta {
 
 impl PushAction<EtherMeta> for EtherMeta {
     fn push(&self) -> EtherMeta {
-        EtherMeta { dst: self.dst, src: self.src, ether_type: self.ether_type }
+        *self
     }
 }
 

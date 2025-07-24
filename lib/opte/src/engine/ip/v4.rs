@@ -191,6 +191,7 @@ pub struct Ipv4Push {
 
 impl Validate for Ipv4Push {
     fn validate(&self) -> Result<(), ValidateErr> {
+        // We do not yet define/support pushing any IPv4 options.
         Ok(())
     }
 }
