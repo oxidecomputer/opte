@@ -15,6 +15,7 @@ use crate::engine::predicate::MatchExact;
 use crate::engine::predicate::MatchExactVal;
 use crate::engine::predicate::MatchPrefix;
 use crate::engine::predicate::MatchPrefixVal;
+use alloc::borrow::Cow;
 use alloc::vec::Vec;
 use ingot::Ingot;
 use ingot::ip::Ecn;
@@ -145,7 +146,7 @@ pub struct Ipv6Push {
     pub src: Ipv6Addr,
     pub dst: Ipv6Addr,
     pub proto: Protocol,
-    pub exts: Vec<Ipv6Extension>,
+    pub exts: Cow<'static, [Ipv6Extension]>,
 }
 
 impl Validate for Ipv6Push {
@@ -181,8 +182,8 @@ impl Validate for Ipv6Push {
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum Ipv6Extension {
-    DestinationOpts(Vec<Ipv6Option>),
-    HopByHopOpts(Vec<Ipv6Option>),
+    DestinationOpts(Cow<'static, [Ipv6Option]>),
+    HopByHopOpts(Cow<'static, [Ipv6Option]>),
 }
 
 impl Ipv6Extension {
@@ -208,7 +209,7 @@ impl Ipv6Extension {
             Self::HopByHopOpts(o) => o,
         };
 
-        for opt in opts {
+        for opt in opts.iter() {
             let old_len = data.len();
             data.resize(old_len + WireIpv6Option::MINIMUM_LENGTH, 0);
             let (mut wire_opt, ..) =
@@ -359,7 +360,7 @@ impl Ipv6OptionType {
 )]
 pub struct Ipv6Option {
     pub code: Ipv6OptionType,
-    pub data: Vec<u8>,
+    pub data: Cow<'static, [u8]>,
 }
 
 impl Ipv6Option {

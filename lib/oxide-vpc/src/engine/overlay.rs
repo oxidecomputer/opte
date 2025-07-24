@@ -16,6 +16,7 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
+use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
@@ -318,6 +319,15 @@ impl StaticAction for EncapAction {
         };
         action_meta.set_internal_target(is_internal);
 
+        static MSS_SIZE_OPT: &[u8] = &[0; size_of::<u16>()];
+        static MSS_EXPERIMENT_OPT: Ipv6Option = Ipv6Option {
+            code: Ipv6OptionType::EXPERIMENT_0,
+            data: Cow::Borrowed(MSS_SIZE_OPT),
+        };
+        static MSS_DEST_OPT: Ipv6Extension = Ipv6Extension::DestinationOpts(
+            Cow::Borrowed(core::slice::from_ref(&MSS_EXPERIMENT_OPT)),
+        );
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
@@ -334,7 +344,7 @@ impl StaticAction for EncapAction {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
-                    // Allocate space in which we can include the MSS, when
+                    // Allocate space in which we can include the TCP MSS, when
                     // needed during MSS boosting. It's theoretically doable to
                     // gate this on seeing an unexpectedly high/low MSS option
                     // in the TCP handshake, but there are problems in doing so:
@@ -350,12 +360,9 @@ impl StaticAction for EncapAction {
                     // needs to know how to forward options it does not understand
                     // for this to be feasible (i.e., to minimise PHV use).
                     exts: if pkt_meta.is_inner_tcp() && is_internal {
-                        vec![Ipv6Extension::DestinationOpts(vec![Ipv6Option {
-                            code: Ipv6OptionType::EXPERIMENT_0,
-                            data: vec![0x00; 2],
-                        }])]
+                        Cow::Borrowed(core::slice::from_ref(&MSS_DEST_OPT))
                     } else {
-                        vec![]
+                        (&[]).into()
                     },
                 },
             ))?),
