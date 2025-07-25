@@ -219,6 +219,11 @@ impl Ipv6Extension {
         };
 
         for opt in opts.iter() {
+            if opt.opt_type == Ipv6OptionType::PAD_1 {
+                data.push(Ipv6OptionType::PAD_1.0);
+                continue;
+            }
+
             let old_len = data.len();
             data.resize(old_len + WireIpv6Option::MINIMUM_LENGTH, 0);
             let (mut wire_opt, ..) =
@@ -374,25 +379,35 @@ pub struct Ipv6Option {
 
 impl Ipv6Option {
     pub fn wire_length(&self) -> usize {
-        self.data.len() + WireIpv6Option::MINIMUM_LENGTH
+        if self.opt_type == Ipv6OptionType::PAD_1 {
+            size_of::<Ipv6OptionType>()
+        } else {
+            self.data.len() + WireIpv6Option::MINIMUM_LENGTH
+        }
     }
 }
 
 impl Validate for Ipv6Option {
     fn validate(&self) -> Result<(), ValidateErr> {
-        if self.data.len() <= usize::from(u8::MAX) {
-            Ok(())
-        } else {
+        u8::try_from(self.data.len()).map_err(|_| ValidateErr {
+            location: "data".into(),
+            msg: format!(
+                "option is too long ({}B vs max {}B)",
+                self.data.len(),
+                u8::MAX
+            )
+            .into(),
+            source: None,
+        })?;
+
+        if self.opt_type == Ipv6OptionType::PAD_1 && !self.data.is_empty() {
             Err(ValidateErr {
                 location: "data".into(),
-                msg: format!(
-                    "option is too long ({}B vs max {}B)",
-                    self.data.len(),
-                    u8::MAX
-                )
-                .into(),
+                msg: "PAD1 option cannot have data".into(),
                 source: None,
             })
+        } else {
+            Ok(())
         }
     }
 }
@@ -485,12 +500,17 @@ pub fn v6_get_next_header<V: ByteSlice>(
 #[cfg(test)]
 pub(crate) mod test {
     use super::*;
+    use crate::engine::headers::IpPush;
+    use crate::engine::ip::L3Repr;
+    use core::error::Error;
     use ingot::ip::IpProtocol as IngotIpProtocol;
     use ingot::types::Accessor;
     use ingot::types::Emit;
     use ingot::types::Header;
     use ingot::types::HeaderParse;
+    use ingot::types::NextLayer;
     use itertools::Itertools;
+    use opte_api::MacAddr;
     use smoltcp::wire::IpProtocol;
     use smoltcp::wire::Ipv6Address;
     use smoltcp::wire::Ipv6ExtHeader;
@@ -841,5 +861,191 @@ pub(crate) mod test {
         let (v6, _rem) = Accessor::read_from_prefix(buf).unwrap();
         let ip = ValidIpv6(v6, Header::Repr(Default::default()));
         assert!(ip.validate(120).is_err());
+    }
+
+    #[test]
+    fn option_push_spec() {
+        // Most options can have any amount of data up til 255B.
+        let opt = Ipv6Option {
+            opt_type: Ipv6OptionType::EXPERIMENT_0,
+            data: vec![].into(),
+        };
+        assert!(opt.validate().is_ok());
+        assert_eq!(opt.wire_length(), 2);
+
+        let opt = Ipv6Option {
+            opt_type: Ipv6OptionType::EXPERIMENT_0,
+            data: vec![0xff; 255].into(),
+        };
+        assert!(opt.validate().is_ok());
+        assert_eq!(opt.wire_length(), 257);
+
+        // An overlong option will be marked invalid, but we should still
+        // report an accurate wire length.
+        let bad_opt = Ipv6Option {
+            opt_type: Ipv6OptionType::EXPERIMENT_0,
+            data: vec![0xff; 256].into(),
+        };
+        assert!(bad_opt.validate().is_err());
+        assert_eq!(bad_opt.wire_length(), 258);
+
+        // The PAD1 option is special, and contains no data or length.
+        let pad =
+            Ipv6Option { opt_type: Ipv6OptionType::PAD_1, data: vec![].into() };
+        assert!(pad.validate().is_ok());
+        assert_eq!(pad.wire_length(), 1);
+
+        assert!(
+            Ipv6Option {
+                opt_type: Ipv6OptionType::PAD_1,
+                data: vec![0xff].into(),
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn extension_push_spec() {
+        #[expect(clippy::type_complexity, reason = "needed for type coercion")]
+        let option_holders: [(fn(_) -> Ipv6Extension, &str); 2] = [
+            (Ipv6Extension::DestinationOpts as _, "dst_opts"),
+            (Ipv6Extension::HopByHopOpts as _, "hop_by_hop_opts"),
+        ];
+        for (f, label) in option_holders {
+            let mut options = vec![];
+
+            // An empty option list is possible, and should serialise to
+            // just contain padding bytes.
+            let ext = f(options.clone().into());
+            assert_eq!(ext.wire_length(), 8, "{label}");
+            match ext.as_repr(IngotIpProtocol::TCP) {
+                LowRentV6EhRepr::IpV6Ext6564(e) => {
+                    assert_eq!(
+                        e,
+                        IpV6Ext6564 {
+                            next_header: IngotIpProtocol::TCP,
+                            ext_len: 0,
+                            data: vec![
+                                Ipv6OptionType::PAD_N.0,
+                                0x04,
+                                0x00,
+                                0x00,
+                                0x00,
+                                0x00,
+                            ]
+                        },
+                        "{label}"
+                    );
+                }
+                _ => panic!("{label}: should not be a fragment header"),
+            }
+
+            // Add in a single 5B option. We should have one padding byte, but
+            // still land at 8B.
+            options.push(Ipv6Option {
+                opt_type: Ipv6OptionType::EXPERIMENT_1,
+                data: vec![0x01; 3].into(),
+            });
+            let ext = f(options.clone().into());
+            assert_eq!(ext.wire_length(), 8, "{label}");
+            match ext.as_repr(IngotIpProtocol::TCP) {
+                LowRentV6EhRepr::IpV6Ext6564(e) => {
+                    assert_eq!(
+                        e,
+                        IpV6Ext6564 {
+                            next_header: IngotIpProtocol::TCP,
+                            ext_len: 0,
+                            data: vec![
+                                Ipv6OptionType::EXPERIMENT_1.0,
+                                0x03,
+                                0x01,
+                                0x01,
+                                0x01,
+                                Ipv6OptionType::PAD_1.0,
+                            ]
+                        },
+                        "{label}"
+                    );
+                }
+                _ => panic!("{label}: should not be a fragment header"),
+            }
+
+            // Pushing an oversize option should fail with a valid source (see above),
+            // as should pushing more options than an EH can admit (2048B wire_length total).
+            let ext = f(vec![Ipv6Option {
+                opt_type: Ipv6OptionType::EXPERIMENT_1,
+                data: vec![0x22; 1024].into(),
+            }]
+            .into());
+            let Err(err) = ext.validate() else {
+                panic!("oversize error in option did not propagate to parent");
+            };
+            assert!(err.source().is_some());
+
+            for i in 0..8 {
+                let should_fail = i == 7;
+                let big_option = Ipv6Option {
+                    opt_type: Ipv6OptionType::EXPERIMENT_1,
+                    data: vec![0x22; 255].into(),
+                };
+                options.push(big_option);
+                let ext = f(options.clone().into());
+                assert!(should_fail == ext.validate().is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn push_spec() {
+        // Basic sanity checking: options should parse out, and proto should be
+        // reflected in the final option.
+        let mut push_spec = Ipv6Push {
+            src: Ipv6Addr::from_eui64(&MacAddr::from_const([
+                0xa8, 0x40, 0x25, 0x00, 0x00, 0x63,
+            ])),
+            dst: Ipv6Addr::ALL_NODES,
+            proto: Protocol::TCP,
+            exts: vec![
+                Ipv6Extension::HopByHopOpts((&[]).into()),
+                Ipv6Extension::DestinationOpts((&[]).into()),
+            ]
+            .into(),
+        };
+        assert!(push_spec.validate().is_ok());
+
+        let compiled = L3Repr::from(&(IpPush::from(push_spec.clone())));
+        let L3Repr::Ipv6(v6) = compiled else { panic!() };
+        let stack = [IngotIpProtocol::IPV6_DEST_OPTS, IngotIpProtocol::TCP];
+        assert_eq!(v6.next_header, IngotIpProtocol::IPV6_HOP_BY_HOP);
+        for (el, nh) in v6.v6ext.iter().zip(stack) {
+            assert_eq!(el.next_layer(), Some(nh));
+        }
+
+        // Hop-by-hop can *only* be the first EH, if it is included.
+        push_spec.exts = vec![
+            Ipv6Extension::DestinationOpts((&[]).into()),
+            Ipv6Extension::HopByHopOpts((&[]).into()),
+            Ipv6Extension::DestinationOpts((&[]).into()),
+        ]
+        .into();
+        assert!(push_spec.validate().is_err());
+
+        // Extensions + v6 len cannot exceed u16::MAX.
+        let mut huge_opts = vec![];
+        huge_opts.resize(
+            8,
+            Ipv6Option {
+                opt_type: Ipv6OptionType::EXPERIMENT_7,
+                data: vec![0xff; 253].into(),
+            },
+        );
+        let huge_ext = Ipv6Extension::DestinationOpts(huge_opts.into());
+        assert!(huge_ext.validate().is_ok());
+
+        let mut huge_exts = vec![];
+        huge_exts.resize(32, huge_ext);
+        push_spec.exts = huge_exts.into();
+        assert!(push_spec.validate().is_err());
     }
 }
