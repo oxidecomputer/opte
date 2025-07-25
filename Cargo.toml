@@ -45,7 +45,7 @@ cargo_metadata = "0.21"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
-criterion = "0.6"
+criterion = "0.7"
 ctor = "0.4"
 darling = "0.21"
 dyn-clone = "1.0"
