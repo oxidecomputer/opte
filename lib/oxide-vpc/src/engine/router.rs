@@ -14,6 +14,7 @@ use crate::api::DelRouterEntryResp;
 use crate::api::RouterClass;
 use crate::api::RouterTarget;
 use crate::cfg::VpcCfg;
+use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -70,12 +71,12 @@ impl RouterTargetInternal {
     pub const IP_KEY: &'static str = "router-target-ip";
     pub const GENERIC_META: &'static str = "ig";
 
-    pub fn generic_meta(&self) -> String {
-        Self::GENERIC_META.to_string()
+    pub fn generic_meta(&self) -> Cow<'static, str> {
+        Self::GENERIC_META.into()
     }
 
-    pub fn ip_key(&self) -> String {
-        Self::IP_KEY.to_string()
+    pub fn ip_key(&self) -> Cow<'static, str> {
+        Self::IP_KEY.into()
     }
 
     pub fn class(&self) -> RouterTargetClass {
@@ -126,16 +127,20 @@ impl ActionMetaValue for RouterTargetInternal {
         }
     }
 
-    fn as_meta(&self) -> String {
+    fn as_meta(&self) -> Cow<'static, str> {
         match self {
             Self::InternetGateway(ip) => match ip {
-                Some(ip) => format!("ig={ip}"),
-                None => String::from("ig"),
+                Some(ip) => format!("ig={ip}").into(),
+                None => "ig".into(),
             },
-            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={ip4}"),
-            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={ip6}"),
-            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={cidr4}"),
-            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => format!("sub6={cidr6}"),
+            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={ip4}").into(),
+            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={ip6}").into(),
+            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => {
+                format!("sub4={cidr4}").into()
+            }
+            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => {
+                format!("sub6={cidr6}").into()
+            }
         }
     }
 }
@@ -170,7 +175,7 @@ impl ActionMetaValue for RouterTargetClass {
         }
     }
 
-    fn as_meta(&self) -> String {
+    fn as_meta(&self) -> Cow<'static, str> {
         match self {
             Self::InternetGateway => "ig".into(),
             Self::Ip => "ip".into(),
