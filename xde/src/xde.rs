@@ -166,11 +166,19 @@ use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
+use ingot::ethernet::Ethertype;
 use ingot::geneve::GeneveRef;
+use ingot::ip::IpProtocol;
+use ingot::ip::IpV6Ext6564;
+use ingot::ip::IpV6Ext6564Ref;
+use ingot::ip::Ipv6;
 use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
+use ingot::types::util::RepeatedView;
 use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
@@ -210,7 +218,10 @@ use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6OptionType;
 use opte::engine::ip::v6::Ipv6Ref;
+use opte::engine::ip::v6::WireIpv6Option;
+use opte::engine::ip::v6::WireIpv6OptionRef;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -2089,6 +2100,7 @@ fn xde_mc_tx_one<'a>(
             // reassemble them. However, guests may reject carried packets if
             // the embedded MSS value / `gso_size` is larger than the agreed-
             // upon MSS for the connection itself.
+            //
             // The Oxide VPC reserves an IPv6EH to carry this signal.
             let mut flags = offload_req.flags;
             let mss = if mtu_unrestricted {
@@ -2096,11 +2108,29 @@ fn xde_mc_tx_one<'a>(
                     && let Some(my_mss) = u16::try_from(offload_req.mss)
                         .and_then(NonZeroU16::try_from)
                         .ok()
+                    && tun_meoi
+                        .meoi_flags
+                        .contains(MacEtherOffloadFlags::FULL_TUN)
+                    && tun_meoi.meoi_l3proto == Ethertype::IPV6.0
+                    && usize::from(tun_meoi.meoi_l3hlen)
+                        == Ipv6::MINIMUM_LENGTH + 8
                 {
-                    // XXX: Super unsafe for testing.
-                    let slot: &mut [u8; 2] =
-                        (&mut out_pkt[58..=59]).try_into().unwrap();
-                    *slot = my_mss.get().to_be_bytes();
+                    // OPTE pushes encap in one contiguous block. We know that the
+                    // output format is currently a single option in a single destops
+                    // extension header.
+                    let mss_idx = usize::from(tun_meoi.meoi_l2hlen)
+                        + Ipv6::MINIMUM_LENGTH
+                        + IpV6Ext6564::MINIMUM_LENGTH
+                        + WireIpv6Option::MINIMUM_LENGTH;
+
+                    if let Some(slot) =
+                        out_pkt.get_mut(mss_idx..mss_idx + size_of::<u16>())
+                    {
+                        let slot =
+                            <&mut [u8; size_of::<u16>()]>::try_from(slot)
+                                .expect("size proven above");
+                        *slot = my_mss.get().to_be_bytes();
+                    }
                 }
 
                 // Recall that SDU does not include L2 size, hence 'non_eth_payl'
@@ -2502,25 +2532,53 @@ fn xde_rx_one(
         return Some(pkt);
     };
 
-    // XXX: awful, awful code.
+    // Large TCP frames include their MSS in-band, as recipients can require
+    // this to correctly process frames which have been given split into
+    // larger chunks.
+    //
+    // This will be set to a nonzero value when TSO has been asked of the
+    // source packet.
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
     let recovered_mss = if is_tcp && let Some(ehs) = meta.outer_v6.1.raw() {
         let mut out = None;
-        for el in ehs.iter(Some(meta.outer_v6.next_header())) {
+        let mut curr_ty = meta.outer_v6.next_header();
+        for el in ehs.iter(Some(curr_ty)) {
             let Ok(el) = el else { break };
 
-            // XXX: Cheating a bit: we know at this point it's Destopts.
-            if let ValidLowRentV6Eh::IpV6Ext6564(el) = el {
-                let Some(a) = el.1.raw() else { continue };
-                let Some(opt) = a.get(0..4) else { continue };
-
-                if opt[0] == 0x1e && opt[1] == 2 {
-                    out = NonZeroU16::try_from(u16::from_be_bytes([
-                        opt[2], opt[3],
-                    ]))
-                    .ok();
+            curr_ty = match el {
+                ValidLowRentV6Eh::IpV6Ext6564(ext)
+                    if curr_ty == IpProtocol::IPV6_DEST_OPTS =>
+                {
+                    let ext_data = ext.data_ref();
+                    let Ok((opts, ..)) =
+                        RepeatedView::<&[u8], WireIpv6Option>::parse(
+                            ext_data.as_ref(),
+                        )
+                    else {
+                        break;
+                    };
+                    for opt in opts.iter(None) {
+                        let Ok(opt) = opt else { break };
+                        let opt_data = opt.data_ref();
+                        let opt_data = opt_data.as_ref();
+                        if opt.opt_type() == Ipv6OptionType::EXPERIMENT_0
+                            && opt_data.len() == 2
+                        {
+                            out = NonZeroU16::try_from(u16::from_be_bytes([
+                                opt_data[0],
+                                opt_data[1],
+                            ]))
+                            .ok();
+                            break;
+                        }
+                    }
+                    break;
                 }
-            }
+                ValidLowRentV6Eh::IpV6Ext6564(ext) => ext.0.next_header,
+                ValidLowRentV6Eh::IpV6ExtFragment(fragment) => {
+                    fragment.0.next_header
+                }
+            };
         }
         out
     } else {

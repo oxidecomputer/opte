@@ -321,7 +321,7 @@ impl StaticAction for EncapAction {
 
         static MSS_SIZE_OPT: &[u8] = &[0; size_of::<u16>()];
         static MSS_EXPERIMENT_OPT: Ipv6Option = Ipv6Option {
-            code: Ipv6OptionType::EXPERIMENT_0,
+            opt_type: Ipv6OptionType::EXPERIMENT_0,
             data: Cow::Borrowed(MSS_SIZE_OPT),
         };
         static MSS_DEST_OPT: Ipv6Extension = Ipv6Extension::DestinationOpts(

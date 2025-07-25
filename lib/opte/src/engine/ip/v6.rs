@@ -224,7 +224,7 @@ impl Ipv6Extension {
             let (mut wire_opt, ..) =
                 ValidWireIpv6Option::parse(&mut data[old_len..])
                     .expect("buf was resized to have sufficient bytes");
-            wire_opt.set_opt_type(opt.code);
+            wire_opt.set_opt_type(opt.opt_type);
             wire_opt.set_opt_len(opt.data.len().try_into().unwrap_or(u8::MAX));
             data.extend_from_slice(&opt.data);
         }
@@ -368,7 +368,7 @@ impl Ipv6OptionType {
     Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub struct Ipv6Option {
-    pub code: Ipv6OptionType,
+    pub opt_type: Ipv6OptionType,
     pub data: Cow<'static, [u8]>,
 }
 
