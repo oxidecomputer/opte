@@ -166,18 +166,11 @@ use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
-use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
-use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
-use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::*;
-use ingot::ethernet::Ethertype;
-use ingot::geneve::Geneve;
 use ingot::geneve::GeneveRef;
-use ingot::ip::IpProtocol;
 use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::HeaderLen;
-use ingot::udp::Udp;
 use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
@@ -2063,6 +2056,13 @@ fn xde_mc_tx_one<'a>(
                 }
             };
 
+            let Some(tun_meoi) = emit_spec.encap_meoi() else {
+                opte::engine::dbg!(
+                    "tried to emit packet without encapsulation"
+                );
+                return;
+            };
+
             let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
             let mut out_pkt = emit_spec.apply(pkt);
@@ -2123,32 +2123,6 @@ fn xde_mc_tx_one<'a>(
             }
 
             out_pkt.request_offload(flags.shift_in(), mss);
-
-            // XXX The emitspec should probably be responsible for this now.
-            let tun_meoi = mac_ether_offload_info_t {
-                meoi_flags: MacEtherOffloadFlags::L2INFO_SET
-                    | MacEtherOffloadFlags::L3INFO_SET
-                    | MacEtherOffloadFlags::L4INFO_SET
-                    | MacEtherOffloadFlags::TUNINFO_SET,
-                meoi_l2hlen: u8::try_from(Ethernet::MINIMUM_LENGTH)
-                    .expect("14B < u8::MAX"),
-                meoi_l3proto: Ethertype::IPV6.0,
-                meoi_l3hlen: u16::try_from(encap_len).expect("78B < u16::MAX")
-                    - u16::try_from(
-                        Udp::MINIMUM_LENGTH
-                            + Geneve::MINIMUM_LENGTH
-                            + Ethernet::MINIMUM_LENGTH,
-                    )
-                    .expect("30B < u16::MAX"),
-                meoi_l4proto: IpProtocol::UDP.0,
-                meoi_l4hlen: u8::try_from(Udp::MINIMUM_LENGTH)
-                    .expect("8B < u8::MAX"),
-                meoi_tuntype: MacTunType::GENEVE,
-                meoi_tunhlen: u16::try_from(Geneve::MINIMUM_LENGTH)
-                    .expect("8B < u16::MAX"),
-                // meoi_len will be recomputed by consumers.
-                meoi_len: u32::try_from(new_len).unwrap_or(u32::MAX),
-            };
 
             if let Err(e) = out_pkt.fill_parse_info(&tun_meoi, Some(&ulp_meoi))
             {

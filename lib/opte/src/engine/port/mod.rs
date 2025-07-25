@@ -41,6 +41,7 @@ use super::rule::CompiledTransform;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
+use super::rule::PresavedMeoi;
 use super::rule::Rule;
 use super::rule::TransformFlags;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
@@ -1837,7 +1838,7 @@ impl Transforms {
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
                     (Some(eth), Some(ip), Some(encap)) => {
-                        let encap_repr = match encap {
+                        let (l4_repr, encap_repr) = match encap {
                             EncapPush::Geneve(g) => (
                                 Udp {
                                     source: g.entropy,
@@ -1853,18 +1854,17 @@ impl Transforms {
                             source: eth.src,
                             ethertype: Ethertype(eth.ether_type.into()),
                         };
+                        let eth_len = eth_repr.packet_length();
+
                         let ip_repr = L3Repr::from(&ip);
                         let ip_len = ip_repr.packet_length();
-                        let (l3_extra_bytes, ip_len_offset) = match ip {
-                            IpPush::Ip4(_) => (ip_len, 2),
-                            IpPush::Ip6(_) => {
-                                (ip_len - Ipv6::MINIMUM_LENGTH, 4)
+                        let (ulp, l3_extra_bytes, ip_len_offset) = match &ip {
+                            IpPush::Ip4(v4) => (v4.proto, ip_len, 2),
+                            IpPush::Ip6(v6) => {
+                                (v6.proto, ip_len - Ipv6::MINIMUM_LENGTH, 4)
                             }
                         };
-
-                        let encap_sz = encap_repr.packet_length();
-                        let l3_len_offset =
-                            eth_repr.packet_length() + ip_len_offset;
+                        let l3_len_offset = eth_len + ip_len_offset;
 
                         // UDP has a length field 4B into its header.
                         // in event of TCP, l4_len_offset is ignored.
@@ -1872,7 +1872,22 @@ impl Transforms {
                             + ip_repr.packet_length()
                             + 4;
 
-                        let bytes = (eth_repr, ip_repr, encap_repr).emit_vec();
+                        let encap_sz = encap_repr.packet_length();
+
+                        let bytes =
+                            (eth_repr, ip_repr, l4_repr, encap_repr).emit_vec();
+
+                        let meoi = PresavedMeoi {
+                            l2hlen: u8::try_from(eth_len)
+                                .expect("14B < u8::MAX"),
+                            l3proto: eth_repr.ethertype.0,
+                            l3hlen: u16::try_from(ip_len).expect(
+                                "IPv4 is bounded, IPv6 validates to <= 65535",
+                            ),
+                            l4proto: ulp.into(),
+                            tunhlen: u16::try_from(encap_sz)
+                                .expect("Geneve is bounded to 260B"),
+                        };
 
                         Some(CompiledEncap::Push {
                             encap,
@@ -1883,6 +1898,7 @@ impl Transforms {
                             l3_extra_bytes,
                             l4_len_offset,
                             encap_sz,
+                            meoi,
                         })
                     }
                     (None, None, None) => Some(CompiledEncap::Pop),

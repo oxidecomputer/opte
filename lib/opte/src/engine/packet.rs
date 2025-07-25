@@ -58,6 +58,9 @@ use core::result;
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering;
 use dyn_clone::DynClone;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::geneve::GeneveRef;
@@ -81,6 +84,7 @@ use ingot::types::PacketParseError;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
+use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
@@ -1668,6 +1672,67 @@ impl EmitSpec {
                 Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
                 _ => None,
             },
+            PushSpec::NoOp => None,
+        }
+    }
+
+    /// Returns the offload info for encap layers pushed onto the packet, without
+    /// the `meoi_len` field set.
+    #[inline]
+    pub fn encap_meoi(&self) -> Option<mac_ether_offload_info_t> {
+        match &self.prepend {
+            PushSpec::Fastpath(c) => match &c.encap {
+                CompiledEncap::Push { meoi, .. } => Some(meoi.as_meoi()),
+                _ => None,
+            },
+            PushSpec::Slowpath(s) => {
+                match (&s.outer_eth, &s.outer_ip, &s.outer_encap) {
+                    (None, None, None) => None,
+                    (eth, ip, encap) => {
+                        let mut out = mac_ether_offload_info_t::default();
+
+                        if let Some(eth) = eth {
+                            out.meoi_flags |= MacEtherOffloadFlags::L2INFO_SET;
+                            out.meoi_l2hlen = u8::try_from(eth.packet_length())
+                                .expect("14B < u8::MAX");
+                            out.meoi_l3proto = eth.ethertype.0;
+                        }
+
+                        if let Some(ip) = ip {
+                            out.meoi_flags |= MacEtherOffloadFlags::L3INFO_SET;
+                            out.meoi_l3hlen = u16::try_from(ip.packet_length())
+                            .expect(
+                                "IPv4 is bounded, IPv6 validates to <= 65535",
+                            );
+                            out.meoi_l4proto = ip
+                                .next_layer()
+                                .expect(
+                                    "next_layer is not fallible for IP types",
+                                )
+                                .0;
+                        }
+
+                        if let Some(encap) = encap {
+                            out.meoi_flags |= MacEtherOffloadFlags::L4INFO_SET
+                                | MacEtherOffloadFlags::TUNINFO_SET;
+                            match encap {
+                                EncapMeta::Geneve(geneve_meta) => {
+                                    out.meoi_l4hlen =
+                                        u8::try_from(Udp::MINIMUM_LENGTH)
+                                            .expect("UDP = 8B");
+                                    out.meoi_tuntype = MacTunType::GENEVE;
+                                    out.meoi_tunhlen = u16::try_from(
+                                        geneve_meta.hdr_len_inner(),
+                                    )
+                                    .expect("Geneve is bounded to 260B");
+                                }
+                            }
+                        }
+
+                        Some(out)
+                    }
+                }
+            }
             PushSpec::NoOp => None,
         }
     }

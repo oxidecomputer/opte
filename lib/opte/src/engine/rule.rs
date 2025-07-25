@@ -51,6 +51,9 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Ref;
@@ -61,8 +64,10 @@ use ingot::icmp::IcmpV6Type;
 use ingot::ip::IpProtocol;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
+use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::Read;
+use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use opte_api::Direction;
 use opte_api::RuleDump;
@@ -485,6 +490,8 @@ pub enum CompiledEncap {
         l4_len_offset: usize,
         /// The number of bytes consumed by encapsulation.
         encap_sz: usize,
+        /// Prebuilt offload information for illumos.
+        meoi: PresavedMeoi,
     },
 }
 
@@ -544,6 +551,38 @@ impl CompiledEncap {
             prepend
         } else {
             pkt
+        }
+    }
+}
+
+/// The compressed (serialisable) form of a [`mac_ether_offload_info_t`].
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub struct PresavedMeoi {
+    pub l2hlen: u8,
+    pub l3proto: u16,
+    pub l3hlen: u16,
+    pub l4proto: u8,
+    pub tunhlen: u16,
+}
+
+impl PresavedMeoi {
+    /// Returns a [`mac_ether_offload_info_t`] with all fields set
+    /// apart from `meoi_len`.
+    pub fn as_meoi(&self) -> mac_ether_offload_info_t {
+        mac_ether_offload_info_t {
+            meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+                | MacEtherOffloadFlags::L3INFO_SET
+                | MacEtherOffloadFlags::L4INFO_SET
+                | MacEtherOffloadFlags::TUNINFO_SET,
+            meoi_l2hlen: self.l2hlen,
+            meoi_l3proto: self.l3proto,
+            meoi_l3hlen: self.l3hlen,
+            meoi_l4proto: self.l4proto,
+            meoi_l4hlen: u8::try_from(Udp::MINIMUM_LENGTH).expect("UDP = 8B"),
+            meoi_tuntype: MacTunType::GENEVE,
+            meoi_tunhlen: self.tunhlen,
+
+            meoi_len: 0,
         }
     }
 }

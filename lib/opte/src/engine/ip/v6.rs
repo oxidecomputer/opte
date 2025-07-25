@@ -151,6 +151,8 @@ pub struct Ipv6Push {
 
 impl Validate for Ipv6Push {
     fn validate(&self) -> Result<(), ValidateErr> {
+        let mut total_len = Ipv6::MINIMUM_LENGTH;
+
         for (i, ext) in self.exts.iter().enumerate() {
             if i != 0 && matches!(ext, Ipv6Extension::HopByHopOpts(_)) {
                 // RFC 9673
@@ -170,6 +172,13 @@ impl Validate for Ipv6Push {
                     source: Some(e.into()),
                 });
             }
+
+            total_len += ext.wire_length();
+            u16::try_from(total_len).map_err(|_| ValidateErr {
+                msg: "header and extensions longer than 65535B".into(),
+                location: format!("ipv6.exts[{i}]").into(),
+                source: None,
+            })?;
         }
 
         Ok(())
