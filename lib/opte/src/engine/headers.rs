@@ -12,21 +12,32 @@ use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
 use super::geneve::OxideOption;
+use super::ip::L3Repr;
+use super::ip::v4::Ipv4;
 use super::ip::v4::Ipv4Mod;
 use super::ip::v4::Ipv4Push;
+use super::ip::v6::Ipv6;
 use super::ip::v6::Ipv6Mod;
 use super::ip::v6::Ipv6Push;
+use super::rule::GenHtError;
 use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use core::error::Error;
 use core::fmt;
+use core::ops::Deref;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptionType;
 use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
+use ingot::ip::Ipv4Flags;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
@@ -43,8 +54,12 @@ use serde::Serialize;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-pub trait PushAction<HdrM> {
-    fn push(&self) -> HdrM;
+/// A type that is meant to be used as an argument to a [`Transform`]
+/// implementation.
+pub trait PushAction<HdrP> {
+    /// Produce a concrete header specification from a simplified
+    /// representation, assuming that `self` has already been validated.
+    fn push(&self) -> HdrP;
 }
 
 /// A type that is meant to be used as an argument to a
@@ -53,10 +68,60 @@ pub trait ModifyAction<HdrM> {
     fn modify(&self, meta: &mut HdrM);
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpPush {
     Ip4(Ipv4Push),
     Ip6(Ipv6Push),
+}
+
+impl Validate for IpPush {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        match self {
+            Self::Ip4(v) => v.validate(),
+            Self::Ip6(v) => v.validate(),
+        }
+    }
+}
+
+impl From<&IpPush> for L3Repr {
+    fn from(value: &IpPush) -> Self {
+        match value {
+            IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
+                protocol: IpProtocol(u8::from(v4.proto)),
+                source: v4.src,
+                destination: v4.dst,
+                flags: Ipv4Flags::DONT_FRAGMENT,
+                ..Default::default()
+            }),
+            IpPush::Ip6(v6) => {
+                let ulp = IpProtocol(u8::from(v6.proto));
+                let (exts, next_header) = if v6.exts.is_empty() {
+                    (vec![], ulp)
+                } else {
+                    let first = v6.exts.first().unwrap().ip_protocol();
+                    let mut out = vec![];
+                    for (i, ext) in v6.exts.iter().enumerate() {
+                        let next_header = v6
+                            .exts
+                            .get(i + 1)
+                            .map(|v| v.ip_protocol())
+                            .unwrap_or(ulp);
+
+                        out.push(ext.as_repr(next_header));
+                    }
+                    (out, first)
+                };
+
+                L3Repr::Ipv6(Ipv6 {
+                    next_header,
+                    source: v6.src,
+                    destination: v6.dst,
+                    v6ext: Repeated::new(exts),
+                    ..Default::default()
+                })
+            }
+        }
+    }
 }
 
 impl From<Ipv4Push> for IpPush {
@@ -142,6 +207,13 @@ impl PushAction<EncapMeta> for EncapPush {
 impl From<GenevePush> for EncapPush {
     fn from(gp: GenevePush) -> Self {
         Self::Geneve(gp)
+    }
+}
+
+impl Validate for EncapPush {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // We do not yet define/support pushing any Geneve options.
+        Ok(())
     }
 }
 
@@ -456,7 +528,7 @@ where
 /// The action to take for a particular header transposition.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
 pub enum HeaderAction<P, M> {
-    Push(P),
+    Push(Valid<P>),
     Pop,
     Modify(M),
     #[default]
@@ -514,6 +586,70 @@ impl<P, M> HeaderAction<P, M> {
             (a @ HeaderAction::Modify(..), Some(h)) => h.act_on(a),
             (_, None) => Err(HeaderActionError::MissingHeader),
         }
+    }
+}
+
+/// Header actions which require sanity checking before they can be used.
+pub trait Validate {
+    fn validate(&self) -> Result<(), ValidateErr>;
+}
+
+/// An error message and location encountered while validating a packet
+/// transform.
+#[derive(Debug)]
+pub struct ValidateErr {
+    pub msg: Cow<'static, str>,
+    pub location: Cow<'static, str>,
+    pub source: Option<Box<dyn Error>>,
+}
+
+impl fmt::Display for ValidateErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ValidateErr { msg, location, source: _source } = self;
+        write!(f, "invalid {location} ({msg})")
+    }
+}
+
+impl Error for ValidateErr {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_deref()
+    }
+}
+
+impl From<ValidateErr> for GenHtError {
+    fn from(value: ValidateErr) -> Self {
+        let mut out = value.to_string();
+        let mut source = value.source();
+        while let Some(inner) = source {
+            out = format!("{out}: {inner}");
+            source = inner.source();
+        }
+
+        GenHtError::Unexpected { msg: out }
+    }
+}
+
+/// Header actions which have been successfully sanity checked.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Valid<T>(T);
+
+impl<T: Validate> Valid<T> {
+    pub fn validated(value: T) -> Result<Self, ValidateErr> {
+        value.validate().map(|_| Self(value))
+    }
+}
+
+impl<T> Valid<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Valid<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 

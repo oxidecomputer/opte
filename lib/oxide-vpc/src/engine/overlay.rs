@@ -16,6 +16,7 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
+use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
@@ -40,9 +41,13 @@ use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
+use opte::engine::headers::Valid;
 use opte::engine::ip::v4::Protocol;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
+use opte::engine::ip::v6::Ipv6Extension;
+use opte::engine::ip::v6::Ipv6Option;
+use opte::engine::ip::v6::Ipv6OptionType;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
@@ -201,7 +206,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -314,19 +319,53 @@ impl StaticAction for EncapAction {
         };
         action_meta.set_internal_target(is_internal);
 
+        static MSS_SIZE_OPT: &[u8] = &[0; size_of::<u16>()];
+        static MSS_EXPERIMENT_OPT: Ipv6Option = Ipv6Option {
+            opt_type: Ipv6OptionType::EXPERIMENT_0,
+            data: Cow::Borrowed(MSS_SIZE_OPT),
+        };
+        static MSS_DEST_OPT: Ipv6Extension = Ipv6Extension::DestinationOpts(
+            Cow::Borrowed(core::slice::from_ref(&MSS_EXPERIMENT_OPT)),
+        );
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
-            outer_ether: HeaderAction::Push(EtherMeta {
-                src: MacAddr::ZERO,
-                dst: MacAddr::ZERO,
-                ether_type: EtherType::Ipv6,
-            }),
-            outer_ip: HeaderAction::Push(IpPush::from(Ipv6Push {
-                src: self.phys_ip_src,
-                dst: phys_target.ip,
-                proto: Protocol::UDP,
-            })),
+            outer_ether: HeaderAction::Push(
+                Valid::validated(EtherMeta {
+                    src: MacAddr::ZERO,
+                    dst: MacAddr::ZERO,
+                    ether_type: EtherType::Ipv6,
+                })
+                .expect("Ethernet validation is infallible"),
+            ),
+            outer_ip: HeaderAction::Push(Valid::validated(IpPush::from(
+                Ipv6Push {
+                    src: self.phys_ip_src,
+                    dst: phys_target.ip,
+                    proto: Protocol::UDP,
+                    // Allocate space in which we can include the TCP MSS, when
+                    // needed during MSS boosting. It's theoretically doable to
+                    // gate this on seeing an unexpectedly high/low MSS option
+                    // in the TCP handshake, but there are problems in doing so:
+                    // * The MSS for the flow is negotiated, but the UFT entry
+                    //   containing this transform does not know the other side.
+                    // * UFT invalidation means we may rerun this transform in
+                    //   the middle of a flow.
+                    // So, emit it unconditionally for VPC-internal TCP traffic,
+                    // which could need the original MSS to be carried when LSO
+                    // is in use.
+                    //
+                    // Ideally, this would instead be a Geneve option. Sidecar
+                    // needs to know how to forward options it does not understand
+                    // for this to be feasible (i.e., to minimise PHV use).
+                    exts: if pkt_meta.is_inner_tcp() && is_internal {
+                        Cow::Borrowed(core::slice::from_ref(&MSS_DEST_OPT))
+                    } else {
+                        (&[]).into()
+                    },
+                },
+            ))?),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -343,10 +382,12 @@ impl StaticAction for EncapAction {
             // It's worth keeping in mind that Chelsio's RSS picks us a ring
             // based on Toeplitz hash of the 5-tuple, so we need to write into
             // there regardless. I don't believe it *looks* at v6 flowid.
-            outer_encap: HeaderAction::Push(EncapPush::from(GenevePush {
-                vni: phys_target.vni,
-                entropy: flow_id.crc32() as u16,
-            })),
+            outer_encap: HeaderAction::Push(Valid::validated(
+                EncapPush::from(GenevePush {
+                    vni: phys_target.vni,
+                    entropy: flow_id.crc32() as u16,
+                }),
+            )?),
             inner_ether: HeaderAction::Modify(EtherMod {
                 dst: Some(phys_target.ether),
                 ..Default::default()
