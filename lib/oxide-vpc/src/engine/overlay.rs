@@ -34,6 +34,9 @@ use opte::ddi::sync::KRwLock;
 use opte::engine::ether::EtherMeta;
 use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
+use opte::engine::geneve::ArbitraryGeneveOption;
+use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
+use opte::engine::geneve::GeneveMetaRef;
 use opte::engine::geneve::GenevePush;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapPush;
@@ -328,6 +331,14 @@ impl StaticAction for EncapAction {
             Cow::Borrowed(core::slice::from_ref(&MSS_EXPERIMENT_OPT)),
         );
 
+        static GENEVE_MSS_SIZE_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
+        static GENEVE_MSS_SIZE_OPT: ArbitraryGeneveOption =
+            ArbitraryGeneveOption {
+                opt_class: GENEVE_OPT_CLASS_OXIDE,
+                opt_type: 0x03,
+                data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
+            };
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
@@ -386,6 +397,14 @@ impl StaticAction for EncapAction {
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,
                     entropy: flow_id.crc32() as u16,
+                    // TODO: VALIDATE VALIDATE VALIDATE
+                    options: if pkt_meta.is_inner_tcp() && is_internal {
+                        Cow::Borrowed(core::slice::from_ref(
+                            &GENEVE_MSS_SIZE_OPT,
+                        ))
+                    } else {
+                        (&[]).into()
+                    },
                 }),
             )?),
             inner_ether: HeaderAction::Modify(EtherMod {
@@ -431,20 +450,8 @@ impl StaticAction for DecapAction {
         pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        match pkt_meta.outer_encap_geneve_vni_and_origin() {
-            Some((vni, oxide_external_pkt)) => {
-                // We only conditionally add this metadata because the
-                // `Address::VNI` filter uses it to select VPC-originated
-                // traffic.
-                // External packets carry an extra Geneve tag from the
-                // switch during NAT -- if found, `oxide_external_packet`
-                // is filled.
-                if !oxide_external_pkt {
-                    action_meta
-                        .insert(ACTION_META_VNI.to_string(), vni.to_string());
-                }
-            }
-
+        let (vni, is_external) = match pkt_meta.outer_geneve() {
+            Some(g) => (g.vni(), false),
             // This should be impossible. Non-encapsulated traffic
             // should never make it here if the mac flow subsystem is
             // doing its job. However, we take a defensive approach
@@ -454,6 +461,16 @@ impl StaticAction for DecapAction {
                     msg: "no encap header found".to_string(),
                 });
             }
+        };
+
+        // We only conditionally add this metadata because the
+        // `Address::VNI` filter uses it to select VPC-originated
+        // traffic.
+        // External packets carry an extra Geneve tag from the
+        // switch during NAT -- if found, `oxide_external_packet`
+        // is filled.
+        if !is_external {
+            action_meta.insert(ACTION_META_VNI.to_string(), vni.to_string());
         }
 
         Ok(AllowOrDeny::Allow(HdrTransform {

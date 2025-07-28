@@ -14,10 +14,10 @@ use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::Ttl;
-use super::geneve::GENEVE_PORT;
-use super::headers::EncapPush;
+use super::headers::EncapMeta;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
+use super::headers::SizeHoldingEncap;
 use super::headers::UlpHeaderAction;
 use super::ip::L3Repr;
 use super::ip::v6::Ipv6;
@@ -85,12 +85,10 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
-use ingot::geneve::Geneve;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use ingot::types::Read;
-use ingot::udp::Udp;
 use meta::ActionMeta;
 use opte_api::Direction;
 use opte_api::LayerDesc;
@@ -1838,16 +1836,7 @@ impl Transforms {
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
                     (Some(eth), Some(ip), Some(encap)) => {
-                        let (l4_repr, encap_repr) = match encap {
-                            EncapPush::Geneve(g) => (
-                                Udp {
-                                    source: g.entropy,
-                                    destination: GENEVE_PORT,
-                                    ..Default::default()
-                                },
-                                Geneve { vni: g.vni, ..Default::default() },
-                            ),
-                        };
+                        let encap = EncapMeta::from(encap);
 
                         let eth_repr = Ethernet {
                             destination: eth.dst,
@@ -1872,10 +1861,16 @@ impl Transforms {
                             + ip_repr.packet_length()
                             + 4;
 
-                        let encap_sz = encap_repr.packet_length();
+                        let encap_sz = encap.packet_length();
+                        let tun_sz = encap.tunnel_len();
 
-                        let bytes =
-                            (eth_repr, ip_repr, l4_repr, encap_repr).emit_vec();
+                        let bytes = (
+                            eth_repr,
+                            ip_repr,
+                            // Sizes will be filled later using offset info.
+                            SizeHoldingEncap { encapped_len: 0, meta: &encap },
+                        )
+                            .emit_vec();
 
                         let meoi = PresavedMeoi {
                             l2hlen: u8::try_from(eth_len)
@@ -1885,7 +1880,7 @@ impl Transforms {
                                 "IPv4 is bounded, IPv6 validates to <= 65535",
                             ),
                             l4proto: ulp.into(),
-                            tunhlen: u16::try_from(encap_sz)
+                            tunhlen: u16::try_from(tun_sz)
                                 .expect("Geneve is bounded to 260B"),
                         };
 

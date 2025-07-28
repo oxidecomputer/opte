@@ -13,6 +13,7 @@ use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
 use super::flow_table::StateSummary;
+use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
@@ -478,7 +479,7 @@ pub enum CompiledEncap {
         /// Outer IP header, including extensions.
         ip: IpPush,
         /// Outer encap layer(s).
-        encap: EncapPush,
+        encap: EncapMeta,
         /// A cached serialised form of `(eth, ip, encap)`.
         bytes: Vec<u8>,
         /// The offset of the payload/total length field in the IP header.

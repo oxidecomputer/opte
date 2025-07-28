@@ -13,8 +13,10 @@ use super::checksum::Checksum;
 use super::ether::Ethernet;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
+use super::geneve::ArbitraryGeneveOption;
+use super::geneve::GeneveMetaRef;
+use super::geneve::ValidGeneveMeta;
 use super::headers::EncapMeta;
-use super::headers::EncapPush;
 use super::headers::IpPush;
 use super::headers::SizeHoldingEncap;
 use super::headers::ValidEncapMeta;
@@ -44,7 +46,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
 use crate::engine::geneve::GeneveMeta;
-use crate::engine::geneve::valid_geneve_has_oxide_external;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -63,6 +64,7 @@ use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
@@ -501,16 +503,31 @@ impl<T: Read + Pullup> PacketData<T> {
         self.headers.outer_l3.as_ref()
     }
 
-    /// Returns whether this packet is sourced from outside the rack,
-    /// in addition to its VNI.
-    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
-        match &self.headers.outer_encap {
+    pub fn outer_encap(
+        &self,
+    ) -> Option<&InlineHeader<EncapMeta, ValidEncapMeta<T::Chunk>>> {
+        self.headers.outer_encap.as_ref()
+    }
+
+    pub fn outer_geneve(
+        &self,
+    ) -> Option<InlineHeader<&GeneveMeta, &ValidGeneveMeta<T::Chunk>>> {
+        match self.headers.outer_encap.as_ref() {
             Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
-                Some((g.vni, g.oxide_external_pkt))
+                Some(InlineHeader::Repr(g))
             }
-            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(g)))
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(g))) => {
+                Some(InlineHeader::Raw(g))
             }
+            _ => None,
+        }
+    }
+
+    /// Returns this packet's VNI, if present.
+    pub fn outer_encap_vni(&self) -> Option<Vni> {
+        match &self.headers.outer_encap {
+            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => Some(g.vni),
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(g))) => Some(g.vni()),
             None => None,
         }
     }
@@ -942,14 +959,40 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    InlineHeader::Repr(o) => *o,
-                    InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)) => {
+                    InlineHeader::Repr(o) => o.clone(),
+                    InlineHeader::Raw(ValidEncapMeta::Geneve(g)) => {
+                        // We can probably devise a better way to pass through
+                        // Geneve options in the Raw case (i.e., we start and
+                        // end packet processing with a valid encap), but this
+                        // is not expected to be used in the product today.
+                        let opts: Vec<_> = match g.1.options_ref() {
+                            ingot::types::FieldRef::Repr(v) => v
+                                .iter()
+                                .map(|v| ArbitraryGeneveOption {
+                                    opt_class: v.class,
+                                    opt_type: v.option_type.0,
+                                    data: v.data.clone().into(),
+                                })
+                                .collect(),
+                            ingot::types::FieldRef::Raw(v) => v
+                                .iter(None)
+                                .map(|v| {
+                                    v.map(|opt| ArbitraryGeneveOption {
+                                        opt_class: opt.class(),
+                                        opt_type: opt.option_type().0,
+                                        data: opt
+                                            .data_ref()
+                                            .as_ref()
+                                            .to_vec()
+                                            .into(),
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        };
                         EncapMeta::Geneve(GeneveMeta {
-                            entropy: u.source(),
+                            entropy: g.entropy(),
                             vni: g.vni(),
-                            oxide_external_pkt: valid_geneve_has_oxide_external(
-                                g,
-                            ),
+                            options: opts.into(),
                         })
                     }
                 });
@@ -1645,7 +1688,7 @@ impl EmitSpec {
     pub fn outer_encap_vni(&self) -> Option<Vni> {
         match &self.prepend {
             PushSpec::Fastpath(c) => match &c.encap {
-                CompiledEncap::Push { encap: EncapPush::Geneve(g), .. } => {
+                CompiledEncap::Push { encap: EncapMeta::Geneve(g), .. } => {
                     Some(g.vni)
                 }
                 _ => None,

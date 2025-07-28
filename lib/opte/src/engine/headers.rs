@@ -6,12 +6,11 @@
 
 //! Header metadata modifications for IP, ULP, and Encap.
 
-use super::geneve::GENEVE_OPT_CLASS_OXIDE;
 use super::geneve::GENEVE_PORT;
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
-use super::geneve::OxideOption;
+use super::geneve::ValidGeneveMeta;
 use super::ip::L3Repr;
 use super::ip::v4::Ipv4;
 use super::ip::v4::Ipv4Mod;
@@ -33,9 +32,6 @@ use core::ops::Deref;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
-use ingot::geneve::GeneveOpt;
-use ingot::geneve::GeneveOptionType;
-use ingot::geneve::ValidGeneve;
 use ingot::ip::IpProtocol;
 use ingot::ip::Ipv4Flags;
 use ingot::types::Emit;
@@ -44,7 +40,6 @@ use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::util::Repeated;
 use ingot::udp::Udp;
-use ingot::udp::ValidUdp;
 pub use opte_api::IpAddr;
 pub use opte_api::IpCidr;
 pub use opte_api::Protocol;
@@ -178,7 +173,9 @@ impl From<Ipv6Mod> for IpMod {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub enum EncapMeta {
     Geneve(GeneveMeta),
 }
@@ -189,8 +186,24 @@ impl From<GeneveMeta> for EncapMeta {
     }
 }
 
+impl EncapMeta {
+    #[inline]
+    pub fn l4_len(&self) -> usize {
+        match self {
+            Self::Geneve(_) => Udp::MINIMUM_LENGTH,
+        }
+    }
+
+    #[inline]
+    pub fn tunnel_len(&self) -> usize {
+        match self {
+            Self::Geneve(_) => self.packet_length() - Udp::MINIMUM_LENGTH,
+        }
+    }
+}
+
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Copy,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum EncapPush {
     Geneve(GenevePush),
@@ -210,10 +223,19 @@ impl From<GenevePush> for EncapPush {
     }
 }
 
+impl From<EncapPush> for EncapMeta {
+    fn from(push: EncapPush) -> Self {
+        match push {
+            EncapPush::Geneve(gp) => EncapMeta::Geneve(gp.into()),
+        }
+    }
+}
+
 impl Validate for EncapPush {
     fn validate(&self) -> Result<(), ValidateErr> {
-        // We do not yet define/support pushing any Geneve options.
-        Ok(())
+        match self {
+            Self::Geneve(g) => g.validate(),
+        }
     }
 }
 
@@ -228,14 +250,6 @@ impl ModifyAction<EncapMeta> for EncapMod {
             (EncapMod::Geneve(g_spec), EncapMeta::Geneve(g_meta)) => {
                 g_spec.modify(g_meta);
             }
-        }
-    }
-}
-
-impl EncapMeta {
-    pub fn hdr_len(&self) -> usize {
-        match self {
-            Self::Geneve(geneve) => geneve.hdr_len(),
         }
     }
 }
@@ -258,11 +272,11 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
                 }
             }
             (
-                InlineHeader::Raw(ValidEncapMeta::Geneve(_, g)),
+                InlineHeader::Raw(ValidEncapMeta::Geneve(g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
-                    g.set_vni(vni);
+                    g.1.set_vni(vni);
                 }
             }
         }
@@ -294,7 +308,7 @@ impl<T: ByteSlice> From<EncapMeta>
 }
 
 pub enum ValidEncapMeta<B: ByteSlice> {
-    Geneve(ValidUdp<B>, ValidGeneve<B>),
+    Geneve(ValidGeneveMeta<B>),
 }
 
 impl Emit for EncapMeta {
@@ -313,40 +327,36 @@ impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
     #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self {
-            ValidEncapMeta::Geneve(u, g) => (u, g).emit_raw(buf),
+            ValidEncapMeta::Geneve(g) => g.emit_raw(buf),
         }
     }
 
     #[inline]
     fn needs_emit(&self) -> bool {
         match self {
-            ValidEncapMeta::Geneve(u, g) => u.needs_emit() && g.needs_emit(),
+            ValidEncapMeta::Geneve(g) => g.needs_emit(),
         }
     }
 }
 
 impl HeaderLen for EncapMeta {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+    const MINIMUM_LENGTH: usize = GeneveMeta::MINIMUM_LENGTH;
 
     #[inline]
     fn packet_length(&self) -> usize {
         match self {
-            EncapMeta::Geneve(g) => {
-                Self::MINIMUM_LENGTH + if g.oxide_external_pkt { 4 } else { 0 }
-            }
+            EncapMeta::Geneve(g) => g.packet_length(),
         }
     }
 }
 
 impl<B: ByteSlice> HeaderLen for ValidEncapMeta<B> {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+    const MINIMUM_LENGTH: usize = GeneveMeta::MINIMUM_LENGTH;
 
     #[inline]
     fn packet_length(&self) -> usize {
         match self {
-            ValidEncapMeta::Geneve(u, g) => {
-                u.packet_length() + g.packet_length()
-            }
+            ValidEncapMeta::Geneve(g) => g.packet_length(),
         }
     }
 }
@@ -374,35 +384,23 @@ impl HeaderLen for SizeHoldingEncap<'_> {
 
 impl Emit for SizeHoldingEncap<'_> {
     #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+    fn emit_raw<V: ByteSliceMut>(&self, mut buf: V) -> usize {
         match self.meta {
             EncapMeta::Geneve(g) => {
-                let mut opts = vec![];
-
-                if g.oxide_external_pkt {
-                    opts.push(GeneveOpt {
-                        class: GENEVE_OPT_CLASS_OXIDE,
-                        option_type: GeneveOptionType(
-                            OxideOption::External.opt_type(),
-                        ),
-                        ..Default::default()
-                    });
-                }
-
-                let options = Repeated::new(opts);
-                let opt_len_unscaled = options.packet_length();
-                let opt_len = (opt_len_unscaled >> 2) as u8;
+                let opt_len = g.options_len();
 
                 let geneve = Geneve {
                     protocol_type: Ethertype::ETHERNET,
                     vni: g.vni,
-                    opt_len,
-                    options,
+                    opt_len: u8::try_from(opt_len / 4).unwrap_or(u8::MAX),
+                    // Skip options, we rely on the custom `Emit` impl for
+                    // ArbitraryGeneveOption so as not to clone them out.
                     ..Default::default()
                 };
 
                 let length = self.encapped_len
-                    + (Udp::MINIMUM_LENGTH + geneve.packet_length()) as u16;
+                    + (Udp::MINIMUM_LENGTH + geneve.packet_length() + opt_len)
+                        as u16;
 
                 // It's worth noting that we have a zero UDP checksum here,
                 // which holds true even if we're sending out over IPv6.
@@ -417,7 +415,8 @@ impl Emit for SizeHoldingEncap<'_> {
                 //   Misdelivery on the basis of IPv6 (or other) corruption
                 //   will lead to a drop.
                 // This is also reflected in RFC 8200 §8.1 (IPv6 2017).
-                (
+                let limit = buf.len() - opt_len;
+                let mut out = (
                     Udp {
                         source: g.entropy,
                         destination: GENEVE_PORT,
@@ -426,7 +425,13 @@ impl Emit for SizeHoldingEncap<'_> {
                     },
                     &geneve,
                 )
-                    .emit_raw(buf)
+                    .emit_raw(&mut buf[..limit]);
+
+                for opt in g.options.as_ref() {
+                    out += opt.emit_raw(&mut buf[out..][..opt.packet_length()])
+                }
+
+                out
             }
         }
     }
