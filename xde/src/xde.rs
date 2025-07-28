@@ -170,6 +170,8 @@ use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
 use ingot::ethernet::Ethertype;
+use ingot::geneve::Geneve;
+use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveRef;
 use ingot::ip::IpProtocol;
 use ingot::ip::IpV6Ext6564;
@@ -254,6 +256,8 @@ use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
+use oxide_vpc::engine::geneve::GeneveOptionParse;
+use oxide_vpc::engine::geneve::ValidOxideOption;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
@@ -2101,7 +2105,7 @@ fn xde_mc_tx_one<'a>(
             // the embedded MSS value / `gso_size` is larger than the agreed-
             // upon MSS for the connection itself.
             //
-            // The Oxide VPC reserves an IPv6EH to carry this signal.
+            // The Oxide VPC reserves an IPv6EH/Geneve Opt to carry this signal.
             let mut flags = offload_req.flags;
             let mss = if mtu_unrestricted {
                 if flags.intersects(MblkOffloadFlags::HW_LSO_FLAGS)
@@ -2130,6 +2134,21 @@ fn xde_mc_tx_one<'a>(
                             <&mut [u8; size_of::<u16>()]>::try_from(slot)
                                 .expect("size proven above");
                         *slot = my_mss.get().to_be_bytes();
+                    }
+
+                    // Also place this in the Geneve Opt. We assert that it falls first.
+                    let mss_idx = usize::from(tun_meoi.meoi_l2hlen)
+                        + usize::from(tun_meoi.meoi_l3hlen)
+                        + usize::from(tun_meoi.meoi_l4hlen)
+                        + Geneve::MINIMUM_LENGTH
+                        + GeneveOpt::MINIMUM_LENGTH;
+                    if let Some(slot) =
+                        out_pkt.get_mut(mss_idx..mss_idx + size_of::<u32>())
+                    {
+                        let slot =
+                            <&mut [u8; size_of::<u32>()]>::try_from(slot)
+                                .expect("size proven above");
+                        *slot = offload_req.mss.to_be_bytes();
                     }
                 }
 
@@ -2584,6 +2603,32 @@ fn xde_rx_one(
     } else {
         None
     };
+
+    // Make sure we're doing it right both ways, for testing purposes.
+    if let Some(mss) = recovered_mss {
+        for el in
+            meta.outer_encap.1.raw().expect("guaranteed borrowed").iter(None)
+        {
+            let Ok(el) = el else { break };
+            let el = match GeneveOptionParse::<ValidOxideOption<_>, _>::try_from(
+                &el,
+            ) {
+                Ok(GeneveOptionParse {
+                    option: ValidOxideOption::Mss(el),
+                    ..
+                }) => el,
+                Ok(_) | Err(ingot::types::ParseError::Unwanted) => continue,
+                // Parsing error, rather than unknown type.
+                Err(_) => break,
+            };
+
+            assert_eq!(
+                u32::from(mss.get()),
+                el.0.mss.get(),
+                "must be writing same MSS in both slots"
+            );
+        }
+    }
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {

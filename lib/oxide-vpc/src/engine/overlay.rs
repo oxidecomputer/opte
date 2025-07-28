@@ -17,6 +17,7 @@ use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
 use crate::engine::geneve::GeneveOptionParse;
+use crate::engine::geneve::OxideOptionType;
 use crate::engine::geneve::ValidOxideOption;
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
@@ -337,7 +338,7 @@ impl StaticAction for EncapAction {
         static GENEVE_MSS_SIZE_OPT: ArbitraryGeneveOption =
             ArbitraryGeneveOption {
                 opt_class: GENEVE_OPT_CLASS_OXIDE,
-                opt_type: 0x03,
+                opt_type: OxideOptionType::Multicast as u8,
                 data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
             };
 
