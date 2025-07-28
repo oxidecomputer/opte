@@ -23,6 +23,7 @@ use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::types::Emit;
 use ingot::types::EmitDoesNotRelyOnBufContents;
+use ingot::types::HasView;
 use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::udp::Udp;
@@ -34,17 +35,7 @@ use serde::Serialize;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-pub const GENEVE_VSN: u8 = 0;
-pub const GENEVE_VER_MASK: u8 = 0xC0;
-pub const GENEVE_VER_SHIFT: u8 = 6;
-pub const GENEVE_OPT_LEN_MASK: u8 = 0x3F;
-pub const GENEVE_OPT_LEN_SCALE_SHIFT: u8 = 2;
 pub const GENEVE_PORT: u16 = 6081;
-
-pub const GENEVE_OPT_CRIT_SHIFT: u8 = 7;
-pub const GENEVE_OPT_TYPE_MASK: u8 = (1 << GENEVE_OPT_CRIT_SHIFT) - 1;
-pub const GENEVE_OPT_RESERVED_SHIFT: u8 = 5;
-pub const GENEVE_OPT_RESERVED_MASK: u8 = (1 << GENEVE_OPT_RESERVED_SHIFT) - 1;
 pub const GENEVE_OPT_CLASS_OXIDE: u16 = 0x0129;
 
 #[inline]
@@ -150,6 +141,10 @@ impl GeneveMetaRef for GeneveMeta {
 }
 
 pub struct ValidGeneveMeta<B: ByteSlice>(pub ValidUdp<B>, pub ValidGeneve<B>);
+
+impl<B: ByteSlice> HasView<B> for GeneveMeta {
+    type ViewType = ValidGeneveMeta<B>;
+}
 
 impl<B: ByteSlice> GeneveMetaRef for ValidGeneveMeta<B> {
     #[inline]

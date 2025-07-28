@@ -16,6 +16,8 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
+use crate::engine::geneve::GeneveOptionParse;
+use crate::engine::geneve::ValidOxideOption;
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
@@ -450,8 +452,61 @@ impl StaticAction for DecapAction {
         pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        let (vni, is_external) = match pkt_meta.outer_geneve() {
-            Some(g) => (g.vni(), false),
+        let mut is_external = false;
+
+        // XXX: Find a way to make this a nice `iter` of `GeneveOptionParse`s.
+        let vni = match pkt_meta.outer_geneve() {
+            Some(g) => {
+                match g {
+                    opte::ingot::types::InlineHeader::Repr(g) => {
+                        for opt in g.options.iter() {
+                            let opt = match GeneveOptionParse::try_from(opt) {
+                                Ok(GeneveOptionParse { option, .. }) => option,
+                                Err(_) => continue,
+                            };
+
+                            if let ValidOxideOption::External = opt {
+                                is_external = true;
+                            }
+                        }
+                    }
+                    opte::ingot::types::InlineHeader::Raw(g) => match &g.1.1 {
+                        ingot::types::BoxedHeader::Repr(r) => {
+                            for opt in r.iter() {
+                                let opt = match GeneveOptionParse::try_from(opt)
+                                {
+                                    Ok(GeneveOptionParse {
+                                        option, ..
+                                    }) => option,
+                                    Err(_) => continue,
+                                };
+
+                                if let ValidOxideOption::External = opt {
+                                    is_external = true;
+                                }
+                            }
+                        }
+                        ingot::types::BoxedHeader::Raw(r) => {
+                            for opt in r.iter(None) {
+                                let Ok(opt) = opt else { continue };
+                                let opt =
+                                    match GeneveOptionParse::try_from(&opt) {
+                                        Ok(GeneveOptionParse {
+                                            option,
+                                            ..
+                                        }) => option,
+                                        Err(_) => continue,
+                                    };
+
+                                if let ValidOxideOption::External = opt {
+                                    is_external = true;
+                                }
+                            }
+                        }
+                    },
+                }
+                g.vni()
+            }
             // This should be impossible. Non-encapsulated traffic
             // should never make it here if the mac flow subsystem is
             // doing its job. However, we take a defensive approach
