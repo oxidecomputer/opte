@@ -51,9 +51,6 @@ use opte::engine::headers::Valid;
 use opte::engine::ip::v4::Protocol;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
-use opte::engine::ip::v6::Ipv6Extension;
-use opte::engine::ip::v6::Ipv6Option;
-use opte::engine::ip::v6::Ipv6OptionType;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
@@ -325,15 +322,6 @@ impl StaticAction for EncapAction {
         };
         action_meta.set_internal_target(is_internal);
 
-        static MSS_SIZE_OPT: &[u8] = &[0; size_of::<u16>()];
-        static MSS_EXPERIMENT_OPT: Ipv6Option = Ipv6Option {
-            opt_type: Ipv6OptionType::EXPERIMENT_0,
-            data: Cow::Borrowed(MSS_SIZE_OPT),
-        };
-        static MSS_DEST_OPT: Ipv6Extension = Ipv6Extension::DestinationOpts(
-            Cow::Borrowed(core::slice::from_ref(&MSS_EXPERIMENT_OPT)),
-        );
-
         static GENEVE_MSS_SIZE_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
         static GENEVE_MSS_SIZE_OPT: ArbitraryGeneveOption =
             ArbitraryGeneveOption {
@@ -358,26 +346,7 @@ impl StaticAction for EncapAction {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
-                    // Allocate space in which we can include the TCP MSS, when
-                    // needed during MSS boosting. It's theoretically doable to
-                    // gate this on seeing an unexpectedly high/low MSS option
-                    // in the TCP handshake, but there are problems in doing so:
-                    // * The MSS for the flow is negotiated, but the UFT entry
-                    //   containing this transform does not know the other side.
-                    // * UFT invalidation means we may rerun this transform in
-                    //   the middle of a flow.
-                    // So, emit it unconditionally for VPC-internal TCP traffic,
-                    // which could need the original MSS to be carried when LSO
-                    // is in use.
-                    //
-                    // Ideally, this would instead be a Geneve option. Sidecar
-                    // needs to know how to forward options it does not understand
-                    // for this to be feasible (i.e., to minimise PHV use).
-                    exts: if pkt_meta.is_inner_tcp() && is_internal {
-                        Cow::Borrowed(core::slice::from_ref(&MSS_DEST_OPT))
-                    } else {
-                        (&[]).into()
-                    },
+                    exts: (&[]).into(),
                 },
             ))?),
             // XXX Geneve uses the UDP source port as a flow label
@@ -400,7 +369,18 @@ impl StaticAction for EncapAction {
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,
                     entropy: flow_id.crc32() as u16,
-                    // TODO: VALIDATE VALIDATE VALIDATE
+                    // Allocate space in which we can include the TCP MSS, when
+                    // needed during MSS boosting. It's theoretically doable to
+                    // gate this on seeing an unexpectedly high/low MSS option
+                    // in the TCP handshake, but there are problems in doing so:
+                    // * The MSS for the flow is negotiated, but the UFT entry
+                    //   containing this transform does not know the other side.
+                    // * UFT invalidation means we may rerun this transform in
+                    //   the middle of a flow.
+                    // So, emit it unconditionally for VPC-internal TCP traffic,
+                    // which could need the original MSS to be carried when LSO
+                    // is in use.
+                    // TODO: VALIDATE VALIDATE VALIDATE with SIDECAR
                     options: if pkt_meta.is_inner_tcp() && is_internal {
                         Cow::Borrowed(core::slice::from_ref(
                             &GENEVE_MSS_SIZE_OPT,

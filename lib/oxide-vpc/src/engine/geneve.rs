@@ -57,6 +57,7 @@ impl<B: ByteSlice> ValidOxideOption<B> {
 }
 
 impl<'a> ValidOxideOption<&'a [u8]> {
+    #[inline]
     pub fn from_parts(
         option_type: GeneveOptionType,
         body: &'a [u8],
@@ -86,6 +87,7 @@ impl<'a> TryFrom<&'a ArbitraryGeneveOption>
 {
     type Error = ParseError;
 
+    #[inline]
     fn try_from(value: &'a ArbitraryGeneveOption) -> Result<Self, Self::Error> {
         if value.opt_class != GENEVE_OPT_CLASS_OXIDE {
             return Err(ParseError::Unwanted);
@@ -103,6 +105,7 @@ impl<'a> TryFrom<&'a GeneveOpt>
 {
     type Error = ParseError;
 
+    #[inline]
     fn try_from(value: &'a GeneveOpt) -> Result<Self, Self::Error> {
         if value.class != GENEVE_OPT_CLASS_OXIDE {
             return Err(ParseError::Unwanted);
@@ -117,6 +120,7 @@ impl<'a, 'b: 'a> TryFrom<&'a ValidGeneveOpt<&'b [u8]>>
 {
     type Error = ParseError;
 
+    #[inline]
     fn try_from(
         value: &'a ValidGeneveOpt<&'b [u8]>,
     ) -> Result<Self, Self::Error> {

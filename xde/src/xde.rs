@@ -159,7 +159,6 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
-use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::ptr;
 use core::ptr::NonNull;
@@ -169,18 +168,10 @@ use core::time::Duration;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::*;
-use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveRef;
-use ingot::ip::IpProtocol;
-use ingot::ip::IpV6Ext6564;
-use ingot::ip::IpV6Ext6564Ref;
-use ingot::ip::Ipv6;
-use ingot::ip::ValidLowRentV6Eh;
 use ingot::types::HeaderLen;
-use ingot::types::HeaderParse;
-use ingot::types::util::RepeatedView;
 use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
@@ -220,10 +211,6 @@ use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::IpAddr;
 use opte::engine::ip::v6::Ipv6Addr;
-use opte::engine::ip::v6::Ipv6OptionType;
-use opte::engine::ip::v6::Ipv6Ref;
-use opte::engine::ip::v6::WireIpv6Option;
-use opte::engine::ip::v6::WireIpv6OptionRef;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -257,6 +244,7 @@ use oxide_vpc::engine::VpcParser;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::geneve::GeneveOptionParse;
+use oxide_vpc::engine::geneve::MssInfoRef;
 use oxide_vpc::engine::geneve::ValidOxideOption;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
@@ -2109,46 +2097,27 @@ fn xde_mc_tx_one<'a>(
             let mut flags = offload_req.flags;
             let mss = if mtu_unrestricted {
                 if flags.intersects(MblkOffloadFlags::HW_LSO_FLAGS)
-                    && let Some(my_mss) = u16::try_from(offload_req.mss)
-                        .and_then(NonZeroU16::try_from)
-                        .ok()
+                    && let Some(my_mss) =
+                        NonZeroU32::try_from(offload_req.mss).ok()
                     && tun_meoi
                         .meoi_flags
                         .contains(MacEtherOffloadFlags::FULL_TUN)
-                    && tun_meoi.meoi_l3proto == Ethertype::IPV6.0
-                    && usize::from(tun_meoi.meoi_l3hlen)
-                        == Ipv6::MINIMUM_LENGTH + 8
                 {
                     // OPTE pushes encap in one contiguous block. We know that the
-                    // output format is currently a single option in a single destops
-                    // extension header.
-                    let mss_idx = usize::from(tun_meoi.meoi_l2hlen)
-                        + Ipv6::MINIMUM_LENGTH
-                        + IpV6Ext6564::MINIMUM_LENGTH
-                        + WireIpv6Option::MINIMUM_LENGTH;
-
-                    if let Some(slot) =
-                        out_pkt.get_mut(mss_idx..mss_idx + size_of::<u16>())
-                    {
-                        let slot =
-                            <&mut [u8; size_of::<u16>()]>::try_from(slot)
-                                .expect("size proven above");
-                        *slot = my_mss.get().to_be_bytes();
-                    }
-
-                    // Also place this in the Geneve Opt. We assert that it falls first.
+                    // output format is currently the first option in the geneve options.
                     let mss_idx = usize::from(tun_meoi.meoi_l2hlen)
                         + usize::from(tun_meoi.meoi_l3hlen)
                         + usize::from(tun_meoi.meoi_l4hlen)
                         + Geneve::MINIMUM_LENGTH
                         + GeneveOpt::MINIMUM_LENGTH;
+
                     if let Some(slot) =
                         out_pkt.get_mut(mss_idx..mss_idx + size_of::<u32>())
                     {
                         let slot =
                             <&mut [u8; size_of::<u32>()]>::try_from(slot)
                                 .expect("size proven above");
-                        *slot = offload_req.mss.to_be_bytes();
+                        *slot = my_mss.get().to_be_bytes();
                     }
                 }
 
@@ -2558,77 +2527,31 @@ fn xde_rx_one(
     // This will be set to a nonzero value when TSO has been asked of the
     // source packet.
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp && let Some(ehs) = meta.outer_v6.1.raw() {
+    let recovered_mss = if is_tcp && let Some(opts) = meta.outer_encap.1.raw() {
+        // Geneve opts do not require a parse hint.
         let mut out = None;
-        let mut curr_ty = meta.outer_v6.next_header();
-        for el in ehs.iter(Some(curr_ty)) {
-            let Ok(el) = el else { break };
+        for opt in opts.iter(None) {
+            let Ok(opt) = opt else { break };
+            let opt =
+                match GeneveOptionParse::<ValidOxideOption<_>, _>::try_from(
+                    &opt,
+                ) {
+                    Ok(GeneveOptionParse {
+                        option: ValidOxideOption::Mss(el),
+                        ..
+                    }) => el,
+                    Ok(_) | Err(ingot::types::ParseError::Unwanted) => continue,
+                    // Parsing error, rather than unknown type.
+                    Err(_) => break,
+                };
 
-            curr_ty = match el {
-                ValidLowRentV6Eh::IpV6Ext6564(ext)
-                    if curr_ty == IpProtocol::IPV6_DEST_OPTS =>
-                {
-                    let ext_data = ext.data_ref();
-                    let Ok((opts, ..)) =
-                        RepeatedView::<&[u8], WireIpv6Option>::parse(
-                            ext_data.as_ref(),
-                        )
-                    else {
-                        break;
-                    };
-                    for opt in opts.iter(None) {
-                        let Ok(opt) = opt else { break };
-                        let opt_data = opt.data_ref();
-                        let opt_data = opt_data.as_ref();
-                        if opt.opt_type() == Ipv6OptionType::EXPERIMENT_0
-                            && opt_data.len() == 2
-                        {
-                            out = NonZeroU16::try_from(u16::from_be_bytes([
-                                opt_data[0],
-                                opt_data[1],
-                            ]))
-                            .ok();
-                            break;
-                        }
-                    }
-                    break;
-                }
-                ValidLowRentV6Eh::IpV6Ext6564(ext) => ext.0.next_header,
-                ValidLowRentV6Eh::IpV6ExtFragment(fragment) => {
-                    fragment.0.next_header
-                }
-            };
+            out = NonZeroU32::new(opt.mss());
+            break;
         }
         out
     } else {
         None
     };
-
-    // Make sure we're doing it right both ways, for testing purposes.
-    if let Some(mss) = recovered_mss {
-        for el in
-            meta.outer_encap.1.raw().expect("guaranteed borrowed").iter(None)
-        {
-            let Ok(el) = el else { break };
-            let el = match GeneveOptionParse::<ValidOxideOption<_>, _>::try_from(
-                &el,
-            ) {
-                Ok(GeneveOptionParse {
-                    option: ValidOxideOption::Mss(el),
-                    ..
-                }) => el,
-                Ok(_) | Err(ingot::types::ParseError::Unwanted) => continue,
-                // Parsing error, rather than unknown type.
-                Err(_) => break,
-            };
-
-            assert_eq!(
-                u32::from(mss.get()),
-                el.0.mss.get(),
-                "must be writing same MSS in both slots"
-            );
-        }
-    }
 
     // We are in passthrough mode, skip OPTE processing.
     if dev.passthrough {
@@ -2657,12 +2580,9 @@ fn xde_rx_one(
             if let Some(mss) = recovered_mss
                 // The last segment could be smaller than the original MSS as
                 // well, which we should catch.
-                && pay_len > usize::from(mss.get())
+                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
             {
-                npkt.request_offload(
-                    MblkOffloadFlags::HW_LSO,
-                    u32::from(mss.get()),
-                );
+                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
             }
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
