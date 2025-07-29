@@ -145,14 +145,18 @@ pub struct MulticastInfo {
     rsvd: u30be,
 }
 
-#[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 #[repr(u8)]
 pub enum Replication {
+    /// Replicate packets to ports set for external multicast traffic.
     #[default]
-    None = 0,
-    Internal,
-    External,
+    External = 0x00,
+    /// Replicate packets to ports set for underlay multicast traffic.
+    Underlay,
+    /// Replicate packets to ports set for underlay and external multicast
+    /// traffic (bifurcated).
     All,
+    Reserved,
 }
 
 impl NetworkRepr<u2> for Replication {
@@ -163,10 +167,10 @@ impl NetworkRepr<u2> for Replication {
     #[inline]
     fn from_network(val: u8) -> Self {
         match val {
-            0 => Replication::None,
-            1 => Replication::Internal,
-            2 => Replication::External,
-            3 => Replication::All,
+            0 => Replication::External,
+            1 => Replication::Underlay,
+            2 => Replication::All,
+            3 => Replication::Reserved,
             _ => panic!("outside bounds of u2"),
         }
     }
