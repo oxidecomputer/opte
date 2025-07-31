@@ -6,14 +6,18 @@
 
 //! Geneve option types specific to the Oxide VPC dataplane.
 
+use ingot::geneve::GeneveFlags;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptRef;
+use ingot::geneve::GeneveRef;
+use ingot::geneve::ValidGeneve;
 use ingot::geneve::ValidGeneveOpt;
 use ingot::types::HeaderParse;
 use ingot::types::NetworkRepr;
 use ingot::types::ParseError;
 use opte::engine::geneve::ArbitraryGeneveOption;
 use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
+use opte::engine::packet::ParseError as PktParseError;
 use opte::ingot::Ingot;
 use opte::ingot::geneve::GeneveOptionType;
 use opte::ingot::types::primitives::*;
@@ -180,4 +184,296 @@ impl NetworkRepr<u2> for Replication {
 #[ingot(impl_default)]
 pub struct MssInfo {
     pub mss: u32be,
+}
+
+/// Assert that any critical options attached to a packet are understood
+/// in this version of the Oxide VPC dataplane.
+#[inline]
+pub fn validate_options<V: ByteSlice>(
+    pkt: &ValidGeneve<V>,
+) -> Result<(), PktParseError> {
+    if pkt.flags().contains(GeneveFlags::CRITICAL_OPTS) {
+        match pkt.options_ref() {
+            ingot::types::FieldRef::Repr(g) => {
+                for opt in g.iter() {
+                    if !opt.option_type.is_critical() {
+                        continue;
+                    }
+
+                    GeneveOptionParse::try_from(opt)
+                        .map_err(|_| ())
+                        .and_then(|v| match v.option {
+                            ValidOxideOption::Unknown(a) if a.is_critical() => {
+                                Err(())
+                            }
+                            _ => Ok(()),
+                        })
+                        .map_err(|_| PktParseError::UnrecognisedTunnelOpt {
+                            class: opt.class,
+                            ty: opt.option_type.0,
+                        })?;
+                }
+            }
+            ingot::types::FieldRef::Raw(g) => {
+                for opt in g.iter(None) {
+                    let Ok(opt) = opt else {
+                        break;
+                    };
+
+                    if !opt.option_type().is_critical() {
+                        continue;
+                    }
+
+                    GeneveOptionParse::try_from(&opt)
+                        .map_err(|_| ())
+                        .and_then(|v| match v.option {
+                            ValidOxideOption::Unknown(a) if a.is_critical() => {
+                                Err(())
+                            }
+                            _ => Ok(()),
+                        })
+                        .map_err(|_| PktParseError::UnrecognisedTunnelOpt {
+                            class: opt.class(),
+                            ty: opt.option_type().0,
+                        })?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
+    pkt: &ValidGeneve<V>,
+) -> bool {
+    let mut out = false;
+
+    match pkt.options_ref() {
+        ingot::types::FieldRef::Repr(g) => {
+            for opt in g.iter() {
+                out = matches!(
+                    GeneveOptionParse::try_from(opt),
+                    Ok(GeneveOptionParse {
+                        option: ValidOxideOption::External,
+                        ..
+                    })
+                );
+                if out {
+                    break;
+                }
+            }
+        }
+        ingot::types::FieldRef::Raw(g) => {
+            for opt in g.iter(None) {
+                let Ok(opt) = opt else {
+                    break;
+                };
+
+                out = matches!(
+                    GeneveOptionParse::try_from(&opt),
+                    Ok(GeneveOptionParse {
+                        option: ValidOxideOption::External,
+                        ..
+                    })
+                );
+                if out {
+                    break;
+                }
+            }
+        }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use ingot::types::HeaderParse;
+    use ingot::udp::ValidUdp;
+
+    #[test]
+    fn parse_single_opt() {
+        // Create a packet with one extension header.
+        #[rustfmt::skip]
+        let buf = [
+            // source
+            0x1E, 0x61,
+            // dest
+            0x17, 0xC1,
+            // length
+            0x00, 0x14,
+            // csum
+            0x00, 0x00,
+            // ver + opt len
+            0x01,
+            // flags
+            0x00,
+            // proto
+            0x65, 0x58,
+            // vni + reserved
+            0x00, 0x04, 0xD2, 0x00,
+
+            // option class
+            0x01, 0x29,
+            // crt + type
+            0x00,
+            // rsvd + len
+            0x00,
+        ];
+
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        opte::engine::geneve::validate_geneve(&geneve).unwrap();
+        validate_options(&geneve).unwrap();
+
+        assert!(valid_geneve_has_oxide_external(&geneve));
+    }
+
+    #[test]
+    fn unknown_crit_option_fails() {
+        // Create a packet with one extension header with the critical
+        // flag set.
+        // We do not unsdertand this extension, so must drop the packet.
+        #[rustfmt::skip]
+        let buf = [
+            // source
+            0x1E, 0x61,
+            // dest
+            0x17, 0xC1,
+            // length
+            0x00, 0x14,
+            // csum
+            0x00, 0x00,
+            // ver + opt len
+            0x01,
+            // flags
+            0b0100_0000,
+            // proto
+            0x65, 0x58,
+            // vni + reserved
+            0x00, 0x04, 0xD2, 0x00,
+
+            // experimenter option class
+            0xff, 0xff,
+            // crt + type
+            0x80,
+            // rsvd + len
+            0x00,
+        ];
+
+        let (_udp, _, rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        assert!(matches!(
+            validate_options(&geneve),
+            Err(PktParseError::UnrecognisedTunnelOpt {
+                class: 0xffff,
+                ty: 0x80
+            }),
+        ));
+
+        // This should also apply on classes we *do* know.
+        #[rustfmt::skip]
+        let buf = [
+            // source
+            0x1E, 0x61,
+            // dest
+            0x17, 0xC1,
+            // length
+            0x00, 0x14,
+            // csum
+            0x00, 0x00,
+            // ver + opt len
+            0x01,
+            // flags
+            0b0100_0000,
+            // proto
+            0x65, 0x58,
+            // vni + reserved
+            0x00, 0x04, 0xD2, 0x00,
+
+            // experimenter option class
+            0x01, 0x29,
+            // crt + type
+            0x80,
+            // rsvd + len
+            0x00,
+        ];
+
+        let (_udp, _, rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        assert!(matches!(
+            validate_options(&geneve),
+            Err(PktParseError::UnrecognisedTunnelOpt {
+                class: GENEVE_OPT_CLASS_OXIDE,
+                ty: 0x80
+            }),
+        ));
+    }
+
+    #[test]
+    fn parse_multi_opt() {
+        // Create a packet with three extension headers.
+        // None are critical, so the fact that we
+        // We should also be able to extract info on the options we *do*
+        // care about.
+        #[rustfmt::skip]
+        let buf = [
+            // source
+            0x1E, 0x61,
+            // dest
+            0x17, 0xC1,
+            // length
+            0x00, 0x1c,
+            // csum
+            0x00, 0x00,
+            // ver + opt len
+            0x05,
+            // flags
+            0x00,
+            // proto
+            0x65, 0x58,
+            // vni + reserved
+            0x00, 0x04, 0xD2, 0x00,
+
+            // option class
+            0x01, 0x29,
+            // crt + type
+            0x00,
+            // rsvd + len
+            0x00,
+
+            // experimenter option class
+            0xff, 0xff,
+            // crt + type
+            0x05,
+            // rsvd + len
+            0x01,
+            // body
+            0x00, 0x00, 0x00, 0x00,
+
+            // experimenter option class
+            0xff, 0xff,
+            // crt + type
+            0x06,
+            // rsvd + len
+            0x01,
+            // body
+            0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        opte::engine::geneve::validate_geneve(&geneve).unwrap();
+        validate_options(&geneve).unwrap();
+        assert!(valid_geneve_has_oxide_external(&geneve));
+
+        assert_eq!(geneve.1.raw().unwrap().iter(None).count(), 3);
+    }
 }
