@@ -204,12 +204,12 @@ impl fmt::Display for EncapAction {
 }
 
 impl StaticAction for EncapAction {
-    fn gen_ht<'a, 'b: 'a>(
+    fn gen_ht(
         &self,
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        pkt_meta: &'a MblkPacketData<'b>,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -425,12 +425,12 @@ impl fmt::Display for DecapAction {
 pub const ACTION_META_VNI: &str = "vni";
 
 impl StaticAction for DecapAction {
-    fn gen_ht<'a, 'b: 'a>(
+    fn gen_ht(
         &self,
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &'a MblkPacketData<'b>,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let mut is_external = false;
