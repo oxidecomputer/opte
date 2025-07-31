@@ -278,11 +278,11 @@ impl Display for Identity {
 }
 
 impl StaticAction for Identity {
-    fn gen_ht(
+    fn gen_ht<'a, 'b: 'a>(
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        _pkt_meta: &'a MblkPacketData<'b>,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform::identity(&self.name)))
@@ -773,11 +773,11 @@ pub enum GenHtError {
 pub type GenHtResult = ActionResult<HdrTransform, GenHtError>;
 
 pub trait StaticAction: Display {
-    fn gen_ht(
+    fn gen_ht<'a, 'b: 'a>(
         &self,
         dir: Direction,
         flow_id: &InnerFlowId,
-        packet_meta: &MblkPacketData,
+        packet_meta: &'a MblkPacketData<'b>,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult;
 

@@ -139,11 +139,11 @@ impl fmt::Display for RewriteSrcMac {
 }
 
 impl StaticAction for RewriteSrcMac {
-    fn gen_ht(
+    fn gen_ht<'a, 'b: 'a>(
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _packet_meta: &MblkPacketData,
+        _packet_meta: &'a MblkPacketData<'b>,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {

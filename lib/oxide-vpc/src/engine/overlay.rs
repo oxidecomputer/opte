@@ -7,6 +7,7 @@
 //! The Oxide Network VPC Overlay.
 //!
 //! This implements the Oxide Network VPC Overlay.
+use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
@@ -16,7 +17,6 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
-use crate::engine::geneve::GeneveOptionParse;
 use crate::engine::geneve::OxideOptionType;
 use crate::engine::geneve::ValidOxideOption;
 use alloc::borrow::Cow;
@@ -204,12 +204,12 @@ impl fmt::Display for EncapAction {
 }
 
 impl StaticAction for EncapAction {
-    fn gen_ht(
+    fn gen_ht<'a, 'b: 'a>(
         &self,
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        pkt_meta: &'a MblkPacketData<'b>,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -425,12 +425,12 @@ impl fmt::Display for DecapAction {
 pub const ACTION_META_VNI: &str = "vni";
 
 impl StaticAction for DecapAction {
-    fn gen_ht(
+    fn gen_ht<'a, 'b: 'a>(
         &self,
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        pkt_meta: &'a MblkPacketData<'b>,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let mut is_external = false;
@@ -438,55 +438,16 @@ impl StaticAction for DecapAction {
         // XXX: Find a way to make this a nice `iter` of `GeneveOptionParse`s.
         let vni = match pkt_meta.outer_geneve() {
             Some(g) => {
-                match g {
-                    opte::ingot::types::InlineHeader::Repr(g) => {
-                        for opt in g.options.iter() {
-                            let opt = match GeneveOptionParse::try_from(opt) {
-                                Ok(GeneveOptionParse { option, .. }) => option,
-                                Err(_) => continue,
-                            };
-
-                            if let ValidOxideOption::External = opt {
-                                is_external = true;
-                            }
-                        }
+                let vni = g.vni();
+                for opt in OxideOptions::from_meta(g) {
+                    let Ok(opt) = opt else { break };
+                    if let Some(ValidOxideOption::External) = opt.option.known()
+                    {
+                        is_external = true;
+                        break;
                     }
-                    opte::ingot::types::InlineHeader::Raw(g) => match &g.1.1 {
-                        ingot::types::BoxedHeader::Repr(r) => {
-                            for opt in r.iter() {
-                                let opt = match GeneveOptionParse::try_from(opt)
-                                {
-                                    Ok(GeneveOptionParse {
-                                        option, ..
-                                    }) => option,
-                                    Err(_) => continue,
-                                };
-
-                                if let ValidOxideOption::External = opt {
-                                    is_external = true;
-                                }
-                            }
-                        }
-                        ingot::types::BoxedHeader::Raw(r) => {
-                            for opt in r.iter(None) {
-                                let Ok(opt) = opt else { continue };
-                                let opt =
-                                    match GeneveOptionParse::try_from(&opt) {
-                                        Ok(GeneveOptionParse {
-                                            option,
-                                            ..
-                                        }) => option,
-                                        Err(_) => continue,
-                                    };
-
-                                if let ValidOxideOption::External = opt {
-                                    is_external = true;
-                                }
-                            }
-                        }
-                    },
                 }
-                g.vni()
+                vni
             }
             // This should be impossible. Non-encapsulated traffic
             // should never make it here if the mac flow subsystem is

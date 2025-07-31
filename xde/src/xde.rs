@@ -243,8 +243,8 @@ use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
-use oxide_vpc::engine::geneve::GeneveOptionParse;
 use oxide_vpc::engine::geneve::MssInfoRef;
+use oxide_vpc::engine::geneve::OxideOptions;
 use oxide_vpc::engine::geneve::ValidOxideOption;
 use oxide_vpc::engine::nat;
 use oxide_vpc::engine::overlay;
@@ -2527,26 +2527,15 @@ fn xde_rx_one(
     // This will be set to a nonzero value when TSO has been asked of the
     // source packet.
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp && let Some(opts) = meta.outer_encap.1.raw() {
+    let recovered_mss = if is_tcp {
         // Geneve opts do not require a parse hint.
         let mut out = None;
-        for opt in opts.iter(None) {
+        for opt in OxideOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
-            let opt =
-                match GeneveOptionParse::<ValidOxideOption<_>, _>::try_from(
-                    &opt,
-                ) {
-                    Ok(GeneveOptionParse {
-                        option: ValidOxideOption::Mss(el),
-                        ..
-                    }) => el,
-                    Ok(_) | Err(ingot::types::ParseError::Unwanted) => continue,
-                    // Parsing error, rather than unknown type.
-                    Err(_) => break,
-                };
-
-            out = NonZeroU32::new(opt.mss());
-            break;
+            if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
+                out = NonZeroU32::new(el.mss());
+                break;
+            }
         }
         out
     } else {
