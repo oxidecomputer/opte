@@ -173,7 +173,7 @@ impl Validate for Ipv6Push {
                 });
             }
 
-            total_len += ext.wire_length();
+            total_len += ext.packet_length();
             u16::try_from(total_len).map_err(|_| ValidateErr {
                 msg: "header and extensions longer than 65535B".into(),
                 location: format!("ipv6.exts[{i}]").into(),
@@ -207,7 +207,7 @@ impl Ipv6Extension {
     ///
     /// This method assumes that `self` has been validated.
     pub fn as_repr(&self, next_header: IpProtocol) -> LowRentV6EhRepr {
-        let total = self.wire_length();
+        let total = self.packet_length();
         let body_len = total - LowRentV6EhRepr::MINIMUM_LENGTH;
         let mut data = Vec::with_capacity(body_len);
 
@@ -257,14 +257,18 @@ impl Ipv6Extension {
 
         LowRentV6EhRepr::IpV6Ext6564(IpV6Ext6564 { next_header, ext_len, data })
     }
+}
 
-    pub fn wire_length(&self) -> usize {
+impl HeaderLen for Ipv6Extension {
+    const MINIMUM_LENGTH: usize = IpV6Ext6564::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
         match self {
             Self::DestinationOpts(opts) | Self::HopByHopOpts(opts) => {
                 // Serialisation pads each option list at the end
                 // to form an 8B boundary.
-                let unpadded = IpV6Ext6564::MINIMUM_LENGTH
-                    + opts.iter().map(|v| v.wire_length()).sum::<usize>();
+                let unpadded = Self::MINIMUM_LENGTH
+                    + opts.iter().map(|v| v.packet_length()).sum::<usize>();
                 let remainder = unpadded % 8;
 
                 if remainder == 0 { unpadded } else { unpadded + 8 - remainder }
@@ -293,7 +297,7 @@ impl Validate for Ipv6Extension {
         // u8 tracks len in 8B blocks *after the first*.
         // Hence, max 256 8-octet blocks.
         static MAX_EH_LEN: usize = 256 * 8;
-        let my_len = self.wire_length();
+        let my_len = self.packet_length();
 
         if my_len > MAX_EH_LEN {
             return Err(ValidateErr {
@@ -377,12 +381,14 @@ pub struct Ipv6Option {
     pub data: Cow<'static, [u8]>,
 }
 
-impl Ipv6Option {
-    pub fn wire_length(&self) -> usize {
+impl HeaderLen for Ipv6Option {
+    const MINIMUM_LENGTH: usize = WireIpv6Option::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
         if self.opt_type == Ipv6OptionType::PAD_1 {
             size_of::<Ipv6OptionType>()
         } else {
-            self.data.len() + WireIpv6Option::MINIMUM_LENGTH
+            self.data.len() + Self::MINIMUM_LENGTH
         }
     }
 }
@@ -871,14 +877,14 @@ pub(crate) mod test {
             data: vec![].into(),
         };
         assert!(opt.validate().is_ok());
-        assert_eq!(opt.wire_length(), 2);
+        assert_eq!(opt.packet_length(), 2);
 
         let opt = Ipv6Option {
             opt_type: Ipv6OptionType::EXPERIMENT_0,
             data: vec![0xff; 255].into(),
         };
         assert!(opt.validate().is_ok());
-        assert_eq!(opt.wire_length(), 257);
+        assert_eq!(opt.packet_length(), 257);
 
         // An overlong option will be marked invalid, but we should still
         // report an accurate wire length.
@@ -887,13 +893,13 @@ pub(crate) mod test {
             data: vec![0xff; 256].into(),
         };
         assert!(bad_opt.validate().is_err());
-        assert_eq!(bad_opt.wire_length(), 258);
+        assert_eq!(bad_opt.packet_length(), 258);
 
         // The PAD1 option is special, and contains no data or length.
         let pad =
             Ipv6Option { opt_type: Ipv6OptionType::PAD_1, data: vec![].into() };
         assert!(pad.validate().is_ok());
-        assert_eq!(pad.wire_length(), 1);
+        assert_eq!(pad.packet_length(), 1);
 
         assert!(
             Ipv6Option {
@@ -918,7 +924,7 @@ pub(crate) mod test {
             // An empty option list is possible, and should serialise to
             // just contain padding bytes.
             let ext = f(options.clone().into());
-            assert_eq!(ext.wire_length(), 8, "{label}");
+            assert_eq!(ext.packet_length(), 8, "{label}");
             match ext.as_repr(IngotIpProtocol::TCP) {
                 LowRentV6EhRepr::IpV6Ext6564(e) => {
                     assert_eq!(
@@ -948,7 +954,7 @@ pub(crate) mod test {
                 data: vec![0x01; 3].into(),
             });
             let ext = f(options.clone().into());
-            assert_eq!(ext.wire_length(), 8, "{label}");
+            assert_eq!(ext.packet_length(), 8, "{label}");
             match ext.as_repr(IngotIpProtocol::TCP) {
                 LowRentV6EhRepr::IpV6Ext6564(e) => {
                     assert_eq!(
@@ -972,7 +978,7 @@ pub(crate) mod test {
             }
 
             // Pushing an oversize option should fail with a valid source (see above),
-            // as should pushing more options than an EH can admit (2048B wire_length total).
+            // as should pushing more options than an EH can admit (2048B packet_length total).
             let ext = f(vec![Ipv6Option {
                 opt_type: Ipv6OptionType::EXPERIMENT_1,
                 data: vec![0x22; 1024].into(),
