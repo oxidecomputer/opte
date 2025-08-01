@@ -7,6 +7,7 @@
 //! The Oxide Network VPC Overlay.
 //!
 //! This implements the Oxide Network VPC Overlay.
+use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
@@ -16,6 +17,9 @@ use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
 use crate::cfg::VpcCfg;
+use crate::engine::geneve::OxideOptionType;
+use crate::engine::geneve::ValidOxideOption;
+use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
@@ -33,6 +37,9 @@ use opte::ddi::sync::KRwLock;
 use opte::engine::ether::EtherMeta;
 use opte::engine::ether::EtherMod;
 use opte::engine::ether::EtherType;
+use opte::engine::geneve::ArbitraryGeneveOption;
+use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
+use opte::engine::geneve::GeneveMetaRef;
 use opte::engine::geneve::GenevePush;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapPush;
@@ -40,6 +47,7 @@ use opte::engine::headers::HeaderAction;
 use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::headers::IpPush;
+use opte::engine::headers::Valid;
 use opte::engine::ip::v4::Protocol;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
@@ -201,7 +209,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        _pkt_meta: &MblkPacketData,
+        pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -314,19 +322,33 @@ impl StaticAction for EncapAction {
         };
         action_meta.set_internal_target(is_internal);
 
+        static GENEVE_MSS_SIZE_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
+        static GENEVE_MSS_SIZE_OPT: ArbitraryGeneveOption =
+            ArbitraryGeneveOption {
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: OxideOptionType::Mss as u8,
+                data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
+            };
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
-            outer_ether: HeaderAction::Push(EtherMeta {
-                src: MacAddr::ZERO,
-                dst: MacAddr::ZERO,
-                ether_type: EtherType::Ipv6,
-            }),
-            outer_ip: HeaderAction::Push(IpPush::from(Ipv6Push {
-                src: self.phys_ip_src,
-                dst: phys_target.ip,
-                proto: Protocol::UDP,
-            })),
+            outer_ether: HeaderAction::Push(
+                Valid::validated(EtherMeta {
+                    src: MacAddr::ZERO,
+                    dst: MacAddr::ZERO,
+                    ether_type: EtherType::Ipv6,
+                })
+                .expect("Ethernet validation is infallible"),
+            ),
+            outer_ip: HeaderAction::Push(Valid::validated(IpPush::from(
+                Ipv6Push {
+                    src: self.phys_ip_src,
+                    dst: phys_target.ip,
+                    proto: Protocol::UDP,
+                    exts: Cow::Borrowed(&[]),
+                },
+            ))?),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -343,10 +365,30 @@ impl StaticAction for EncapAction {
             // It's worth keeping in mind that Chelsio's RSS picks us a ring
             // based on Toeplitz hash of the 5-tuple, so we need to write into
             // there regardless. I don't believe it *looks* at v6 flowid.
-            outer_encap: HeaderAction::Push(EncapPush::from(GenevePush {
-                vni: phys_target.vni,
-                entropy: flow_id.crc32() as u16,
-            })),
+            outer_encap: HeaderAction::Push(Valid::validated(
+                EncapPush::from(GenevePush {
+                    vni: phys_target.vni,
+                    entropy: flow_id.crc32() as u16,
+                    // Allocate space in which we can include the TCP MSS, when
+                    // needed during MSS boosting. It's theoretically doable to
+                    // gate this on seeing an unexpectedly high/low MSS option
+                    // in the TCP handshake, but there are problems in doing so:
+                    // * The MSS for the flow is negotiated, but the UFT entry
+                    //   containing this transform does not know the other side.
+                    // * UFT invalidation means we may rerun this transform in
+                    //   the middle of a flow.
+                    // So, emit it unconditionally for VPC-internal TCP traffic,
+                    // which could need the original MSS to be carried when LSO
+                    // is in use.
+                    options: if pkt_meta.is_inner_tcp() && is_internal {
+                        Cow::Borrowed(core::slice::from_ref(
+                            &GENEVE_MSS_SIZE_OPT,
+                        ))
+                    } else {
+                        Cow::Borrowed(&[])
+                    },
+                }),
+            )?),
             inner_ether: HeaderAction::Modify(EtherMod {
                 dst: Some(phys_target.ether),
                 ..Default::default()
@@ -390,20 +432,21 @@ impl StaticAction for DecapAction {
         pkt_meta: &MblkPacketData,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
-        match pkt_meta.outer_encap_geneve_vni_and_origin() {
-            Some((vni, oxide_external_pkt)) => {
-                // We only conditionally add this metadata because the
-                // `Address::VNI` filter uses it to select VPC-originated
-                // traffic.
-                // External packets carry an extra Geneve tag from the
-                // switch during NAT -- if found, `oxide_external_packet`
-                // is filled.
-                if !oxide_external_pkt {
-                    action_meta
-                        .insert(ACTION_META_VNI.to_string(), vni.to_string());
-                }
-            }
+        let mut is_external = false;
 
+        let vni = match pkt_meta.outer_geneve() {
+            Some(g) => {
+                let vni = g.vni();
+                for opt in OxideOptions::from_meta(g) {
+                    let Ok(opt) = opt else { break };
+                    if let Some(ValidOxideOption::External) = opt.option.known()
+                    {
+                        is_external = true;
+                        break;
+                    }
+                }
+                vni
+            }
             // This should be impossible. Non-encapsulated traffic
             // should never make it here if the mac flow subsystem is
             // doing its job. However, we take a defensive approach
@@ -413,6 +456,16 @@ impl StaticAction for DecapAction {
                     msg: "no encap header found".to_string(),
                 });
             }
+        };
+
+        // We only conditionally add this metadata because the
+        // `Address::VNI` filter uses it to select VPC-originated
+        // traffic.
+        // External packets carry an extra Geneve tag from the
+        // switch during NAT -- if found, `oxide_external_packet`
+        // is filled.
+        if !is_external {
+            action_meta.insert(ACTION_META_VNI.to_string(), vni.to_string());
         }
 
         Ok(AllowOrDeny::Allow(HdrTransform {

@@ -7,6 +7,8 @@
 //! IPv4 headers.
 
 use crate::engine::checksum::Checksum;
+use crate::engine::headers::Validate;
+use crate::engine::headers::ValidateErr;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
 use crate::engine::predicate::MatchExact;
@@ -185,6 +187,13 @@ pub struct Ipv4Push {
     pub src: Ipv4Addr,
     pub dst: Ipv4Addr,
     pub proto: Protocol,
+}
+
+impl Validate for Ipv4Push {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // We do not yet define/support pushing any IPv4 options.
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

@@ -1485,6 +1485,7 @@ dependencies = [
  "cfg-if",
  "ctor",
  "illumos-sys-hdrs",
+ "ingot",
  "opte",
  "opte-test-utils",
  "pcap-parser",

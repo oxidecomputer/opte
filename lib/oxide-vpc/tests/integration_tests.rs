@@ -396,12 +396,11 @@ fn gateway_icmp4_ping() {
     // the VpcParser since it would expect any inbound packet to be
     // encapsulated.
     pcap.add_pkt(&hp);
-    // let reply = hp.parse(In, GenericUlp {}).unwrap();
     let reply = parse_inbound(&mut hp, GenericUlp {}).unwrap().to_full_meta();
     let meta = reply.meta();
     assert!(meta.outer_ether().is_none());
     assert!(meta.outer_ip().is_none());
-    assert!(meta.outer_encap_geneve_vni_and_origin().is_none());
+    assert!(meta.outer_encap_vni().is_none());
 
     let eth = meta.inner_ether();
     assert_eq!(eth.source(), g1_cfg.gateway_mac);
@@ -3475,7 +3474,6 @@ fn tcp_outbound() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    // let now = Moment::now();
 
     // Add default route.
     router::add_entry(

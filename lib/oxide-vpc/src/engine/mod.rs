@@ -2,18 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2025 Oxide Computer Company
 
 pub mod firewall;
 pub mod gateway;
+pub mod geneve;
 pub mod nat;
 pub mod overlay;
 pub mod router;
 
 use crate::cfg::VpcCfg;
+use core::ops::Deref;
 use opte::engine::Direction;
 use opte::engine::HdlPktAction;
 use opte::engine::HdlPktError;
+use opte::engine::LightweightMeta;
 use opte::engine::NetworkImpl;
 use opte::engine::NetworkParser;
 use opte::engine::arp;
@@ -21,22 +24,26 @@ use opte::engine::arp::ARP_HTYPE_ETHERNET;
 use opte::engine::arp::ArpEthIpv4Ref;
 use opte::engine::arp::ArpOp;
 use opte::engine::arp::ValidArpEthIpv4;
+use opte::engine::checksum::Checksum;
 use opte::engine::ether::EthernetRef;
 use opte::engine::flow_table::FlowTable;
 use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::packet::FullParsed;
 use opte::engine::packet::InnerFlowId;
+use opte::engine::packet::OpteMeta;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
 use opte::engine::packet::Pullup;
 use opte::engine::parse::ValidGeneveOverV6;
 use opte::engine::parse::ValidNoEncap;
 use opte::engine::port::UftEntry;
+use opte::engine::rule::CompiledTransform;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::types::HeaderParse;
 use opte::ingot::types::IntoBufPointer;
 use opte::ingot::types::Parsed as IngotParsed;
 use opte::ingot::types::Read;
+use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -119,7 +126,7 @@ impl NetworkImpl for VpcNetwork {
 }
 
 impl NetworkParser for VpcParser {
-    type InMeta<T: ByteSliceMut> = ValidGeneveOverV6<T>;
+    type InMeta<T: ByteSliceMut> = OxideGeneve<T>;
     type OutMeta<T: ByteSliceMut> = ValidNoEncap<T>;
 
     #[inline(always)]
@@ -141,6 +148,69 @@ impl NetworkParser for VpcParser {
     where
         T::Chunk: opte::ingot::types::IntoBufPointer<'a> + ByteSliceMut,
     {
-        Ok(ValidGeneveOverV6::parse_read(rdr)?)
+        let IngotParsed { headers, last_chunk, data } =
+            ValidGeneveOverV6::parse_read(rdr)?;
+
+        Ok(IngotParsed { last_chunk, data, headers: OxideGeneve(headers) })
+    }
+}
+
+#[repr(transparent)]
+pub struct OxideGeneve<T: ByteSlice>(pub ValidGeneveOverV6<T>);
+
+impl<T: ByteSlice> Deref for OxideGeneve<T> {
+    type Target = ValidGeneveOverV6<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: ByteSliceMut> LightweightMeta<T> for OxideGeneve<T> {
+    #[inline]
+    fn run_compiled_transform(&mut self, transform: &CompiledTransform)
+    where
+        T: ByteSliceMut,
+    {
+        self.0.run_compiled_transform(transform);
+    }
+
+    #[inline]
+    fn compute_body_csum(&self) -> Option<Checksum> {
+        self.0.compute_body_csum()
+    }
+
+    #[inline]
+    fn flow(&self) -> InnerFlowId {
+        self.0.flow()
+    }
+
+    #[inline]
+    fn encap_len(&self) -> u16 {
+        self.0.encap_len()
+    }
+
+    #[inline]
+    fn update_inner_checksums(&mut self, body_csum: Option<Checksum>) {
+        self.0.update_inner_checksums(body_csum);
+    }
+
+    #[inline]
+    fn inner_tcp(&self) -> Option<&impl ingot::tcp::TcpRef<T>> {
+        self.0.inner_tcp()
+    }
+
+    #[inline]
+    fn validate(&self, pkt_len: usize) -> Result<(), ParseError> {
+        self.0.validate(pkt_len)?;
+
+        geneve::validate_options(&self.0.outer_encap)
+    }
+}
+
+impl<T: ByteSlice> From<OxideGeneve<T>> for OpteMeta<T> {
+    #[inline]
+    fn from(value: OxideGeneve<T>) -> Self {
+        value.0.into()
     }
 }

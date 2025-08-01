@@ -14,6 +14,7 @@ use super::ether::EthernetPacket;
 use super::ether::EthernetRef;
 use super::ether::ValidEthernet;
 use super::geneve::GENEVE_PORT;
+use super::geneve::ValidGeneveMeta;
 use super::geneve::validate_geneve;
 use super::headers::HasInnerCksum;
 use super::headers::HeaderActionError;
@@ -508,8 +509,7 @@ impl<T: ByteSlice> From<ValidGeneveOverV6<T>> for OpteMeta<T> {
             outer_eth: Some(value.outer_eth.into()),
             outer_l3: Some(L3::Ipv6(value.outer_v6.into())),
             outer_encap: Some(InlineHeader::Raw(ValidEncapMeta::Geneve(
-                value.outer_udp,
-                value.outer_encap,
+                ValidGeneveMeta(value.outer_udp, value.outer_encap),
             ))),
             inner_eth: value.inner_eth.into(),
             inner_l3: Some(value.inner_l3.into()),

@@ -14,7 +14,7 @@ repository.workspace = true
 [features]
 default = ["api", "std"]
 api = ["opte/api"]
-engine = ["api", "opte/engine", "dep:poptrie", "dep:smoltcp"]
+engine = ["api", "opte/engine", "dep:ingot", "dep:poptrie", "dep:smoltcp"]
 kernel = ["opte/kernel"]
 std = ["dep:tabwriter","opte/std"]
 #
@@ -34,6 +34,7 @@ illumos-sys-hdrs.workspace = true
 opte.workspace = true
 
 cfg-if.workspace = true
+ingot = { workspace = true, optional = true }
 poptrie = { workspace = true, optional = true }
 serde.workspace = true
 smoltcp = { workspace = true, optional = true }
