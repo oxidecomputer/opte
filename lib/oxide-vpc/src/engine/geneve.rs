@@ -51,10 +51,11 @@ impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
 
     fn option_type(&self) -> GeneveOptionType {
         match self {
-            Self::External => OxideOptionType::External.into(),
-            Self::Multicast(_) => OxideOptionType::Multicast.into(),
-            Self::Mss(_) => OxideOptionType::Mss.into(),
+            Self::External => OxideOptionType::External,
+            Self::Multicast(_) => OxideOptionType::Multicast,
+            Self::Mss(_) => OxideOptionType::Mss,
         }
+        .into()
     }
 
     fn try_cast(
@@ -65,19 +66,16 @@ impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
     where
         Self: Sized + 'a,
     {
-        if class != GENEVE_OPT_CLASS_OXIDE {
-            return Ok(None);
-        }
-
-        Ok(match ty.0 {
-            n if n == (OxideOptionType::External as u8) => {
+        Ok(match (class, ty.0) {
+            (class, _) if class != GENEVE_OPT_CLASS_OXIDE => None,
+            (_, n) if n == (OxideOptionType::External as u8) => {
                 Some((ValidOxideOption::External, body))
             }
-            n if n == (OxideOptionType::Multicast as u8) => {
+            (_, n) if n == (OxideOptionType::Multicast as u8) => {
                 let (mc, _, tail) = ValidMulticastInfo::parse(body)?;
                 Some((ValidOxideOption::Multicast(mc), tail))
             }
-            n if n == (OxideOptionType::Mss as u8) => {
+            (_, n) if n == (OxideOptionType::Mss as u8) => {
                 let (mss, _, tail) = ValidMssInfo::parse(body)?;
                 Some((ValidOxideOption::Mss(mss), tail))
             }
@@ -255,8 +253,6 @@ mod test {
 
         let (_udp, _, rem) = ValidUdp::parse(&buf[..]).unwrap();
         let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
-
-        eprintln!("{:?}", validate_options(&geneve));
 
         assert!(matches!(
             validate_options(&geneve),

@@ -969,8 +969,8 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                             ingot::types::FieldRef::Repr(v) => v
                                 .iter()
                                 .map(|v| ArbitraryGeneveOption {
-                                    opt_class: v.class,
-                                    opt_type: v.option_type.0,
+                                    option_class: v.class,
+                                    option_type: v.option_type.0,
                                     data: v.data.clone().into(),
                                 })
                                 .collect(),
@@ -978,8 +978,8 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                                 .iter(None)
                                 .map(|v| {
                                     v.map(|opt| ArbitraryGeneveOption {
-                                        opt_class: opt.class(),
-                                        opt_type: opt.option_type().0,
+                                        option_class: opt.class(),
+                                        option_type: opt.option_type().0,
                                         data: opt
                                             .data_ref()
                                             .as_ref()

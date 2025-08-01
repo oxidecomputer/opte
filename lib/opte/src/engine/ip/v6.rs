@@ -269,9 +269,7 @@ impl HeaderLen for Ipv6Extension {
                 // to form an 8B boundary.
                 let unpadded = Self::MINIMUM_LENGTH
                     + opts.iter().map(|v| v.packet_length()).sum::<usize>();
-                let remainder = unpadded % 8;
-
-                if remainder == 0 { unpadded } else { unpadded + 8 - remainder }
+                unpadded.next_multiple_of(8)
             }
         }
     }

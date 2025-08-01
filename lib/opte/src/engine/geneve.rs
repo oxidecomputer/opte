@@ -223,8 +223,8 @@ impl Validate for GenevePush {
     PartialOrd,
 )]
 pub struct ArbitraryGeneveOption {
-    pub opt_class: u16,
-    pub opt_type: u8,
+    pub option_class: u16,
+    pub option_type: u8,
     pub data: Cow<'static, [u8]>,
 }
 
@@ -233,10 +233,7 @@ impl HeaderLen for ArbitraryGeneveOption {
 
     fn packet_length(&self) -> usize {
         // Length is in 4B blocks -- pad to the next boundary.
-        let unpadded = self.data.len();
-        let remainder = unpadded % 4;
-        Self::MINIMUM_LENGTH
-            + if remainder == 0 { unpadded } else { unpadded - remainder + 4 }
+        Self::MINIMUM_LENGTH + self.data.len().next_multiple_of(4)
     }
 }
 
@@ -270,8 +267,8 @@ impl Emit for ArbitraryGeneveOption {
 
         let serialised = (
             GeneveOpt {
-                class: self.opt_class,
-                option_type: self.opt_type.into(),
+                class: self.option_class,
+                option_type: self.option_type.into(),
                 length: u8::try_from(opt_len / 4).unwrap_or(u8::MAX),
                 ..Default::default()
             },
@@ -307,14 +304,7 @@ impl ModifyAction<GeneveMeta> for GeneveMod {
 }
 
 impl GeneveMeta {
-    /// Return the length of headers needed to fully Geneve-encapsulate
-    /// a packet, including UDP.
-    #[inline]
-    pub fn hdr_len(&self) -> usize {
-        Udp::MINIMUM_LENGTH + self.hdr_len_inner()
-    }
-
-    /// Return the length of only the Geneve header.
+    /// Return the length of only the Geneve header and its options.
     #[inline]
     pub fn hdr_len_inner(&self) -> usize {
         Geneve::MINIMUM_LENGTH + self.options_len()
@@ -479,7 +469,11 @@ impl<'a, T: OptionCast<'a>> Iterator for WalkOptions<'a, T> {
             Source::Simplified(ref mut opt_source) => {
                 let (el, rest) = opt_source.split_first()?;
                 *opt_source = rest;
-                (el.opt_class, GeneveOptionType(el.opt_type), el.data.as_ref())
+                (
+                    el.option_class,
+                    GeneveOptionType(el.option_type),
+                    el.data.as_ref(),
+                )
             }
             Source::Owned(ref mut opt_source) => {
                 let (el, rest) = opt_source.split_first()?;
@@ -514,8 +508,8 @@ impl<'a, T: OptionCast<'a>> TryFrom<&'a ArbitraryGeneveOption>
     #[inline]
     fn try_from(value: &'a ArbitraryGeneveOption) -> Result<Self, Self::Error> {
         Self::parse(
-            value.opt_class,
-            GeneveOptionType(value.opt_type),
+            value.option_class,
+            GeneveOptionType(value.option_type),
             value.data.as_ref(),
         )
     }
@@ -568,7 +562,7 @@ mod test {
             ..Default::default()
         };
 
-        let len = geneve.hdr_len();
+        let len = geneve.packet_length();
         let emitted = EncapMeta::Geneve(geneve).to_vec();
         assert_eq!(len, emitted.len());
 
@@ -600,14 +594,14 @@ mod test {
             entropy: 7777,
             vni: Vni::new(1234u32).unwrap(),
             options: vec![ArbitraryGeneveOption {
-                opt_class: GENEVE_OPT_CLASS_OXIDE,
-                opt_type: 0,
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: 0,
                 data: (&[]).into(),
             }]
             .into(),
         };
 
-        let len = geneve.hdr_len();
+        let len = geneve.packet_length();
         let emitted = EncapMeta::Geneve(geneve).to_vec();
         assert_eq!(len, emitted.len());
 

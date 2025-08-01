@@ -2093,7 +2093,7 @@ fn xde_mc_tx_one<'a>(
             // the embedded MSS value / `gso_size` is larger than the agreed-
             // upon MSS for the connection itself.
             //
-            // The Oxide VPC reserves an IPv6EH/Geneve Opt to carry this signal.
+            // The Oxide VPC reserves a Geneve option to carry this signal.
             let mut flags = offload_req.flags;
             let mss = if mtu_unrestricted {
                 if flags.intersects(MblkOffloadFlags::HW_LSO_FLAGS)
@@ -2104,7 +2104,7 @@ fn xde_mc_tx_one<'a>(
                         .contains(MacEtherOffloadFlags::FULL_TUN)
                 {
                     // OPTE pushes encap in one contiguous block. We know that the
-                    // output format is currently the first option in the geneve options.
+                    // output format is currently the first geneve option.
                     let mss_idx = usize::from(tun_meoi.meoi_l2hlen)
                         + usize::from(tun_meoi.meoi_l3hlen)
                         + usize::from(tun_meoi.meoi_l4hlen)
@@ -2528,7 +2528,6 @@ fn xde_rx_one(
     // source packet.
     let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
     let recovered_mss = if is_tcp {
-        // Geneve opts do not require a parse hint.
         let mut out = None;
         for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
@@ -2567,8 +2566,11 @@ fn xde_rx_one(
             // HW_LSO will cause viona to treat this packet as though it were
             // a locally delivered segment making use of LSO.
             if let Some(mss) = recovered_mss
-                // The last segment could be smaller than the original MSS as
-                // well, which we should catch.
+                // This packet could be the last segment of a split frame at
+                // which point it could be smaller than the original MSS.
+                // Don't re-tag the MSS if so, as guests may be confused and
+                // MAC emulation will reject the packet if the guest does not
+                // support GRO.
                 && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
             {
                 npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());

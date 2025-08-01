@@ -325,8 +325,8 @@ impl StaticAction for EncapAction {
         static GENEVE_MSS_SIZE_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
         static GENEVE_MSS_SIZE_OPT: ArbitraryGeneveOption =
             ArbitraryGeneveOption {
-                opt_class: GENEVE_OPT_CLASS_OXIDE,
-                opt_type: OxideOptionType::Mss as u8,
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: OxideOptionType::Mss as u8,
                 data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
             };
 
@@ -346,7 +346,7 @@ impl StaticAction for EncapAction {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
-                    exts: (&[]).into(),
+                    exts: Cow::Borrowed(&[]),
                 },
             ))?),
             // XXX Geneve uses the UDP source port as a flow label
@@ -380,13 +380,12 @@ impl StaticAction for EncapAction {
                     // So, emit it unconditionally for VPC-internal TCP traffic,
                     // which could need the original MSS to be carried when LSO
                     // is in use.
-                    // TODO: VALIDATE VALIDATE VALIDATE with SIDECAR
                     options: if pkt_meta.is_inner_tcp() && is_internal {
                         Cow::Borrowed(core::slice::from_ref(
                             &GENEVE_MSS_SIZE_OPT,
                         ))
                     } else {
-                        (&[]).into()
+                        Cow::Borrowed(&[])
                     },
                 }),
             )?),
@@ -435,7 +434,6 @@ impl StaticAction for DecapAction {
     ) -> GenHtResult {
         let mut is_external = false;
 
-        // XXX: Find a way to make this a nice `iter` of `GeneveOptionParse`s.
         let vni = match pkt_meta.outer_geneve() {
             Some(g) => {
                 let vni = g.vni();

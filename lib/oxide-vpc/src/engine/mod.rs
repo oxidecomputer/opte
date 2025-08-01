@@ -11,9 +11,8 @@ pub mod nat;
 pub mod overlay;
 pub mod router;
 
-use core::ops::Deref;
-
 use crate::cfg::VpcCfg;
+use core::ops::Deref;
 use opte::engine::Direction;
 use opte::engine::HdlPktAction;
 use opte::engine::HdlPktError;
