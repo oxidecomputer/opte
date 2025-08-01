@@ -15,15 +15,21 @@ use super::packet::MismatchError;
 use super::packet::ParseError;
 use crate::engine::headers::ValidateErr;
 use alloc::borrow::Cow;
+use core::marker::PhantomData;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveOpt;
+use ingot::geneve::GeneveOptRef;
+use ingot::geneve::GeneveOptionType;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
+use ingot::geneve::ValidGeneveOpt;
 use ingot::types::Emit;
 use ingot::types::EmitDoesNotRelyOnBufContents;
 use ingot::types::HasView;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
 use ingot::types::InlineHeader;
+use ingot::types::ParseError as IngotParseError;
 use ingot::udp::Udp;
 use ingot::udp::UdpRef;
 use ingot::udp::ValidUdp;
@@ -330,6 +336,201 @@ impl HeaderLen for GeneveMeta {
     #[inline]
     fn packet_length(&self) -> usize {
         Self::MINIMUM_LENGTH + self.options_len()
+    }
+}
+
+pub trait OptionCast<'a> {
+    fn option_class(&self) -> u16;
+    fn option_type(&self) -> GeneveOptionType;
+    fn try_cast(
+        class: u16,
+        ty: GeneveOptionType,
+        body: &'a [u8],
+    ) -> Result<Option<(Self, &'a [u8])>, IngotParseError>
+    where
+        Self: Sized;
+}
+
+pub struct GeneveOptionParse<'a, T: OptionCast<'a>> {
+    pub option: Known<T>,
+    pub body_remainder: &'a [u8],
+}
+
+impl<'a, T: OptionCast<'a>> GeneveOptionParse<'a, T> {
+    pub fn parse(
+        class: u16,
+        ty: GeneveOptionType,
+        body: &'a [u8],
+    ) -> Result<GeneveOptionParse<'a, T>, IngotParseError> {
+        let (option, body_remainder) =
+            if let Some((opt, rem)) = T::try_cast(class, ty, body)? {
+                (Known::Known(opt), rem)
+            } else {
+                (Known::Unknown(class, ty), body)
+            };
+
+        Ok(Self { option, body_remainder })
+    }
+}
+
+pub enum Known<T> {
+    Known(T),
+    Unknown(u16, GeneveOptionType),
+}
+
+impl<'a, T: OptionCast<'a>> Known<T> {
+    pub fn option_class(&self) -> u16 {
+        match self {
+            Known::Known(a) => a.option_class(),
+            Known::Unknown(class, ..) => *class,
+        }
+    }
+
+    pub fn option_type(&self) -> GeneveOptionType {
+        match self {
+            Known::Known(a) => a.option_type(),
+            Known::Unknown(.., ty) => *ty,
+        }
+    }
+
+    pub fn is_unknown_critical(&self) -> bool {
+        match self {
+            Known::Known(..) => false,
+            Known::Unknown(.., ty) => ty.is_critical(),
+        }
+    }
+
+    pub fn known(&self) -> Option<&T> {
+        match self {
+            Known::Known(a) => Some(a),
+            Known::Unknown(..) => None,
+        }
+    }
+
+    pub fn unknown(&self) -> Option<(u16, GeneveOptionType)> {
+        match self {
+            Known::Known(..) => None,
+            Known::Unknown(class, ty) => Some((*class, *ty)),
+        }
+    }
+}
+
+/// Walk all geneve options known
+pub struct OxideOptions<'a, T: OptionCast<'a>>(Source<'a>, PhantomData<T>);
+
+impl<'a, T: OptionCast<'a>> OxideOptions<'a, T> {
+    pub fn from_meta<B: ByteSlice>(
+        meta: InlineHeader<&'a GeneveMeta, &'a ValidGeneveMeta<B>>,
+    ) -> Self {
+        match meta {
+            InlineHeader::Repr(r) => {
+                Self(Source::Simplified(r.options.as_ref()), PhantomData)
+            }
+            InlineHeader::Raw(r) => Self::from_raw(&r.1),
+        }
+    }
+
+    pub fn from_raw<B: ByteSlice>(meta: &'a ValidGeneve<B>) -> Self {
+        match &meta.1 {
+            ingot::types::BoxedHeader::Repr(r) => {
+                Self(Source::Owned(r.as_slice()), PhantomData)
+            }
+            ingot::types::BoxedHeader::Raw(r) => {
+                Self(Source::Raw(r.as_ref()), PhantomData)
+            }
+        }
+    }
+}
+
+enum Source<'a> {
+    Simplified(&'a [ArbitraryGeneveOption]),
+    Owned(&'a [GeneveOpt]),
+    Raw(&'a [u8]),
+}
+
+impl<'a, T: OptionCast<'a>> Iterator for OxideOptions<'a, T> {
+    type Item = Result<GeneveOptionParse<'a, T>, IngotParseError>;
+
+    // This partially reimplements some work from `Repeated/View`, but
+    // formalises the case that a freshly parsed Raw cannot have an owned body.
+    // This needs some special handling to reborrow the slice without Rust
+    // thinking that a new `Header` owns the data instead of the input.
+    fn next(&mut self) -> Option<Self::Item> {
+        let (class, ty, body) = match self.0 {
+            Source::Simplified(ref mut opt_source) => {
+                let (el, rest) = opt_source.split_first()?;
+                *opt_source = rest;
+                (el.opt_class, GeneveOptionType(el.opt_type), el.data.as_ref())
+            }
+            Source::Owned(ref mut opt_source) => {
+                let (el, rest) = opt_source.split_first()?;
+                *opt_source = rest;
+                (el.class, el.option_type, el.data.as_slice())
+            }
+            Source::Raw(ref mut bytes) => {
+                let (class, ty, len) = {
+                    let (opt, ..) = match ValidGeneveOpt::parse(*bytes) {
+                        Ok(opt) => opt,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    (opt.class(), opt.option_type(), opt.packet_length())
+                };
+                let (opt, remainder) = bytes.split_at(len);
+                *bytes = remainder;
+                (class, ty, &opt[GeneveOpt::MINIMUM_LENGTH..])
+            }
+        };
+
+        Some(GeneveOptionParse::parse(class, ty, body))
+    }
+}
+
+// Can't impl TryFrom<T: GeneveOptRef>, sadly.
+impl<'a, T: OptionCast<'a>> TryFrom<&'a ArbitraryGeneveOption>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(value: &'a ArbitraryGeneveOption) -> Result<Self, Self::Error> {
+        Self::parse(
+            value.opt_class,
+            GeneveOptionType(value.opt_type),
+            value.data.as_ref(),
+        )
+    }
+}
+
+impl<'a, T: OptionCast<'a>> TryFrom<&'a GeneveOpt>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(value: &'a GeneveOpt) -> Result<Self, Self::Error> {
+        Self::parse(value.class, value.option_type, value.data.as_slice())
+    }
+}
+
+impl<'a, 'b: 'a, T: OptionCast<'a>> TryFrom<&'a ValidGeneveOpt<&'b [u8]>>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(
+        value: &'a ValidGeneveOpt<&'b [u8]>,
+    ) -> Result<Self, Self::Error> {
+        let class = value.class();
+        let ty = value.option_type();
+
+        let value_data = match &value.1 {
+            ingot::types::BoxedHeader::Repr(r) => r.as_slice(),
+            ingot::types::BoxedHeader::Raw(r) => &r[..],
+        };
+
+        Self::parse(class, ty, value_data)
     }
 }
 

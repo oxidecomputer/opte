@@ -7,7 +7,6 @@
 //! The Oxide Network VPC Overlay.
 //!
 //! This implements the Oxide Network VPC Overlay.
-use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
@@ -41,6 +40,7 @@ use opte::engine::geneve::ArbitraryGeneveOption;
 use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
 use opte::engine::geneve::GeneveMetaRef;
 use opte::engine::geneve::GenevePush;
+use opte::engine::geneve::OxideOptions;
 use opte::engine::geneve::Vni;
 use opte::engine::headers::EncapPush;
 use opte::engine::headers::HeaderAction;
@@ -439,7 +439,7 @@ impl StaticAction for DecapAction {
         let vni = match pkt_meta.outer_geneve() {
             Some(g) => {
                 let vni = g.vni();
-                for opt in OxideOptions::from_meta(g) {
+                for opt in OxideOptions::<ValidOxideOption>::from_meta(g) {
                     let Ok(opt) = opt else { break };
                     if let Some(ValidOxideOption::External) = opt.option.known()
                     {
