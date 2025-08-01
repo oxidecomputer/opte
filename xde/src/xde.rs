@@ -208,8 +208,8 @@ use opte::ddi::time::Periodic;
 use opte::engine::NetworkImpl;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
-use opte::engine::geneve::OxideOptions;
 use opte::engine::geneve::Vni;
+use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
 use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::packet::InnerFlowId;
@@ -2530,7 +2530,7 @@ fn xde_rx_one(
     let recovered_mss = if is_tcp {
         // Geneve opts do not require a parse hint.
         let mut out = None;
-        for opt in OxideOptions::from_raw(&meta.outer_encap) {
+        for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
             if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
                 out = NonZeroU32::new(el.mss());

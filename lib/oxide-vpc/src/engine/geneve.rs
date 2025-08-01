@@ -15,12 +15,14 @@ use ingot::types::NetworkRepr;
 use ingot::types::ParseError;
 use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
 use opte::engine::geneve::OptionCast;
-use opte::engine::geneve::OxideOptions;
+use opte::engine::geneve::WalkOptions;
 use opte::engine::packet::ParseError as PktParseError;
 use opte::ingot::Ingot;
 use opte::ingot::geneve::GeneveOptionType;
 use opte::ingot::types::primitives::*;
 use zerocopy::ByteSlice;
+
+pub type OxideOptions<'a> = WalkOptions<'a, ValidOxideOption<'a>>;
 
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -137,7 +139,7 @@ pub fn validate_options<V: ByteSlice>(
 ) -> Result<(), PktParseError> {
     static LABEL: CRStr = CRStr::new_unchecked("geneve_option\0");
     if pkt.flags().contains(GeneveFlags::CRITICAL_OPTS) {
-        for opt in OxideOptions::<ValidOxideOption>::from_raw(pkt) {
+        for opt in OxideOptions::from_raw(pkt) {
             let opt = opt
                 .map_err(|e| {
                     PktParseError::IngotError(
@@ -163,7 +165,7 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
 ) -> bool {
     let mut out = false;
 
-    for opt in OxideOptions::<ValidOxideOption>::from_raw(pkt) {
+    for opt in OxideOptions::from_raw(pkt) {
         let Ok(opt) = opt else { panic!("malformed extension!") };
         if let Some(ValidOxideOption::External) = opt.option.known() {
             out = true;

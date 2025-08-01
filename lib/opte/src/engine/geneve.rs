@@ -339,18 +339,34 @@ impl HeaderLen for GeneveMeta {
     }
 }
 
+/// A dataplane-specific interpretation of a given Geneve option.
 pub trait OptionCast<'a> {
+    /// Return the Geneve class associated with `self`.
     fn option_class(&self) -> u16;
+
+    /// Return the Geneve type associated with `self`.
     fn option_type(&self) -> GeneveOptionType;
+
+    /// Convert the raw parts of a Geneve option into a valid instance
+    /// of `Self`.
+    ///
+    /// Implementors should return `Some(_)` when the
+    /// `(option_class, option_type)` combination are recognised,
+    /// and `None` otherwise. This allows [`GeneveOptionParse`] to
+    /// classify the option as `Known`/`Unknown`.
     fn try_cast(
-        class: u16,
-        ty: GeneveOptionType,
+        option_class: u16,
+        otion_type: GeneveOptionType,
         body: &'a [u8],
     ) -> Result<Option<(Self, &'a [u8])>, IngotParseError>
     where
         Self: Sized;
 }
 
+/// A successfully parsed Geneve option, alongside any spare bytes in
+/// the payload.
+///
+/// Carries the option body if the inner `option` is `Known::Unknown`.
 pub struct GeneveOptionParse<'a, T: OptionCast<'a>> {
     pub option: Known<T>,
     pub body_remainder: &'a [u8],
@@ -373,6 +389,8 @@ impl<'a, T: OptionCast<'a>> GeneveOptionParse<'a, T> {
     }
 }
 
+/// Marks whather a Geneve option has been successfuly interpreted as a known
+/// variant.
 pub enum Known<T> {
     Known(T),
     Unknown(u16, GeneveOptionType),
@@ -415,10 +433,11 @@ impl<'a, T: OptionCast<'a>> Known<T> {
     }
 }
 
-/// Walk all geneve options known
-pub struct OxideOptions<'a, T: OptionCast<'a>>(Source<'a>, PhantomData<T>);
+/// Walk all geneve options, attempting to cast them to a T when the class
+/// and type are recognised.
+pub struct WalkOptions<'a, T: OptionCast<'a>>(Source<'a>, PhantomData<T>);
 
-impl<'a, T: OptionCast<'a>> OxideOptions<'a, T> {
+impl<'a, T: OptionCast<'a>> WalkOptions<'a, T> {
     pub fn from_meta<B: ByteSlice>(
         meta: InlineHeader<&'a GeneveMeta, &'a ValidGeneveMeta<B>>,
     ) -> Self {
@@ -448,7 +467,7 @@ enum Source<'a> {
     Raw(&'a [u8]),
 }
 
-impl<'a, T: OptionCast<'a>> Iterator for OxideOptions<'a, T> {
+impl<'a, T: OptionCast<'a>> Iterator for WalkOptions<'a, T> {
     type Item = Result<GeneveOptionParse<'a, T>, IngotParseError>;
 
     // This partially reimplements some work from `Repeated/View`, but
