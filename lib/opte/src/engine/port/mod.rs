@@ -14,13 +14,12 @@ use super::flow_table::Dump;
 use super::flow_table::FlowEntry;
 use super::flow_table::FlowTable;
 use super::flow_table::Ttl;
-use super::geneve::GENEVE_PORT;
-use super::headers::EncapPush;
+use super::headers::EncapMeta;
 use super::headers::HeaderAction;
 use super::headers::IpPush;
+use super::headers::SizeHoldingEncap;
 use super::headers::UlpHeaderAction;
 use super::ip::L3Repr;
-use super::ip::v4::Ipv4;
 use super::ip::v6::Ipv6;
 use super::layer;
 use super::layer::Layer;
@@ -42,6 +41,7 @@ use super::rule::CompiledTransform;
 use super::rule::Finalized;
 use super::rule::HdrTransform;
 use super::rule::HdrTransformError;
+use super::rule::PresavedMeoi;
 use super::rule::Rule;
 use super::rule::TransformFlags;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
@@ -66,6 +66,7 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
+use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
@@ -85,13 +86,10 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::SeqCst;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::ethernet::Ethertype;
-use ingot::geneve::Geneve;
-use ingot::ip::IpProtocol;
 use ingot::tcp::TcpRef;
 use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use ingot::types::Read;
-use ingot::udp::Udp;
 use meta::ActionMeta;
 use opte_api::Direction;
 use opte_api::LayerDesc;
@@ -1769,13 +1767,13 @@ impl Transforms {
 
                 // All outer layers must be pushed (or popped/ignored) at the same
                 // time for compilation. No modifications are permissable.
-                fn store_outer_push<P: Copy, M>(
+                fn store_outer_push<P: Clone, M>(
                     tx: &HeaderAction<P, M>,
                     still_permissable: &mut bool,
-                    slot: &mut Option<P>,
+                    slot: &mut Option<Valid<P>>,
                 ) {
                     match tx {
-                        HeaderAction::Push(p) => *slot = Some(*p),
+                        HeaderAction::Push(p) => *slot = Some(p.clone()),
                         HeaderAction::Pop => *slot = None,
                         HeaderAction::Modify(_) => *still_permissable = false,
                         HeaderAction::Ignore => {}
@@ -1837,51 +1835,24 @@ impl Transforms {
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
                     (Some(eth), Some(ip), Some(encap)) => {
-                        let encap_repr = match encap {
-                            EncapPush::Geneve(g) => (
-                                Udp {
-                                    source: g.entropy,
-                                    destination: GENEVE_PORT,
-                                    ..Default::default()
-                                },
-                                Geneve { vni: g.vni, ..Default::default() },
-                            ),
-                        };
+                        let encap = EncapMeta::from(encap.into_inner());
 
                         let eth_repr = Ethernet {
                             destination: eth.dst,
                             source: eth.src,
                             ethertype: Ethertype(eth.ether_type.into()),
                         };
-                        let (ip_repr, l3_extra_bytes, ip_len_offset) = match ip
-                        {
-                            IpPush::Ip4(v4) => (
-                                L3Repr::Ipv4(Ipv4 {
-                                    protocol: IpProtocol(v4.proto.into()),
-                                    source: v4.src,
-                                    destination: v4.dst,
-                                    total_len: Ipv4::MINIMUM_LENGTH as u16,
-                                    ..Default::default()
-                                }),
-                                Ipv4::MINIMUM_LENGTH,
-                                2,
-                            ),
-                            IpPush::Ip6(v6) => (
-                                L3Repr::Ipv6(Ipv6 {
-                                    next_header: IpProtocol(v6.proto.into()),
-                                    source: v6.src,
-                                    destination: v6.dst,
-                                    payload_len: 0,
-                                    ..Default::default()
-                                }),
-                                0,
-                                4,
-                            ),
-                        };
+                        let eth_len = eth_repr.packet_length();
 
-                        let encap_sz = encap_repr.packet_length();
-                        let l3_len_offset =
-                            eth_repr.packet_length() + ip_len_offset;
+                        let ip_repr = L3Repr::from(&ip);
+                        let ip_len = ip_repr.packet_length();
+                        let (ulp, l3_extra_bytes, ip_len_offset) = match &*ip {
+                            IpPush::Ip4(v4) => (v4.proto, ip_len, 2),
+                            IpPush::Ip6(v6) => {
+                                (v6.proto, ip_len - Ipv6::MINIMUM_LENGTH, 4)
+                            }
+                        };
+                        let l3_len_offset = eth_len + ip_len_offset;
 
                         // UDP has a length field 4B into its header.
                         // in event of TCP, l4_len_offset is ignored.
@@ -1889,17 +1860,39 @@ impl Transforms {
                             + ip_repr.packet_length()
                             + 4;
 
-                        let bytes = (eth_repr, ip_repr, encap_repr).emit_vec();
+                        let encap_sz = encap.packet_length();
+                        let tun_sz = encap.tunnel_len();
+
+                        let bytes = (
+                            eth_repr,
+                            ip_repr,
+                            // Sizes will be filled later using offset info.
+                            SizeHoldingEncap { encapped_len: 0, meta: &encap },
+                        )
+                            .emit_vec();
+
+                        let meoi = PresavedMeoi {
+                            l2hlen: u8::try_from(eth_len)
+                                .expect("14B < u8::MAX"),
+                            l3proto: eth_repr.ethertype.0,
+                            l3hlen: u16::try_from(ip_len).expect(
+                                "IPv4 is bounded, IPv6 validates to <= 65535",
+                            ),
+                            l4proto: ulp.into(),
+                            tunhlen: u16::try_from(tun_sz)
+                                .expect("Geneve is bounded to 260B"),
+                        };
 
                         Some(CompiledEncap::Push {
                             encap,
-                            eth,
-                            ip,
+                            eth: *eth,
+                            ip: ip.into_inner(),
                             bytes,
                             l3_len_offset,
                             l3_extra_bytes,
                             l4_len_offset,
                             encap_sz,
+                            meoi,
                         })
                     }
                     (None, None, None) => Some(CompiledEncap::Pop),

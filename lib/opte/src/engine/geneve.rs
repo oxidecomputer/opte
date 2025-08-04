@@ -10,32 +10,37 @@
 
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::headers::Valid;
+use super::headers::Validate;
 use super::packet::MismatchError;
 use super::packet::ParseError;
+use crate::engine::headers::ValidateErr;
+use alloc::borrow::Cow;
+use core::marker::PhantomData;
 use ingot::geneve::Geneve;
-use ingot::geneve::GeneveFlags;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveOptRef;
+use ingot::geneve::GeneveOptionType;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
+use ingot::geneve::ValidGeneveOpt;
+use ingot::types::Emit;
+use ingot::types::EmitDoesNotRelyOnBufContents;
+use ingot::types::HasView;
 use ingot::types::HeaderLen;
+use ingot::types::HeaderParse;
+use ingot::types::InlineHeader;
+use ingot::types::ParseError as IngotParseError;
 use ingot::udp::Udp;
+use ingot::udp::UdpRef;
+use ingot::udp::ValidUdp;
 pub use opte_api::Vni;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
+use zerocopy::ByteSliceMut;
 
-pub const GENEVE_VSN: u8 = 0;
-pub const GENEVE_VER_MASK: u8 = 0xC0;
-pub const GENEVE_VER_SHIFT: u8 = 6;
-pub const GENEVE_OPT_LEN_MASK: u8 = 0x3F;
-pub const GENEVE_OPT_LEN_SCALE_SHIFT: u8 = 2;
 pub const GENEVE_PORT: u16 = 6081;
-
-pub const GENEVE_OPT_CRIT_SHIFT: u8 = 7;
-pub const GENEVE_OPT_TYPE_MASK: u8 = (1 << GENEVE_OPT_CRIT_SHIFT) - 1;
-pub const GENEVE_OPT_RESERVED_SHIFT: u8 = 5;
-pub const GENEVE_OPT_RESERVED_MASK: u8 = (1 << GENEVE_OPT_RESERVED_SHIFT) - 1;
 pub const GENEVE_OPT_CLASS_OXIDE: u16 = 0x0129;
 
 #[inline]
@@ -50,52 +55,105 @@ pub fn validate_geneve<V: ByteSlice>(
         }));
     }
 
-    if pkt.flags().contains(GeneveFlags::CRITICAL_OPTS) {
-        match pkt.options_ref() {
-            ingot::types::FieldRef::Repr(g) => {
-                for opt in g.iter() {
-                    if !opt.option_type.is_critical() {
-                        continue;
-                    }
-
-                    GeneveOption::from_code_and_ty(
-                        opt.class,
-                        opt.option_type.0,
-                    )?;
-                }
-            }
-            ingot::types::FieldRef::Raw(g) => {
-                for opt in g.iter(None) {
-                    let Ok(opt) = opt else {
-                        break;
-                    };
-
-                    if !opt.option_type().is_critical() {
-                        continue;
-                    }
-
-                    GeneveOption::from_code_and_ty(
-                        opt.class(),
-                        opt.option_type().0,
-                    )?;
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-pub struct GeneveMeta {
-    pub entropy: u16,
-    pub vni: Vni,
-    pub oxide_external_pkt: bool,
+pub trait GeneveMetaRef {
+    fn entropy(&self) -> u16;
+    fn vni(&self) -> Vni;
+}
+
+impl<O: GeneveMetaRef, B: GeneveMetaRef> GeneveMetaRef
+    for InlineHeader<&O, &B>
+{
+    #[inline]
+    fn entropy(&self) -> u16 {
+        match self {
+            InlineHeader::Repr(v) => v.entropy(),
+            InlineHeader::Raw(v) => v.entropy(),
+        }
+    }
+
+    #[inline]
+    fn vni(&self) -> Vni {
+        match self {
+            InlineHeader::Repr(v) => v.vni(),
+            InlineHeader::Raw(v) => v.vni(),
+        }
+    }
 }
 
 #[derive(
     Clone,
-    Copy,
+    Debug,
+    Default,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+)]
+pub struct GeneveMeta {
+    pub entropy: u16,
+    pub vni: Vni,
+    pub options: Cow<'static, [ArbitraryGeneveOption]>,
+}
+
+impl GeneveMetaRef for GeneveMeta {
+    #[inline]
+    fn entropy(&self) -> u16 {
+        self.entropy
+    }
+
+    #[inline]
+    fn vni(&self) -> Vni {
+        self.vni
+    }
+}
+
+pub struct ValidGeneveMeta<B: ByteSlice>(pub ValidUdp<B>, pub ValidGeneve<B>);
+
+impl<B: ByteSlice> HasView<B> for GeneveMeta {
+    type ViewType = ValidGeneveMeta<B>;
+}
+
+impl<B: ByteSlice> GeneveMetaRef for ValidGeneveMeta<B> {
+    #[inline]
+    fn entropy(&self) -> u16 {
+        self.0.source()
+    }
+
+    #[inline]
+    fn vni(&self) -> Vni {
+        self.1.vni()
+    }
+}
+
+impl<B: ByteSlice> HeaderLen for ValidGeneveMeta<B> {
+    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        (&self.0, &self.1).packet_length()
+    }
+}
+
+impl<B: ByteSlice> Emit for ValidGeneveMeta<B> {
+    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+        (&self.0, &self.1).emit_raw(buf)
+    }
+
+    fn needs_emit(&self) -> bool {
+        (&self.0, &self.1).needs_emit()
+    }
+}
+
+// SAFETY: All Emit writes are done via ingot-generated methods,
+// and we don't read any element of `buf` in `SizeHoldingEncap::emit_raw`.
+unsafe impl<B: ByteSlice> EmitDoesNotRelyOnBufContents for ValidGeneveMeta<B> {}
+
+#[derive(
+    Clone,
     Debug,
     Default,
     Deserialize,
@@ -108,17 +166,133 @@ pub struct GeneveMeta {
 pub struct GenevePush {
     pub entropy: u16,
     pub vni: Vni,
+    pub options: Cow<'static, [ArbitraryGeneveOption]>,
+}
+
+impl From<GenevePush> for GeneveMeta {
+    fn from(v: GenevePush) -> Self {
+        Self { entropy: v.entropy, vni: v.vni, options: v.options }
+    }
 }
 
 impl PushAction<GeneveMeta> for GenevePush {
-    fn push(&self) -> GeneveMeta {
+    fn push(value: &Valid<Self>) -> GeneveMeta {
         GeneveMeta {
-            entropy: self.entropy,
-            vni: self.vni,
-            ..Default::default()
+            entropy: value.entropy,
+            vni: value.vni,
+            options: value.options.clone(),
         }
     }
 }
+
+impl Validate for GenevePush {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // Geneve.opt_len is a `u6`.
+        // This is a count of 4-byte blocks, so scale up to the true length.
+        const MAX_OPTS_LEN: usize = 0b0011_1111 * 4;
+
+        let mut total_opts_len = 0;
+        for (i, opt) in self.options.iter().enumerate() {
+            opt.validate().map_err(|e| ValidateErr {
+                msg: "illegal option".into(),
+                location: format!("geneve.options[{i}]").into(),
+                source: Some(e.into()),
+            })?;
+            total_opts_len += opt.packet_length();
+            if total_opts_len > MAX_OPTS_LEN {
+                return Err(ValidateErr {
+                    msg: "options longer than 252B".into(),
+                    location: format!("geneve.options[{i}]").into(),
+                    source: None,
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Simplified representation of an arbitrary Geneve option.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    Ord,
+    PartialOrd,
+)]
+pub struct ArbitraryGeneveOption {
+    pub option_class: u16,
+    pub option_type: u8,
+    pub data: Cow<'static, [u8]>,
+}
+
+impl HeaderLen for ArbitraryGeneveOption {
+    const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        // Length is in 4B blocks -- pad to the next boundary.
+        Self::MINIMUM_LENGTH + self.data.len().next_multiple_of(4)
+    }
+}
+
+impl Validate for ArbitraryGeneveOption {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // GeneveOpt.length is a `u5`.
+        // Again, this is a count of 4-byte blocks, so scale up to the true
+        // length.
+        const MAX_OPT_DATA_LEN: usize = 0b0001_1111 * 4;
+
+        let opt_len = self.data.len();
+        if opt_len > MAX_OPT_DATA_LEN {
+            Err(ValidateErr {
+                msg: format!("option is too long ({opt_len}B vs. max 124B)")
+                    .into(),
+                location: "data".into(),
+                source: None,
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Emit for ArbitraryGeneveOption {
+    #[inline]
+    fn emit_raw<V: ByteSliceMut>(&self, mut buf: V) -> usize {
+        let len = self.packet_length();
+        let opt_len = len - ArbitraryGeneveOption::MINIMUM_LENGTH;
+        let pad_start = ArbitraryGeneveOption::MINIMUM_LENGTH + self.data.len();
+
+        buf[pad_start..len].fill(0);
+
+        let serialised = (
+            GeneveOpt {
+                class: self.option_class,
+                option_type: self.option_type.into(),
+                length: u8::try_from(opt_len / 4).unwrap_or(u8::MAX),
+                ..Default::default()
+            },
+            self.data.as_ref(),
+        )
+            .emit_raw(buf);
+        assert_eq!(serialised, pad_start);
+
+        len
+    }
+
+    #[inline]
+    fn needs_emit(&self) -> bool {
+        true
+    }
+}
+
+// SAFETY: the above impl does not read from `Buf`, and fills all bytes
+//         up to `<Self as HeaderLen>::packet_length`.
+unsafe impl EmitDoesNotRelyOnBufContents for ArbitraryGeneveOption {}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GeneveMod {
@@ -134,14 +308,7 @@ impl ModifyAction<GeneveMeta> for GeneveMod {
 }
 
 impl GeneveMeta {
-    /// Return the length of headers needed to fully Geneve-encapsulate
-    /// a packet, including UDP.
-    #[inline]
-    pub fn hdr_len(&self) -> usize {
-        Udp::MINIMUM_LENGTH + self.hdr_len_inner()
-    }
-
-    /// Return the length of only the Geneve header.
+    /// Return the length of only the Geneve header and its options.
     #[inline]
     pub fn hdr_len_inner(&self) -> usize {
         Geneve::MINIMUM_LENGTH + self.options_len()
@@ -149,134 +316,239 @@ impl GeneveMeta {
 
     /// Return the required length (in bytes) needed to store
     /// all Geneve options attached to this packet.
-    pub fn options_len(&self) -> usize {
-        // XXX: This is very special-cased just to enable testing.
-        if self.oxide_external_pkt { GeneveOpt::MINIMUM_LENGTH } else { 0 }
-    }
-}
-
-/// Parsed form of an individual Geneve option TLV.
-///
-/// These are grouped by the vendor `class`es understood by OPTE.
-#[non_exhaustive]
-pub enum GeneveOption {
-    Oxide(OxideOption),
-}
-
-impl GeneveOption {
-    #[inline]
-    pub fn from_code_and_ty(class: u16, ty: u8) -> Result<Self, ParseError> {
-        match (class, ty) {
-            (GENEVE_OPT_CLASS_OXIDE, v)
-                if OxideOption::External.opt_type() == v =>
-            {
-                Ok(Self::Oxide(OxideOption::External))
-            }
-            _ => Err(ParseError::UnrecognisedTunnelOpt { class, ty }),
-        }
-    }
-
-    /// Return the wire-length of this option in bytes, including headers.
-    pub fn len(&self) -> usize {
-        4 + match self {
-            GeneveOption::Oxide(o) => o.len(),
-        }
-    }
-}
-
-/// Geneve options defined by Oxide, [`GENEVE_OPT_CLASS_OXIDE`].
-#[non_exhaustive]
-pub enum OxideOption {
-    /// A tag indicating that this packet originated from outside the VPC.
     ///
-    /// Option Type `0`. Currently includes no body.
-    External,
+    /// Options must be padded to the next 4-byte boundary, the length here
+    /// accounts for this.
+    pub fn options_len(&self) -> usize {
+        self.options.iter().map(|v| v.packet_length()).sum()
+    }
 }
 
-impl OxideOption {
-    /// Return the wire-length of this option's body in bytes, excluding headers.
-    pub fn len(&self) -> usize {
+impl HeaderLen for GeneveMeta {
+    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+
+    #[inline]
+    fn packet_length(&self) -> usize {
+        Self::MINIMUM_LENGTH + self.options_len()
+    }
+}
+
+/// A dataplane-specific interpretation of a given Geneve option.
+pub trait OptionCast<'a> {
+    /// Return the Geneve class associated with `self`.
+    fn option_class(&self) -> u16;
+
+    /// Return the Geneve type associated with `self`.
+    fn option_type(&self) -> GeneveOptionType;
+
+    /// Convert the raw parts of a Geneve option into a valid instance
+    /// of `Self`.
+    ///
+    /// Implementors should return `Some(_)` when the
+    /// `(option_class, option_type)` combination are recognised,
+    /// and `None` otherwise. This allows [`GeneveOptionParse`] to
+    /// classify the option as `Known`/`Unknown`.
+    fn try_cast(
+        option_class: u16,
+        otion_type: GeneveOptionType,
+        body: &'a [u8],
+    ) -> Result<Option<(Self, &'a [u8])>, IngotParseError>
+    where
+        Self: Sized;
+}
+
+/// A successfully parsed Geneve option, alongside any spare bytes in
+/// the payload.
+///
+/// Carries the option body if the inner `option` is `Known::Unknown`.
+pub struct GeneveOptionParse<'a, T: OptionCast<'a>> {
+    pub option: Known<T>,
+    pub body_remainder: &'a [u8],
+}
+
+impl<'a, T: OptionCast<'a>> GeneveOptionParse<'a, T> {
+    pub fn parse(
+        class: u16,
+        ty: GeneveOptionType,
+        body: &'a [u8],
+    ) -> Result<GeneveOptionParse<'a, T>, IngotParseError> {
+        let (option, body_remainder) =
+            if let Some((opt, rem)) = T::try_cast(class, ty, body)? {
+                (Known::Known(opt), rem)
+            } else {
+                (Known::Unknown(class, ty), body)
+            };
+
+        Ok(Self { option, body_remainder })
+    }
+}
+
+/// Marks whather a Geneve option has been successfuly interpreted as a known
+/// variant.
+pub enum Known<T> {
+    Known(T),
+    Unknown(u16, GeneveOptionType),
+}
+
+impl<'a, T: OptionCast<'a>> Known<T> {
+    pub fn option_class(&self) -> u16 {
         match self {
-            OxideOption::External => 0,
+            Known::Known(a) => a.option_class(),
+            Known::Unknown(class, ..) => *class,
         }
     }
 
-    /// Return the option type number.
-    pub const fn opt_type(&self) -> u8 {
+    pub fn option_type(&self) -> GeneveOptionType {
         match self {
-            OxideOption::External => 0,
+            Known::Known(a) => a.option_type(),
+            Known::Unknown(.., ty) => *ty,
+        }
+    }
+
+    pub fn is_unknown_critical(&self) -> bool {
+        match self {
+            Known::Known(..) => false,
+            Known::Unknown(.., ty) => ty.is_critical(),
+        }
+    }
+
+    pub fn known(&self) -> Option<&T> {
+        match self {
+            Known::Known(a) => Some(a),
+            Known::Unknown(..) => None,
+        }
+    }
+
+    pub fn unknown(&self) -> Option<(u16, GeneveOptionType)> {
+        match self {
+            Known::Known(..) => None,
+            Known::Unknown(class, ty) => Some((*class, *ty)),
         }
     }
 }
 
-// We probably want a more general way to retrieve all facts we care about
-// from the geneve options -- we only have the one today, however.
-#[inline]
-pub fn geneve_has_oxide_external(pkt: &Geneve) -> bool {
-    let mut out = false;
-    for opt in pkt.options.iter() {
-        out = matches!(
-            GeneveOption::from_code_and_ty(opt.class, opt.option_type.0,),
-            Ok(GeneveOption::Oxide(OxideOption::External))
-        );
-        if out {
-            break;
+/// Walk all geneve options, attempting to cast them to a T when the class
+/// and type are recognised.
+pub struct WalkOptions<'a, T: OptionCast<'a>>(Source<'a>, PhantomData<T>);
+
+impl<'a, T: OptionCast<'a>> WalkOptions<'a, T> {
+    pub fn from_meta<B: ByteSlice>(
+        meta: InlineHeader<&'a GeneveMeta, &'a ValidGeneveMeta<B>>,
+    ) -> Self {
+        match meta {
+            InlineHeader::Repr(r) => {
+                Self(Source::Simplified(r.options.as_ref()), PhantomData)
+            }
+            InlineHeader::Raw(r) => Self::from_raw(&r.1),
         }
     }
 
-    out
-}
-
-#[inline]
-pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
-    pkt: &ValidGeneve<V>,
-) -> bool {
-    let mut out = false;
-
-    match pkt.options_ref() {
-        ingot::types::FieldRef::Repr(g) => {
-            for opt in g.iter() {
-                out = matches!(
-                    GeneveOption::from_code_and_ty(
-                        opt.class,
-                        opt.option_type.0,
-                    ),
-                    Ok(GeneveOption::Oxide(OxideOption::External))
-                );
-                if out {
-                    break;
-                }
+    pub fn from_raw<B: ByteSlice>(meta: &'a ValidGeneve<B>) -> Self {
+        match &meta.1 {
+            ingot::types::BoxedHeader::Repr(r) => {
+                Self(Source::Owned(r.as_slice()), PhantomData)
+            }
+            ingot::types::BoxedHeader::Raw(r) => {
+                Self(Source::Raw(r.as_ref()), PhantomData)
             }
         }
-        ingot::types::FieldRef::Raw(g) => {
-            for opt in g.iter(None) {
-                let Ok(opt) = opt else {
-                    break;
+    }
+}
+
+enum Source<'a> {
+    Simplified(&'a [ArbitraryGeneveOption]),
+    Owned(&'a [GeneveOpt]),
+    Raw(&'a [u8]),
+}
+
+impl<'a, T: OptionCast<'a>> Iterator for WalkOptions<'a, T> {
+    type Item = Result<GeneveOptionParse<'a, T>, IngotParseError>;
+
+    // This partially reimplements some work from `Repeated/View`, but
+    // formalises the case that a freshly parsed Raw cannot have an owned body.
+    // This needs some special handling to reborrow the slice without Rust
+    // thinking that a new `Header` owns the data instead of the input.
+    fn next(&mut self) -> Option<Self::Item> {
+        let (class, ty, body) = match self.0 {
+            Source::Simplified(ref mut opt_source) => {
+                let (el, rest) = opt_source.split_first()?;
+                *opt_source = rest;
+                (
+                    el.option_class,
+                    GeneveOptionType(el.option_type),
+                    el.data.as_ref(),
+                )
+            }
+            Source::Owned(ref mut opt_source) => {
+                let (el, rest) = opt_source.split_first()?;
+                *opt_source = rest;
+                (el.class, el.option_type, el.data.as_slice())
+            }
+            Source::Raw(ref mut bytes) => {
+                let (class, ty, len) = {
+                    let (opt, ..) = match ValidGeneveOpt::parse(*bytes) {
+                        Ok(opt) => opt,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    (opt.class(), opt.option_type(), opt.packet_length())
                 };
-
-                out = matches!(
-                    GeneveOption::from_code_and_ty(
-                        opt.class(),
-                        opt.option_type().0,
-                    ),
-                    Ok(GeneveOption::Oxide(OxideOption::External))
-                );
-                if out {
-                    break;
-                }
+                let (opt, remainder) = bytes.split_at(len);
+                *bytes = remainder;
+                (class, ty, &opt[GeneveOpt::MINIMUM_LENGTH..])
             }
-        }
-    }
+        };
 
-    out
+        Some(GeneveOptionParse::parse(class, ty, body))
+    }
 }
 
-#[inline(always)]
-pub fn geneve_opt_is_oxide_external<V: ByteSlice>(
-    opt: &impl GeneveOptRef<V>,
-) -> bool {
-    opt.class() == GENEVE_OPT_CLASS_OXIDE
-        && opt.option_type().0 == OxideOption::External.opt_type()
+// Can't impl TryFrom<T: GeneveOptRef>, sadly.
+impl<'a, T: OptionCast<'a>> TryFrom<&'a ArbitraryGeneveOption>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(value: &'a ArbitraryGeneveOption) -> Result<Self, Self::Error> {
+        Self::parse(
+            value.option_class,
+            GeneveOptionType(value.option_type),
+            value.data.as_ref(),
+        )
+    }
+}
+
+impl<'a, T: OptionCast<'a>> TryFrom<&'a GeneveOpt>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(value: &'a GeneveOpt) -> Result<Self, Self::Error> {
+        Self::parse(value.class, value.option_type, value.data.as_slice())
+    }
+}
+
+impl<'a, 'b: 'a, T: OptionCast<'a>> TryFrom<&'a ValidGeneveOpt<&'b [u8]>>
+    for GeneveOptionParse<'a, T>
+{
+    type Error = IngotParseError;
+
+    #[inline]
+    fn try_from(
+        value: &'a ValidGeneveOpt<&'b [u8]>,
+    ) -> Result<Self, Self::Error> {
+        let class = value.class();
+        let ty = value.option_type();
+
+        let value_data = match &value.1 {
+            ingot::types::BoxedHeader::Repr(r) => r.as_slice(),
+            ingot::types::BoxedHeader::Raw(r) => &r[..],
+        };
+
+        Self::parse(class, ty, value_data)
+    }
 }
 
 #[cfg(test)]
@@ -284,8 +556,6 @@ mod test {
     use super::*;
     use crate::engine::headers::EncapMeta;
     use ingot::types::Emit;
-    use ingot::types::HeaderParse;
-    use ingot::udp::ValidUdp;
 
     #[test]
     fn emit_no_opts() {
@@ -296,7 +566,7 @@ mod test {
             ..Default::default()
         };
 
-        let len = geneve.hdr_len();
+        let len = geneve.packet_length();
         let emitted = EncapMeta::Geneve(geneve).to_vec();
         assert_eq!(len, emitted.len());
 
@@ -323,14 +593,19 @@ mod test {
     }
 
     #[test]
-    fn emit_external_opt() {
+    fn emit_single_opt() {
         let geneve = GeneveMeta {
             entropy: 7777,
             vni: Vni::new(1234u32).unwrap(),
-            oxide_external_pkt: true,
+            options: vec![ArbitraryGeneveOption {
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: 0,
+                data: (&[]).into(),
+            }]
+            .into(),
         };
 
-        let len = geneve.hdr_len();
+        let len = geneve.packet_length();
         let emitted = EncapMeta::Geneve(geneve).to_vec();
         assert_eq!(len, emitted.len());
 
@@ -361,142 +636,5 @@ mod test {
             0x00,
         ];
         assert_eq!(&expected_bytes, &emitted[..]);
-    }
-
-    #[test]
-    fn parse_single_opt() {
-        // Create a packet with one extension header.
-        #[rustfmt::skip]
-        let buf = [
-            // source
-            0x1E, 0x61,
-            // dest
-            0x17, 0xC1,
-            // length
-            0x00, 0x14,
-            // csum
-            0x00, 0x00,
-            // ver + opt len
-            0x01,
-            // flags
-            0x00,
-            // proto
-            0x65, 0x58,
-            // vni + reserved
-            0x00, 0x04, 0xD2, 0x00,
-
-            // option class
-            0x01, 0x29,
-            // crt + type
-            0x00,
-            // rsvd + len
-            0x00,
-        ];
-
-        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
-        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
-
-        validate_geneve(&geneve).unwrap();
-
-        assert!(valid_geneve_has_oxide_external(&geneve));
-    }
-
-    #[test]
-    fn unknown_crit_option_fails() {
-        // Create a packet with one extension header with the critical
-        // flag set.
-        // We do not unsdertand this extension, so must drop the packet.
-        #[rustfmt::skip]
-        let buf = [
-            // source
-            0x1E, 0x61,
-            // dest
-            0x17, 0xC1,
-            // length
-            0x00, 0x14,
-            // csum
-            0x00, 0x00,
-            // ver + opt len
-            0x01,
-            // flags
-            0b0100_0000,
-            // proto
-            0x65, 0x58,
-            // vni + reserved
-            0x00, 0x04, 0xD2, 0x00,
-
-            // experimenter option class
-            0xff, 0xff,
-            // crt + type
-            0x80,
-            // rsvd + len
-            0x00,
-        ];
-
-        let (_udp, _, rem) = ValidUdp::parse(&buf[..]).unwrap();
-        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
-
-        assert!(matches!(
-            validate_geneve(&geneve),
-            Err(ParseError::UnrecognisedTunnelOpt { class: 0xffff, ty: 0x80 }),
-        ));
-    }
-
-    #[test]
-    fn parse_multi_opt() {
-        // Create a packet with three extension headers.
-        // None are critical, so the fact that we
-        // We shoukld also be able to extract info on the options we *do*
-        // care about.
-        #[rustfmt::skip]
-        let buf = [
-            // source
-            0x1E, 0x61,
-            // dest
-            0x17, 0xC1,
-            // length
-            0x00, 0x1c,
-            // csum
-            0x00, 0x00,
-            // ver + opt len
-            0x05,
-            // flags
-            0x00,
-            // proto
-            0x65, 0x58,
-            // vni + reserved
-            0x00, 0x04, 0xD2, 0x00,
-
-            // option class
-            0x01, 0x29,
-            // crt + type
-            0x00,
-            // rsvd + len
-            0x00,
-
-            // experimenter option class
-            0xff, 0xff,
-            // crt + type
-            0x05,
-            // rsvd + len
-            0x01,
-            // body
-            0x00, 0x00, 0x00, 0x00,
-
-            // experimenter option class
-            0xff, 0xff,
-            // crt + type
-            0x06,
-            // rsvd + len
-            0x01,
-            // body
-            0x00, 0x00, 0x00, 0x00,
-        ];
-
-        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
-        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
-
-        validate_geneve(&geneve).unwrap();
-        assert!(valid_geneve_has_oxide_external(&geneve));
     }
 }

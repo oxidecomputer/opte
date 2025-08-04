@@ -29,8 +29,6 @@ pub use opte::engine::ether::Ethernet;
 pub use opte::engine::geneve::GENEVE_OPT_CLASS_OXIDE;
 pub use opte::engine::geneve::GENEVE_PORT;
 pub use opte::engine::geneve::GeneveMeta;
-pub use opte::engine::geneve::GeneveOption;
-pub use opte::engine::geneve::OxideOption;
 pub use opte::engine::geneve::Vni;
 pub use opte::engine::headers::IpAddr;
 pub use opte::engine::headers::IpCidr;
@@ -83,6 +81,7 @@ pub use oxide_vpc::engine::VpcNetwork;
 pub use oxide_vpc::engine::VpcParser;
 pub use oxide_vpc::engine::firewall;
 pub use oxide_vpc::engine::gateway;
+pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
@@ -1005,7 +1004,7 @@ fn _encap(
     if external_snat {
         let external_tag = GeneveOpt {
             class: GENEVE_OPT_CLASS_OXIDE,
-            option_type: GeneveOptionType(OxideOption::External.opt_type()),
+            option_type: OxideOptionType::External.into(),
             ..Default::default()
         };
 

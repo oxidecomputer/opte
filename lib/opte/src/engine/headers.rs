@@ -6,45 +6,56 @@
 
 //! Header metadata modifications for IP, ULP, and Encap.
 
-use super::geneve::GENEVE_OPT_CLASS_OXIDE;
 use super::geneve::GENEVE_PORT;
 use super::geneve::GeneveMeta;
 use super::geneve::GeneveMod;
 use super::geneve::GenevePush;
-use super::geneve::OxideOption;
+use super::geneve::ValidGeneveMeta;
+use super::ip::L3Repr;
+use super::ip::v4::Ipv4;
 use super::ip::v4::Ipv4Mod;
 use super::ip::v4::Ipv4Push;
+use super::ip::v6::Ipv6;
 use super::ip::v6::Ipv6Mod;
 use super::ip::v6::Ipv6Push;
+use super::rule::GenHtError;
 use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
+use crate::engine::ip::v6::Ipv6Extension;
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::ToString;
+use core::error::Error;
 use core::fmt;
+use core::ops::Deref;
 use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
-use ingot::geneve::GeneveOpt;
-use ingot::geneve::GeneveOptionType;
-use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::util::Repeated;
 use ingot::udp::Udp;
-use ingot::udp::ValidUdp;
 pub use opte_api::IpAddr;
 pub use opte_api::IpCidr;
 pub use opte_api::Protocol;
 pub use opte_api::Vni;
+use ref_cast::RefCast;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-pub trait PushAction<HdrM> {
-    fn push(&self) -> HdrM;
+/// A type that is meant to be used as an argument to a [`Transform`]
+/// implementation.
+pub trait PushAction<HdrP>: Sized {
+    /// Produce a concrete header specification from a simplified
+    /// representation, given that `self` has already been validated.
+    fn push(value: &Valid<Self>) -> HdrP;
 }
 
 /// A type that is meant to be used as an argument to a
@@ -53,10 +64,65 @@ pub trait ModifyAction<HdrM> {
     fn modify(&self, meta: &mut HdrM);
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum IpPush {
     Ip4(Ipv4Push),
     Ip6(Ipv6Push),
+}
+
+impl Validate for IpPush {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        match self {
+            Self::Ip4(v) => v.validate(),
+            Self::Ip6(v) => v.validate(),
+        }
+    }
+}
+
+impl From<&Valid<IpPush>> for L3Repr {
+    fn from(value: &Valid<IpPush>) -> Self {
+        match &**value {
+            IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
+                protocol: IpProtocol(u8::from(v4.proto)),
+                source: v4.src,
+                destination: v4.dst,
+                flags: v4.flags.into(),
+                ..Default::default()
+            }),
+            IpPush::Ip6(v6) => {
+                let ulp = IpProtocol(u8::from(v6.proto));
+                let (exts, next_header) = if v6.exts.is_empty() {
+                    (vec![], ulp)
+                } else {
+                    let first = v6.exts.first().unwrap().ip_protocol();
+                    let mut out = vec![];
+                    for (i, ext) in v6.exts.iter().enumerate() {
+                        let next_header = v6
+                            .exts
+                            .get(i + 1)
+                            .map(|v| v.ip_protocol())
+                            .unwrap_or(ulp);
+
+                        // Safe to assume validity here as children of self are
+                        // validated in our `Validate` impl.
+                        out.push(Ipv6Extension::as_repr(
+                            Valid::validated_unchecked_ref(ext),
+                            next_header,
+                        ));
+                    }
+                    (out, first)
+                };
+
+                L3Repr::Ipv6(Ipv6 {
+                    next_header,
+                    source: v6.src,
+                    destination: v6.dst,
+                    v6ext: Repeated::new(exts),
+                    ..Default::default()
+                })
+            }
+        }
+    }
 }
 
 impl From<Ipv4Push> for IpPush {
@@ -113,7 +179,9 @@ impl From<Ipv6Mod> for IpMod {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
+)]
 pub enum EncapMeta {
     Geneve(GeneveMeta),
 }
@@ -124,17 +192,35 @@ impl From<GeneveMeta> for EncapMeta {
     }
 }
 
+impl EncapMeta {
+    #[inline]
+    pub fn l4_len(&self) -> usize {
+        match self {
+            Self::Geneve(_) => Udp::MINIMUM_LENGTH,
+        }
+    }
+
+    #[inline]
+    pub fn tunnel_len(&self) -> usize {
+        match self {
+            Self::Geneve(_) => self.packet_length() - Udp::MINIMUM_LENGTH,
+        }
+    }
+}
+
 #[derive(
-    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Copy,
+    Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum EncapPush {
     Geneve(GenevePush),
 }
 
 impl PushAction<EncapMeta> for EncapPush {
-    fn push(&self) -> EncapMeta {
-        match self {
-            Self::Geneve(gp) => EncapMeta::from(gp.push()),
+    fn push(value: &Valid<Self>) -> EncapMeta {
+        match &**value {
+            Self::Geneve(gp) => EncapMeta::from(PushAction::push(
+                Valid::validated_unchecked_ref(gp),
+            )),
         }
     }
 }
@@ -142,6 +228,22 @@ impl PushAction<EncapMeta> for EncapPush {
 impl From<GenevePush> for EncapPush {
     fn from(gp: GenevePush) -> Self {
         Self::Geneve(gp)
+    }
+}
+
+impl From<EncapPush> for EncapMeta {
+    fn from(push: EncapPush) -> Self {
+        match push {
+            EncapPush::Geneve(gp) => EncapMeta::Geneve(gp.into()),
+        }
+    }
+}
+
+impl Validate for EncapPush {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        match self {
+            Self::Geneve(g) => g.validate(),
+        }
     }
 }
 
@@ -156,14 +258,6 @@ impl ModifyAction<EncapMeta> for EncapMod {
             (EncapMod::Geneve(g_spec), EncapMeta::Geneve(g_meta)) => {
                 g_spec.modify(g_meta);
             }
-        }
-    }
-}
-
-impl EncapMeta {
-    pub fn hdr_len(&self) -> usize {
-        match self {
-            Self::Geneve(geneve) => geneve.hdr_len(),
         }
     }
 }
@@ -186,11 +280,11 @@ impl<T: ByteSliceMut> HeaderActionModify<EncapMod>
                 }
             }
             (
-                InlineHeader::Raw(ValidEncapMeta::Geneve(_, g)),
+                InlineHeader::Raw(ValidEncapMeta::Geneve(g)),
                 EncapMod::Geneve(mod_spec),
             ) => {
                 if let Some(vni) = mod_spec.vni {
-                    g.set_vni(vni);
+                    g.1.set_vni(vni);
                 }
             }
         }
@@ -222,7 +316,7 @@ impl<T: ByteSlice> From<EncapMeta>
 }
 
 pub enum ValidEncapMeta<B: ByteSlice> {
-    Geneve(ValidUdp<B>, ValidGeneve<B>),
+    Geneve(ValidGeneveMeta<B>),
 }
 
 impl Emit for EncapMeta {
@@ -241,40 +335,36 @@ impl<B: ByteSliceMut> Emit for ValidEncapMeta<B> {
     #[inline]
     fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
         match self {
-            ValidEncapMeta::Geneve(u, g) => (u, g).emit_raw(buf),
+            ValidEncapMeta::Geneve(g) => g.emit_raw(buf),
         }
     }
 
     #[inline]
     fn needs_emit(&self) -> bool {
         match self {
-            ValidEncapMeta::Geneve(u, g) => u.needs_emit() && g.needs_emit(),
+            ValidEncapMeta::Geneve(g) => g.needs_emit(),
         }
     }
 }
 
 impl HeaderLen for EncapMeta {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+    const MINIMUM_LENGTH: usize = GeneveMeta::MINIMUM_LENGTH;
 
     #[inline]
     fn packet_length(&self) -> usize {
         match self {
-            EncapMeta::Geneve(g) => {
-                Self::MINIMUM_LENGTH + if g.oxide_external_pkt { 4 } else { 0 }
-            }
+            EncapMeta::Geneve(g) => g.packet_length(),
         }
     }
 }
 
 impl<B: ByteSlice> HeaderLen for ValidEncapMeta<B> {
-    const MINIMUM_LENGTH: usize = Udp::MINIMUM_LENGTH + Geneve::MINIMUM_LENGTH;
+    const MINIMUM_LENGTH: usize = GeneveMeta::MINIMUM_LENGTH;
 
     #[inline]
     fn packet_length(&self) -> usize {
         match self {
-            ValidEncapMeta::Geneve(u, g) => {
-                u.packet_length() + g.packet_length()
-            }
+            ValidEncapMeta::Geneve(g) => g.packet_length(),
         }
     }
 }
@@ -302,35 +392,26 @@ impl HeaderLen for SizeHoldingEncap<'_> {
 
 impl Emit for SizeHoldingEncap<'_> {
     #[inline]
-    fn emit_raw<V: ByteSliceMut>(&self, buf: V) -> usize {
+    fn emit_raw<V: ByteSliceMut>(&self, mut buf: V) -> usize {
         match self.meta {
             EncapMeta::Geneve(g) => {
-                let mut opts = vec![];
-
-                if g.oxide_external_pkt {
-                    opts.push(GeneveOpt {
-                        class: GENEVE_OPT_CLASS_OXIDE,
-                        option_type: GeneveOptionType(
-                            OxideOption::External.opt_type(),
-                        ),
-                        ..Default::default()
-                    });
-                }
-
-                let options = Repeated::new(opts);
-                let opt_len_unscaled = options.packet_length();
-                let opt_len = (opt_len_unscaled >> 2) as u8;
+                let opt_len = g.options_len();
 
                 let geneve = Geneve {
                     protocol_type: Ethertype::ETHERNET,
                     vni: g.vni,
-                    opt_len,
-                    options,
+                    opt_len: u8::try_from(opt_len / 4).unwrap_or(u8::MAX),
+                    // Skip options, we rely on the custom `Emit` impl for
+                    // ArbitraryGeneveOption so as not to clone them out.
                     ..Default::default()
                 };
 
-                let length = self.encapped_len
-                    + (Udp::MINIMUM_LENGTH + geneve.packet_length()) as u16;
+                let length = self.encapped_len.saturating_add(
+                    u16::try_from(
+                        Udp::MINIMUM_LENGTH + geneve.packet_length() + opt_len,
+                    )
+                    .unwrap_or(u16::MAX),
+                );
 
                 // It's worth noting that we have a zero UDP checksum here,
                 // which holds true even if we're sending out over IPv6.
@@ -345,7 +426,8 @@ impl Emit for SizeHoldingEncap<'_> {
                 //   Misdelivery on the basis of IPv6 (or other) corruption
                 //   will lead to a drop.
                 // This is also reflected in RFC 8200 §8.1 (IPv6 2017).
-                (
+                let limit = buf.len() - opt_len;
+                let mut out = (
                     Udp {
                         source: g.entropy,
                         destination: GENEVE_PORT,
@@ -354,7 +436,17 @@ impl Emit for SizeHoldingEncap<'_> {
                     },
                     &geneve,
                 )
-                    .emit_raw(buf)
+                    .emit_raw(&mut buf[..limit]);
+
+                for opt in g.options.as_ref() {
+                    // Index safety: `buf` is sized according to Self::packet_length.
+                    // This calls GeneveMeta::packet_length, which accounts for
+                    // UDP + Geneve (above, initial value `out = 16`) plus the sum
+                    // of all opt packet lengths.
+                    out += opt.emit_raw(&mut buf[out..][..opt.packet_length()])
+                }
+
+                out
             }
         }
     }
@@ -441,7 +533,7 @@ where
         match action {
             HeaderAction::Ignore => Ok(false),
             HeaderAction::Push(p) => {
-                *self = p.push().into();
+                *self = PushAction::push(p).into();
                 Ok(Self::HAS_CKSUM)
             }
             HeaderAction::Pop => Err(HeaderActionError::CantPop),
@@ -456,7 +548,7 @@ where
 /// The action to take for a particular header transposition.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
 pub enum HeaderAction<P, M> {
-    Push(P),
+    Push(Valid<P>),
     Pop,
     Modify(M),
     #[default]
@@ -478,7 +570,7 @@ impl<P, M> HeaderAction<P, M> {
             },
 
             Self::Push(action) => {
-                meta.replace(action.push());
+                meta.replace(PushAction::push(action));
             }
 
             // A previous action may have already removed this meta,
@@ -504,7 +596,7 @@ impl<P, M> HeaderAction<P, M> {
         match (self, target) {
             (HeaderAction::Ignore, _) => Ok(false),
             (HeaderAction::Push(p), a) => {
-                *a = Some(p.push().into());
+                *a = Some(PushAction::push(p).into());
                 Ok(X::HAS_CKSUM)
             }
             (HeaderAction::Pop, a) => {
@@ -514,6 +606,89 @@ impl<P, M> HeaderAction<P, M> {
             (a @ HeaderAction::Modify(..), Some(h)) => h.act_on(a),
             (_, None) => Err(HeaderActionError::MissingHeader),
         }
+    }
+}
+
+/// Header actions which require sanity checking before they can be used.
+pub trait Validate {
+    fn validate(&self) -> Result<(), ValidateErr>;
+}
+
+/// An error message and location encountered while validating a packet
+/// transform.
+#[derive(Debug)]
+pub struct ValidateErr {
+    pub msg: Cow<'static, str>,
+    pub location: Cow<'static, str>,
+    pub source: Option<Box<dyn Error>>,
+}
+
+impl fmt::Display for ValidateErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ValidateErr { msg, location, source: _source } = self;
+        write!(f, "invalid {location} ({msg})")
+    }
+}
+
+impl Error for ValidateErr {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_deref()
+    }
+}
+
+impl From<ValidateErr> for GenHtError {
+    fn from(value: ValidateErr) -> Self {
+        let mut out = value.to_string();
+        let mut source = value.source();
+        while let Some(inner) = source {
+            out = format!("{out}: {inner}");
+            source = inner.source();
+        }
+
+        GenHtError::Unexpected { msg: out }
+    }
+}
+
+/// Header actions which have been successfully sanity checked.
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize, RefCast)]
+#[repr(transparent)]
+pub struct Valid<T>(T);
+
+impl<T: Validate> Valid<T> {
+    /// Prove that a transform or set of headers specified in a
+    /// `NetworkImpl` is well-formed.
+    pub fn validated(value: T) -> Result<Self, ValidateErr> {
+        value.validate().map(|_| Self(value))
+    }
+
+    /// Treat `value` as though `value.validate()` returned no errors.
+    ///
+    /// This should be used with care (and principally only for nested emit
+    /// of Valid types). **Implementations may freely panic or emit malformed
+    /// packets if `value` is invalid.**
+    pub fn validated_unchecked(value: T) -> Self {
+        Self(value)
+    }
+
+    /// Treat `value` as though `value.validate()` returned no errors.
+    ///
+    /// See [`Self::validated_unchecked`] for the contracts which must be upheld.
+    pub fn validated_unchecked_ref(value: &T) -> &Self {
+        Valid::ref_cast(&value)
+    }
+}
+
+impl<T> Valid<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> Deref for Valid<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
