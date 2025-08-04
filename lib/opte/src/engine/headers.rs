@@ -33,7 +33,6 @@ use ingot::ethernet::Ethertype;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveMut;
 use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4Flags;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
@@ -85,7 +84,7 @@ impl From<&IpPush> for L3Repr {
                 protocol: IpProtocol(u8::from(v4.proto)),
                 source: v4.src,
                 destination: v4.dst,
-                flags: Ipv4Flags::DONT_FRAGMENT,
+                flags: v4.flags.into(),
                 ..Default::default()
             }),
             IpPush::Ip6(v6) => {
@@ -398,9 +397,12 @@ impl Emit for SizeHoldingEncap<'_> {
                     ..Default::default()
                 };
 
-                let length = self.encapped_len
-                    + (Udp::MINIMUM_LENGTH + geneve.packet_length() + opt_len)
-                        as u16;
+                let length = self.encapped_len.saturating_add(
+                    u16::try_from(
+                        Udp::MINIMUM_LENGTH + geneve.packet_length() + opt_len,
+                    )
+                    .unwrap_or(u16::MAX),
+                );
 
                 // It's worth noting that we have a zero UDP checksum here,
                 // which holds true even if we're sending out over IPv6.
@@ -428,6 +430,10 @@ impl Emit for SizeHoldingEncap<'_> {
                     .emit_raw(&mut buf[..limit]);
 
                 for opt in g.options.as_ref() {
+                    // Index safety: `buf` is sized according to Self::packet_length.
+                    // This calls GeneveMeta::packet_length, which accounts for
+                    // UDP + Geneve (above, initial value `out = 16`) plus the sum
+                    // of all opt packet lengths.
                     out += opt.emit_raw(&mut buf[out..][..opt.packet_length()])
                 }
 

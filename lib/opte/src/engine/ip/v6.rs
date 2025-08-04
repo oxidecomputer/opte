@@ -226,6 +226,13 @@ impl Ipv6Extension {
 
             let old_len = data.len();
             data.resize(old_len + WireIpv6Option::MINIMUM_LENGTH, 0);
+            // This type is simple enough (no next-header hint, no nested
+            // options, no value checks, no choices) such that it can only
+            // fail on insufficient bytes. `opt_len` is init'd to zero by resize,
+            // so this type will contain *only* the option header.
+            // Similarly the use of a `&mut [u8]` rather than something chunked
+            // like a `MsgBlk` prevents `StraddledHeader`, `NoRemainingChunks`
+            // etc.
             let (mut wire_opt, ..) =
                 ValidWireIpv6Option::parse(&mut data[old_len..])
                     .expect("buf was resized to have sufficient bytes");
@@ -240,6 +247,7 @@ impl Ipv6Extension {
             data.push(Ipv6OptionType::PAD_1.0);
         } else if pad != 0 {
             data.resize(body_len, 0);
+            // Same logic as  above applies here wrt parse unwrap-safety.
             let (mut wire_opt, _, rest) =
                 ValidWireIpv6Option::parse(&mut data[pre_pad_len..])
                     .expect("buf was resized to have sufficient bytes");
@@ -334,6 +342,17 @@ pub enum IfUnknown {
     reason = "bits [0:2] encode semantics"
 )]
 impl Ipv6OptionType {
+    // The options here are included based on a subset of the IANA table of
+    // recognised IPv6 options:
+    // https://www.iana.org/assignments/ipv6-parameters/ipv6-parameters.xhtml
+    // (Destination Options and Hop-by-Hop Options)
+    //
+    // Option types are `u8`s, where the 3 most-significant bits have meaning
+    // according to RFC8200:
+    // * The two most significant bits determine how a packet should be handled
+    //  by a processing node if the option is unrecognised (`IfUnknown`).
+    // * The third most-significant bit signifies whether an option can be
+    //   changed en-route to its destination by a processing node.
     pub const PAD_1: Self = Self(0b00_0_00000);
     pub const PAD_N: Self = Self(0b00_0_00001);
     pub const JUMBO: Self = Self(0b11_0_00010);
@@ -351,7 +370,7 @@ impl Ipv6OptionType {
     pub const EXPERIMENT_7: Self = Self(0b11_1_11110);
 
     pub fn can_change_in_flight(self) -> bool {
-        (self.0 & 0b0010_0000) != 0
+        (self.0 & 0b00_1_00000) != 0
     }
 
     pub fn action_if_unknown(self) -> IfUnknown {

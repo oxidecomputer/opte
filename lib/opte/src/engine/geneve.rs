@@ -187,6 +187,7 @@ impl PushAction<GeneveMeta> for GenevePush {
 impl Validate for GenevePush {
     fn validate(&self) -> Result<(), ValidateErr> {
         // Geneve.opt_len is a `u6`.
+        // This is a count of 4-byte blocks, so scale up to the true length.
         const MAX_OPTS_LEN: usize = 0b0011_1111 * 4;
 
         let mut total_opts_len = 0;
@@ -240,6 +241,8 @@ impl HeaderLen for ArbitraryGeneveOption {
 impl Validate for ArbitraryGeneveOption {
     fn validate(&self) -> Result<(), ValidateErr> {
         // GeneveOpt.length is a `u5`.
+        // Again, this is a count of 4-byte blocks, so scale up to the true
+        // length.
         const MAX_OPT_DATA_LEN: usize = 0b0001_1111 * 4;
 
         let opt_len = self.data.len();

@@ -1719,8 +1719,14 @@ impl EmitSpec {
         }
     }
 
-    /// Returns the offload info for encap layers pushed onto the packet, without
-    /// the `meoi_len` field set.
+    /// Returns the offload info in the illumos MEOI format for the encap layers
+    /// pushed onto the packet, without the `meoi_len` field set.
+    ///
+    /// MEOI (MAC ethernet offload information) contains the type and length of
+    /// every layer within a packet (including tunnel layers within L4). This is
+    /// used to allow NICs to perform checksum and TSO offloads by relying on
+    /// the host to signal where each header lies, without doing any reparsing in
+    /// the ASIC.
     #[inline]
     pub fn encap_meoi(&self) -> Option<mac_ether_offload_info_t> {
         match &self.prepend {
@@ -1736,17 +1742,25 @@ impl EmitSpec {
 
                         if let Some(eth) = eth {
                             out.meoi_flags |= MacEtherOffloadFlags::L2INFO_SET;
-                            out.meoi_l2hlen = u8::try_from(eth.packet_length())
-                                .expect("14B < u8::MAX");
+                            let l2hlen = u8::try_from(eth.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l2hlen.expect("14B < u8::MAX");
+                            }
+                            out.meoi_l2hlen = l2hlen.ok()?;
                             out.meoi_l3proto = eth.ethertype.0;
                         }
 
                         if let Some(ip) = ip {
                             out.meoi_flags |= MacEtherOffloadFlags::L3INFO_SET;
-                            out.meoi_l3hlen = u16::try_from(ip.packet_length())
-                            .expect(
-                                "IPv4 is bounded, IPv6 validates to <= 65535",
-                            );
+                            let l3hlen = u16::try_from(ip.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l3hlen.expect(
+                                    "IPv4 is bounded, IPv6 validates to <= 65535",
+                                );
+                            }
+                            out.meoi_l3hlen = l3hlen.ok()?;
                             out.meoi_l4proto = ip
                                 .next_layer()
                                 .expect(
@@ -1763,11 +1777,18 @@ impl EmitSpec {
                                     out.meoi_l4hlen =
                                         u8::try_from(Udp::MINIMUM_LENGTH)
                                             .expect("UDP = 8B");
+
                                     out.meoi_tuntype = MacTunType::GENEVE;
-                                    out.meoi_tunhlen = u16::try_from(
+                                    let tunhlen = u16::try_from(
                                         geneve_meta.hdr_len_inner(),
-                                    )
-                                    .expect("Geneve is bounded to 260B");
+                                    );
+                                    #[cfg(debug_assertions)]
+                                    {
+                                        tunhlen.expect(
+                                            "Geneve is bounded to 260B",
+                                        );
+                                    }
+                                    out.meoi_tunhlen = tunhlen.ok()?;
                                 }
                             }
                         }
