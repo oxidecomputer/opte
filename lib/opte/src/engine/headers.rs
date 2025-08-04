@@ -672,7 +672,7 @@ impl<T: Validate> Valid<T> {
 
     /// Treat `value` as though `value.validate()` returned no errors.
     ///
-    /// See [`validated_unchecked`] for the contracts which must be upheld.
+    /// See [`Self::validated_unchecked`] for the contracts which must be upheld.
     pub fn validated_unchecked_ref(value: &T) -> &Self {
         Valid::ref_cast(&value)
     }
