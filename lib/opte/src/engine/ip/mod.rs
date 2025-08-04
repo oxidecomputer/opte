@@ -14,6 +14,7 @@ use super::headers::HeaderActionModify;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::PushAction;
+use super::headers::Valid;
 use super::packet::ParseError;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
@@ -264,7 +265,7 @@ impl<T: ByteSlice> HasInnerCksum for L3<T> {
 }
 
 impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
-    fn push(&self) -> L3<T> {
-        L3Repr::from(self).into()
+    fn push(value: &Valid<Self>) -> L3<T> {
+        L3Repr::from(value).into()
     }
 }

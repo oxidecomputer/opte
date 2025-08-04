@@ -10,6 +10,7 @@
 
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::headers::Valid;
 use super::headers::Validate;
 use super::packet::MismatchError;
 use super::packet::ParseError;
@@ -175,11 +176,11 @@ impl From<GenevePush> for GeneveMeta {
 }
 
 impl PushAction<GeneveMeta> for GenevePush {
-    fn push(&self) -> GeneveMeta {
+    fn push(value: &Valid<Self>) -> GeneveMeta {
         GeneveMeta {
-            entropy: self.entropy,
-            vni: self.vni,
-            options: self.options.clone(),
+            entropy: value.entropy,
+            vni: value.vni,
+            options: value.options.clone(),
         }
     }
 }

@@ -23,6 +23,7 @@ use super::tcp::TcpMod;
 use super::tcp::TcpPush;
 use super::udp::UdpMod;
 use super::udp::UdpPush;
+use crate::engine::ip::v6::Ipv6Extension;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::string::ToString;
@@ -43,6 +44,7 @@ pub use opte_api::IpAddr;
 pub use opte_api::IpCidr;
 pub use opte_api::Protocol;
 pub use opte_api::Vni;
+use ref_cast::RefCast;
 use serde::Deserialize;
 use serde::Serialize;
 use zerocopy::ByteSlice;
@@ -50,10 +52,10 @@ use zerocopy::ByteSliceMut;
 
 /// A type that is meant to be used as an argument to a [`Transform`]
 /// implementation.
-pub trait PushAction<HdrP> {
+pub trait PushAction<HdrP>: Sized {
     /// Produce a concrete header specification from a simplified
-    /// representation, assuming that `self` has already been validated.
-    fn push(&self) -> HdrP;
+    /// representation, given that `self` has already been validated.
+    fn push(value: &Valid<Self>) -> HdrP;
 }
 
 /// A type that is meant to be used as an argument to a
@@ -77,9 +79,9 @@ impl Validate for IpPush {
     }
 }
 
-impl From<&IpPush> for L3Repr {
-    fn from(value: &IpPush) -> Self {
-        match value {
+impl From<&Valid<IpPush>> for L3Repr {
+    fn from(value: &Valid<IpPush>) -> Self {
+        match &**value {
             IpPush::Ip4(v4) => L3Repr::Ipv4(Ipv4 {
                 protocol: IpProtocol(u8::from(v4.proto)),
                 source: v4.src,
@@ -101,7 +103,12 @@ impl From<&IpPush> for L3Repr {
                             .map(|v| v.ip_protocol())
                             .unwrap_or(ulp);
 
-                        out.push(ext.as_repr(next_header));
+                        // Safe to assume validity here as children of self are
+                        // validated in our `Validate` impl.
+                        out.push(Ipv6Extension::as_repr(
+                            Valid::validated_unchecked_ref(ext),
+                            next_header,
+                        ));
                     }
                     (out, first)
                 };
@@ -209,9 +216,11 @@ pub enum EncapPush {
 }
 
 impl PushAction<EncapMeta> for EncapPush {
-    fn push(&self) -> EncapMeta {
-        match self {
-            Self::Geneve(gp) => EncapMeta::from(gp.push()),
+    fn push(value: &Valid<Self>) -> EncapMeta {
+        match &**value {
+            Self::Geneve(gp) => EncapMeta::from(PushAction::push(
+                Valid::validated_unchecked_ref(gp),
+            )),
         }
     }
 }
@@ -524,7 +533,7 @@ where
         match action {
             HeaderAction::Ignore => Ok(false),
             HeaderAction::Push(p) => {
-                *self = p.push().into();
+                *self = PushAction::push(p).into();
                 Ok(Self::HAS_CKSUM)
             }
             HeaderAction::Pop => Err(HeaderActionError::CantPop),
@@ -561,7 +570,7 @@ impl<P, M> HeaderAction<P, M> {
             },
 
             Self::Push(action) => {
-                meta.replace(action.push());
+                meta.replace(PushAction::push(action));
             }
 
             // A previous action may have already removed this meta,
@@ -587,7 +596,7 @@ impl<P, M> HeaderAction<P, M> {
         match (self, target) {
             (HeaderAction::Ignore, _) => Ok(false),
             (HeaderAction::Push(p), a) => {
-                *a = Some(p.push().into());
+                *a = Some(PushAction::push(p).into());
                 Ok(X::HAS_CKSUM)
             }
             (HeaderAction::Pop, a) => {
@@ -641,12 +650,31 @@ impl From<ValidateErr> for GenHtError {
 }
 
 /// Header actions which have been successfully sanity checked.
-#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Copy, Clone, Debug, Default, Deserialize, Serialize, RefCast)]
+#[repr(transparent)]
 pub struct Valid<T>(T);
 
 impl<T: Validate> Valid<T> {
+    /// Prove that a transform or set of headers specified in a
+    /// `NetworkImpl` is well-formed.
     pub fn validated(value: T) -> Result<Self, ValidateErr> {
         value.validate().map(|_| Self(value))
+    }
+
+    /// Treat `value` as though `value.validate()` returned no errors.
+    ///
+    /// This should be used with care (and principally only for nested emit
+    /// of Valid types). **Implementations may freely panic or emit malformed
+    /// packets if `value` is invalid.**
+    pub fn validated_unchecked(value: T) -> Self {
+        Self(value)
+    }
+
+    /// Treat `value` as though `value.validate()` returned no errors.
+    ///
+    /// See [`validated_unchecked`] for the contracts which must be upheld.
+    pub fn validated_unchecked_ref(value: &T) -> &Self {
+        Valid::ref_cast(&value)
     }
 }
 

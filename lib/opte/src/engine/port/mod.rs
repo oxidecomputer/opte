@@ -66,6 +66,7 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::ExpiryPolicy;
+use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
@@ -1769,12 +1770,10 @@ impl Transforms {
                 fn store_outer_push<P: Clone, M>(
                     tx: &HeaderAction<P, M>,
                     still_permissable: &mut bool,
-                    slot: &mut Option<P>,
+                    slot: &mut Option<Valid<P>>,
                 ) {
                     match tx {
-                        HeaderAction::Push(p) => {
-                            *slot = Some(p.clone().into_inner())
-                        }
+                        HeaderAction::Push(p) => *slot = Some(p.clone()),
                         HeaderAction::Pop => *slot = None,
                         HeaderAction::Modify(_) => *still_permissable = false,
                         HeaderAction::Ignore => {}
@@ -1836,7 +1835,7 @@ impl Transforms {
             if still_permissable {
                 let encap = match (outer_ether, outer_ip, outer_encap) {
                     (Some(eth), Some(ip), Some(encap)) => {
-                        let encap = EncapMeta::from(encap);
+                        let encap = EncapMeta::from(encap.into_inner());
 
                         let eth_repr = Ethernet {
                             destination: eth.dst,
@@ -1847,7 +1846,7 @@ impl Transforms {
 
                         let ip_repr = L3Repr::from(&ip);
                         let ip_len = ip_repr.packet_length();
-                        let (ulp, l3_extra_bytes, ip_len_offset) = match &ip {
+                        let (ulp, l3_extra_bytes, ip_len_offset) = match &*ip {
                             IpPush::Ip4(v4) => (v4.proto, ip_len, 2),
                             IpPush::Ip6(v6) => {
                                 (v6.proto, ip_len - Ipv6::MINIMUM_LENGTH, 4)
@@ -1886,8 +1885,8 @@ impl Transforms {
 
                         Some(CompiledEncap::Push {
                             encap,
-                            eth,
-                            ip,
+                            eth: *eth,
+                            ip: ip.into_inner(),
                             bytes,
                             l3_len_offset,
                             l3_extra_bytes,

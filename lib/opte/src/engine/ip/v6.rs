@@ -7,6 +7,7 @@
 //! IPv6 Headers.
 
 use crate::engine::headers::HeaderActionError;
+use crate::engine::headers::Valid;
 use crate::engine::headers::Validate;
 use crate::engine::headers::ValidateErr;
 use crate::engine::packet::MismatchError;
@@ -204,16 +205,17 @@ impl Ipv6Extension {
     }
 
     /// Convert this extension for serialisation.
-    ///
-    /// This method assumes that `self` has been validated.
-    pub fn as_repr(&self, next_header: IpProtocol) -> LowRentV6EhRepr {
-        let total = self.packet_length();
+    pub fn as_repr(
+        value: &Valid<Self>,
+        next_header: IpProtocol,
+    ) -> LowRentV6EhRepr {
+        let total = value.packet_length();
         let body_len = total - LowRentV6EhRepr::MINIMUM_LENGTH;
         let mut data = Vec::with_capacity(body_len);
 
         // This method is heavily specialised for the two supported EH
         // classes.
-        let opts = match self {
+        let opts = match &**value {
             Self::DestinationOpts(o) => o,
             Self::HopByHopOpts(o) => o,
         };
@@ -524,6 +526,7 @@ pub fn v6_get_next_header<V: ByteSlice>(
 pub(crate) mod test {
     use super::*;
     use crate::engine::headers::IpPush;
+    use crate::engine::headers::Valid;
     use crate::engine::ip::L3Repr;
     use core::error::Error;
     use ingot::ip::IpProtocol as IngotIpProtocol;
@@ -942,7 +945,8 @@ pub(crate) mod test {
             // just contain padding bytes.
             let ext = f(options.clone().into());
             assert_eq!(ext.packet_length(), 8, "{label}");
-            match ext.as_repr(IngotIpProtocol::TCP) {
+            let ext = Valid::validated(ext).unwrap();
+            match Ipv6Extension::as_repr(&ext, IngotIpProtocol::TCP) {
                 LowRentV6EhRepr::IpV6Ext6564(e) => {
                     assert_eq!(
                         e,
@@ -972,7 +976,8 @@ pub(crate) mod test {
             });
             let ext = f(options.clone().into());
             assert_eq!(ext.packet_length(), 8, "{label}");
-            match ext.as_repr(IngotIpProtocol::TCP) {
+            let ext = Valid::validated(ext).unwrap();
+            match Ipv6Extension::as_repr(&ext, IngotIpProtocol::TCP) {
                 LowRentV6EhRepr::IpV6Ext6564(e) => {
                     assert_eq!(
                         e,
@@ -1035,9 +1040,9 @@ pub(crate) mod test {
             ]
             .into(),
         };
-        assert!(push_spec.validate().is_ok());
 
-        let compiled = L3Repr::from(&(IpPush::from(push_spec.clone())));
+        let spec = Valid::validated(IpPush::from(push_spec.clone())).unwrap();
+        let compiled = L3Repr::from(&spec);
         let L3Repr::Ipv6(v6) = compiled else { panic!() };
         let stack = [IngotIpProtocol::IPV6_DEST_OPTS, IngotIpProtocol::TCP];
         assert_eq!(v6.next_header, IngotIpProtocol::IPV6_HOP_BY_HOP);
