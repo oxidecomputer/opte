@@ -1646,7 +1646,7 @@ static mut xde_devops: dev_ops = dev_ops {
     // it's mutated only during `_init()`. Yes, it needs to be mutable
     // to allow `dld_init_ops()` to set `cb_str`.
     devo_cb_ops: addr_of!(xde_cb_ops),
-    devo_bus_ops: 0 as *const bus_ops,
+    devo_bus_ops: core::ptr::null::<bus_ops>(),
     devo_power: nodev_power,
     devo_quiesce: ddi_quiesce_not_needed,
 };

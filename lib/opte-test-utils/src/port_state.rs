@@ -172,7 +172,7 @@ pub enum SplitField<'a> {
     Other(&'a str),
 }
 
-pub fn split_field(s: &str) -> SplitField {
+pub fn split_field(s: &str) -> SplitField<'_> {
     let split: Vec<&str> = s.split('.').collect();
 
     match split.len() {
