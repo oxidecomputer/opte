@@ -125,11 +125,11 @@ impl kstat_named_t {
 
     /// Validates at compile time whether `self._u64` can be safely used as
     /// an AtomicU64.
-    const KSTAT_ATOMIC_U64_SAFE: () = if align_of::<KStatNamedValue>() % 8 == 0
-    {
-    } else {
-        panic!("Platform does not meet u64 8B alignment for AtomicU64");
-    };
+    const KSTAT_ATOMIC_U64_SAFE: () =
+        if align_of::<KStatNamedValue>().is_multiple_of(8) {
+        } else {
+            panic!("Platform does not meet u64 8B alignment for AtomicU64");
+        };
 
     /// Interprets the value of this named kstat as a `u64`.
     ///

@@ -271,7 +271,7 @@ impl Interval {
         let nanos = dur.subsec_nanos() as u64;
 
         assert!(
-            nanos % SYSTEM_PERIODIC_RESOLUTION_IN_NANOS == 0,
+            nanos.is_multiple_of(SYSTEM_PERIODIC_RESOLUTION_IN_NANOS),
             "interval is not multiple of 10ms"
         );
 

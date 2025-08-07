@@ -660,7 +660,7 @@ impl<'a> OptionRequest<'a> {
     }
 
     fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
-        if buf.len() % Code::SIZE != 0 {
+        if !buf.len().is_multiple_of(Code::SIZE) {
             return Err(Error::Truncated);
         }
         let count = buf.len() / Code::SIZE;
@@ -812,7 +812,7 @@ impl<'a> IpList<'a> {
 
     fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
         const SIZE: usize = size_of::<Ipv6Addr>();
-        if buf.len() % SIZE != 0 {
+        if !buf.len().is_multiple_of(SIZE) {
             return Err(Error::Truncated);
         }
         let count = buf.len() / SIZE;

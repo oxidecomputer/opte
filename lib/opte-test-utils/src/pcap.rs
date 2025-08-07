@@ -24,7 +24,7 @@ fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
 }
 
 #[allow(dead_code)]
-fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
+fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock<'_>) {
     match pcap::parse_pcap_frame(offset) {
         Ok((new_offset, block)) => {
             // We always want access to the entire packet.

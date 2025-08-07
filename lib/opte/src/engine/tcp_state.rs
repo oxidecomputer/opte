@@ -651,6 +651,7 @@ impl TcpFlowState {
     }
 }
 
+#[cfg(all(not(feature = "std"), not(test)))]
 #[repr(C)]
 struct tcp_flow_state_sdt_arg {
     pub tcp_state: u8,
@@ -660,6 +661,7 @@ struct tcp_flow_state_sdt_arg {
     pub remote_ack: u32,
 }
 
+#[cfg(all(not(feature = "std"), not(test)))]
 impl From<&TcpFlowState> for tcp_flow_state_sdt_arg {
     fn from(state: &TcpFlowState) -> Self {
         tcp_flow_state_sdt_arg {
