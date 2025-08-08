@@ -8,6 +8,7 @@ use crate::dev_map::VniMac;
 use crate::mac::TxHint;
 use crate::xde::UnderlayIndex;
 use alloc::collections::btree_map::BTreeMap;
+use core::iter::FusedIterator;
 use core::ptr::NonNull;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
@@ -15,7 +16,7 @@ use opte::ddi::mblk::MsgBlkChain;
 /// Temporary storage to collect and transmit packets bound for the same
 /// destination in a single batch.
 pub struct Postbox {
-    boxes: BTreeMap<VniMac, MsgBlkChain>,
+    boxes: Boxes,
     // Avoid any lookup on adjacent runs of packets hitting a single port.
     last_caller: Option<(VniMac, NonNull<MsgBlkChain>)>,
 }
@@ -28,7 +29,7 @@ impl Default for Postbox {
 
 impl Postbox {
     pub const fn new() -> Self {
-        Self { boxes: BTreeMap::new(), last_caller: None }
+        Self { boxes: Boxes::None, last_caller: None }
     }
 
     /// Append the given `pkt` to a chain for delivery to `key`.
@@ -49,8 +50,7 @@ impl Postbox {
             //    sets `last_caller` to `None`.
             unsafe { chain_ptr.as_mut() }
         } else {
-            let chain =
-                self.boxes.entry(key).or_insert_with(MsgBlkChain::empty);
+            let chain = self.boxes.get_chain(key);
             self.last_caller = Some((key, chain.into()));
             chain
         };
@@ -68,6 +68,83 @@ impl Postbox {
 // We never allow `&self` to use this mutably.
 unsafe impl Send for Postbox {}
 unsafe impl Sync for Postbox {}
+
+/// Avoid any heap allocation when there is only one recipient in a
+/// packet chain.
+enum Boxes {
+    None,
+    One(VniMac, MsgBlkChain),
+    Many(BTreeMap<VniMac, MsgBlkChain>),
+}
+
+impl Boxes {
+    #[inline(always)]
+    fn get_chain(&mut self, key: VniMac) -> &mut MsgBlkChain {
+        // Need to check if we have an upgrade due first, due to borrowck.
+        // E.g., can't return v from Self::One(k, v) early on.
+        match self {
+            Self::None => {
+                *self = Self::One(key, MsgBlkChain::empty());
+            }
+            Self::One(k, ..) if *k != key => {
+                let mut scratch = Self::Many(BTreeMap::new());
+                core::mem::swap(&mut scratch, self);
+                let Self::One(old_k, old_v) = scratch else { unreachable!() };
+                let Self::Many(map) = self else { unreachable!() };
+                map.insert(old_k, old_v);
+            }
+            _ => {}
+        }
+
+        match self {
+            Self::One(_, v) => v,
+            Self::Many(map) => {
+                map.entry(key).or_insert_with(MsgBlkChain::empty)
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl IntoIterator for Boxes {
+    type Item = (VniMac, MsgBlkChain);
+
+    type IntoIter = BoxIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Boxes::None => BoxIter::OneOrNone(None.into_iter()),
+            Boxes::One(v, m) => BoxIter::OneOrNone(Some((v, m)).into_iter()),
+            Boxes::Many(m) => BoxIter::Many(m.into_iter()),
+        }
+    }
+}
+
+enum BoxIter {
+    OneOrNone(core::option::IntoIter<(VniMac, MsgBlkChain)>),
+    Many(alloc::collections::btree_map::IntoIter<VniMac, MsgBlkChain>),
+}
+
+impl Iterator for BoxIter {
+    type Item = (VniMac, MsgBlkChain);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::OneOrNone(v) => v.next(),
+            Self::Many(v) => v.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::OneOrNone(v) => v.size_hint(),
+            Self::Many(v) => v.size_hint(),
+        }
+    }
+}
+
+impl ExactSizeIterator for BoxIter {}
+impl FusedIterator for BoxIter {}
 
 /// A [`Postbox`] with dedicated storage for the underlay ports.
 pub struct TxPostbox {
