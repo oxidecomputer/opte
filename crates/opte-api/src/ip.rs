@@ -189,7 +189,7 @@ impl SubnetRouterPair {
         if prefix == 0 {
             0
         } else {
-            let round = u8::from(prefix % 8 != 0);
+            let round = u8::from(!prefix.is_multiple_of(8));
             (prefix / 8) + round
         }
     }

@@ -13,8 +13,10 @@ use super::checksum::Checksum;
 use super::ether::Ethernet;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
+use super::geneve::ArbitraryGeneveOption;
+use super::geneve::GeneveMetaRef;
+use super::geneve::ValidGeneveMeta;
 use super::headers::EncapMeta;
-use super::headers::EncapPush;
 use super::headers::IpPush;
 use super::headers::SizeHoldingEncap;
 use super::headers::ValidEncapMeta;
@@ -44,7 +46,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
 use crate::engine::geneve::GeneveMeta;
-use crate::engine::geneve::valid_geneve_has_oxide_external;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -58,8 +59,12 @@ use core::result;
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering;
 use dyn_clone::DynClone;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
@@ -81,6 +86,7 @@ use ingot::types::PacketParseError;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
+use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
@@ -230,7 +236,7 @@ impl DError for MismatchError {
             *v = self.expected;
         }
         if let Some(v) = data.get_mut(1) {
-            *v = self.expected;
+            *v = self.actual;
         }
     }
 }
@@ -497,16 +503,31 @@ impl<T: Read + Pullup> PacketData<T> {
         self.headers.outer_l3.as_ref()
     }
 
-    /// Returns whether this packet is sourced from outside the rack,
-    /// in addition to its VNI.
-    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
-        match &self.headers.outer_encap {
+    pub fn outer_encap(
+        &self,
+    ) -> Option<&InlineHeader<EncapMeta, ValidEncapMeta<T::Chunk>>> {
+        self.headers.outer_encap.as_ref()
+    }
+
+    pub fn outer_geneve(
+        &self,
+    ) -> Option<InlineHeader<&GeneveMeta, &ValidGeneveMeta<T::Chunk>>> {
+        match self.headers.outer_encap.as_ref() {
             Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
-                Some((g.vni, g.oxide_external_pkt))
+                Some(InlineHeader::Repr(g))
             }
-            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(g)))
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(g))) => {
+                Some(InlineHeader::Raw(g))
             }
+            _ => None,
+        }
+    }
+
+    /// Returns this packet's VNI, if present.
+    pub fn outer_encap_vni(&self) -> Option<Vni> {
+        match &self.headers.outer_encap {
+            Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => Some(g.vni),
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(g))) => Some(g.vni()),
             None => None,
         }
     }
@@ -938,14 +959,40 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    InlineHeader::Repr(o) => *o,
-                    InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)) => {
+                    InlineHeader::Repr(o) => o.clone(),
+                    InlineHeader::Raw(ValidEncapMeta::Geneve(g)) => {
+                        // We can probably devise a better way to pass through
+                        // Geneve options in the Raw case (i.e., we start and
+                        // end packet processing with a valid encap), but this
+                        // is not expected to be used in the product today.
+                        let opts: Vec<_> = match g.1.options_ref() {
+                            ingot::types::FieldRef::Repr(v) => v
+                                .iter()
+                                .map(|v| ArbitraryGeneveOption {
+                                    option_class: v.class,
+                                    option_type: v.option_type.0,
+                                    data: v.data.clone().into(),
+                                })
+                                .collect(),
+                            ingot::types::FieldRef::Raw(v) => v
+                                .iter(None)
+                                .map(|v| {
+                                    v.map(|opt| ArbitraryGeneveOption {
+                                        option_class: opt.class(),
+                                        option_type: opt.option_type().0,
+                                        data: opt
+                                            .data_ref()
+                                            .as_ref()
+                                            .to_vec()
+                                            .into(),
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        };
                         EncapMeta::Geneve(GeneveMeta {
-                            entropy: u.source(),
+                            entropy: g.entropy(),
                             vni: g.vni(),
-                            oxide_external_pkt: valid_geneve_has_oxide_external(
-                                g,
-                            ),
+                            options: opts.into(),
                         })
                     }
                 });
@@ -984,7 +1031,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                         v4.total_len = (v4.ihl as u16) * 4 + inner_sz;
                     }
                     Some(L3Repr::Ipv6(v6)) => {
-                        v6.payload_len = inner_sz;
+                        v6.payload_len = inner_sz.saturating_add(
+                            u16::try_from(v6.v6ext.packet_length())
+                                .unwrap_or(u16::MAX),
+                        );
                     }
                     _ => {}
                 }
@@ -1638,7 +1688,7 @@ impl EmitSpec {
     pub fn outer_encap_vni(&self) -> Option<Vni> {
         match &self.prepend {
             PushSpec::Fastpath(c) => match &c.encap {
-                CompiledEncap::Push { encap: EncapPush::Geneve(g), .. } => {
+                CompiledEncap::Push { encap: EncapMeta::Geneve(g), .. } => {
                     Some(g.vni)
                 }
                 _ => None,
@@ -1665,6 +1715,88 @@ impl EmitSpec {
                 Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
                 _ => None,
             },
+            PushSpec::NoOp => None,
+        }
+    }
+
+    /// Returns the offload info in the illumos MEOI format for the encap layers
+    /// pushed onto the packet, without the `meoi_len` field set.
+    ///
+    /// MEOI (MAC ethernet offload information) contains the type and length of
+    /// every layer within a packet (including tunnel layers within L4). This is
+    /// used to allow NICs to perform checksum and TSO offloads by relying on
+    /// the host to signal where each header lies, without doing any reparsing in
+    /// the ASIC.
+    #[inline]
+    pub fn encap_meoi(&self) -> Option<mac_ether_offload_info_t> {
+        match &self.prepend {
+            PushSpec::Fastpath(c) => match &c.encap {
+                CompiledEncap::Push { meoi, .. } => Some(meoi.as_meoi()),
+                _ => None,
+            },
+            PushSpec::Slowpath(s) => {
+                match (&s.outer_eth, &s.outer_ip, &s.outer_encap) {
+                    (None, None, None) => None,
+                    (eth, ip, encap) => {
+                        let mut out = mac_ether_offload_info_t::default();
+
+                        if let Some(eth) = eth {
+                            out.meoi_flags |= MacEtherOffloadFlags::L2INFO_SET;
+                            let l2hlen = u8::try_from(eth.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l2hlen.expect("14B < u8::MAX");
+                            }
+                            out.meoi_l2hlen = l2hlen.ok()?;
+                            out.meoi_l3proto = eth.ethertype.0;
+                        }
+
+                        if let Some(ip) = ip {
+                            out.meoi_flags |= MacEtherOffloadFlags::L3INFO_SET;
+                            let l3hlen = u16::try_from(ip.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l3hlen.expect(
+                                    "IPv4 is bounded, IPv6 validates to <= 65535",
+                                );
+                            }
+                            out.meoi_l3hlen = l3hlen.ok()?;
+                            out.meoi_l4proto = ip
+                                .next_layer()
+                                .expect(
+                                    "next_layer is not fallible for IP types",
+                                )
+                                .0;
+                        }
+
+                        if let Some(encap) = encap {
+                            out.meoi_flags |= MacEtherOffloadFlags::L4INFO_SET
+                                | MacEtherOffloadFlags::TUNINFO_SET;
+                            match encap {
+                                EncapMeta::Geneve(geneve_meta) => {
+                                    out.meoi_l4hlen =
+                                        u8::try_from(Udp::MINIMUM_LENGTH)
+                                            .expect("UDP = 8B");
+
+                                    out.meoi_tuntype = MacTunType::GENEVE;
+                                    let tunhlen = u16::try_from(
+                                        geneve_meta.hdr_len_inner(),
+                                    );
+                                    #[cfg(debug_assertions)]
+                                    {
+                                        tunhlen.expect(
+                                            "Geneve is bounded to 260B",
+                                        );
+                                    }
+                                    out.meoi_tunhlen = tunhlen.ok()?;
+                                }
+                            }
+                        }
+
+                        Some(out)
+                    }
+                }
+            }
             PushSpec::NoOp => None,
         }
     }

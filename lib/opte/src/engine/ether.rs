@@ -11,6 +11,8 @@ use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::headers::Valid;
+use super::headers::Validate;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -215,8 +217,14 @@ pub struct EtherMeta {
 }
 
 impl PushAction<EtherMeta> for EtherMeta {
-    fn push(&self) -> EtherMeta {
-        EtherMeta { dst: self.dst, src: self.src, ether_type: self.ether_type }
+    fn push(value: &Valid<Self>) -> EtherMeta {
+        **value
+    }
+}
+
+impl Validate for EtherMeta {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        Ok(())
     }
 }
 
@@ -332,23 +340,23 @@ impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
     for EtherMeta
 {
     #[inline]
-    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
+    fn push(value: &Valid<Self>) -> InlineHeader<Ethernet, ValidEthernet<T>> {
         InlineHeader::Repr(Ethernet {
-            destination: self.dst,
-            source: self.src,
-            ethertype: Ethertype(u16::from(self.ether_type)),
+            destination: value.dst,
+            source: value.src,
+            ethertype: Ethertype(u16::from(value.ether_type)),
         })
     }
 }
 
 impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
     #[inline]
-    fn push(&self) -> EthernetPacket<T> {
+    fn push(value: &Valid<Self>) -> EthernetPacket<T> {
         Header::Repr(
             Ethernet {
-                destination: self.dst,
-                source: self.src,
-                ethertype: Ethertype(u16::from(self.ether_type)),
+                destination: value.dst,
+                source: value.src,
+                ethertype: Ethertype(u16::from(value.ether_type)),
             }
             .into(),
         )

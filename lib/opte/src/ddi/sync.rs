@@ -247,7 +247,7 @@ impl<T> KMutex<T> {
         KMutex { inner: Mutex::new(val) }
     }
 
-    pub fn lock(&self) -> KMutexGuard<T> {
+    pub fn lock(&self) -> KMutexGuard<'_, T> {
         let guard = self.inner.lock().unwrap();
         KMutexGuard { guard }
     }
@@ -429,12 +429,12 @@ impl<T> KRwLock<T> {
         KRwLock { inner: std::sync::RwLock::new(val) }
     }
 
-    pub fn read(&self) -> KRwLockReadGuard<T> {
+    pub fn read(&self) -> KRwLockReadGuard<'_, T> {
         let guard = self.inner.read().unwrap();
         KRwLockReadGuard { guard }
     }
 
-    pub fn write(&self) -> KRwLockWriteGuard<T> {
+    pub fn write(&self) -> KRwLockWriteGuard<'_, T> {
         let guard = self.inner.write().unwrap();
         KRwLockWriteGuard { guard }
     }
