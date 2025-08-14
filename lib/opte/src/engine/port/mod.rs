@@ -6,6 +6,7 @@
 
 //! A virtual switch port.
 
+use super::packet::PacketOfIndeterminateState;
 use super::HdlPktAction;
 use super::LightweightMeta;
 use super::NetworkImpl;
@@ -1208,11 +1209,13 @@ impl<N: NetworkImpl> Port<N> {
         // My gutfeel is that there's a perf cost here -- this struct
         // is pretty large, but expressing the transform on a &mut is also
         // less than ideal.
-        mut pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
+        // mut pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
+        mpkt: &mut PacketOfIndeterminateState<'a, M>,
     ) -> result::Result<ProcessResult, ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
     {
+        let pkt = mpkt.lite().unwrap();
         let process_start = Moment::now();
         let flow_before = pkt.flow();
         let mblk_addr = pkt.mblk_addr();
@@ -1487,7 +1490,7 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         // (2)/(3) Full-fat metadata is required.
-        let mut pkt = pkt.to_full_meta();
+        let pkt = mpkt.full();
         let mut ameta = ActionMeta::new();
 
         let res = match (&decision, dir) {
@@ -1498,7 +1501,7 @@ impl<N: NetworkImpl> Port<N> {
                 let tx = Arc::clone(&entry.state().xforms);
 
                 pkt.set_l4_hash(l4_hash);
-                tx.apply(&mut pkt, dir)?;
+                tx.apply(pkt, dir)?;
                 Ok(InternalProcessResult::Modified)
             }
 
@@ -1513,7 +1516,7 @@ impl<N: NetworkImpl> Port<N> {
                 let res = self.process_in_miss(
                     data,
                     epoch,
-                    &mut pkt,
+                    pkt,
                     &flow_before,
                     &mut ameta,
                 );
@@ -1529,7 +1532,7 @@ impl<N: NetworkImpl> Port<N> {
                     .expect("lock should be held on this codepath");
 
                 let res =
-                    self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
+                    self.process_out_miss(data, epoch, pkt, &mut ameta);
 
                 drop(lock);
 

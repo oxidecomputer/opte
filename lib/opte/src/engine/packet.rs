@@ -676,6 +676,68 @@ impl<T: Read + Pullup> From<&PacketData<T>> for InnerFlowId {
     }
 }
 
+// TODO: not generic yet, testing purposes/
+
+enum PacketOfIndeterminateStateInner<'a, M>
+    where M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>
+{
+    Lite(Packet<LiteParsed<MsgBlkIterMut<'a>, M>>),
+    Full(Packet<FullParsed<MsgBlkIterMut<'a>>>),
+}
+
+pub struct PacketOfIndeterminateState<'a, M>
+    where M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>
+{
+    inner: Option<PacketOfIndeterminateStateInner<'a, M>>,
+}
+
+impl<'a, M> PacketOfIndeterminateState<'a, M>
+    where M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>
+{
+    #[inline(always)]
+    pub fn parse_inbound<NP: NetworkParser<InMeta<&'a mut [u8]> = M>>(
+        pkt: MsgBlkIterMut<'a>,
+        net: NP,
+    ) -> Result<Self, ParseError> {
+        Packet::parse_inbound(pkt, net).map(PacketOfIndeterminateStateInner::Lite).map(|v| Self { inner: Some(v) })
+    }
+
+    #[inline(always)]
+    pub fn parse_outbound<NP: NetworkParser<OutMeta<&'a mut [u8]> = M>>(
+        pkt: MsgBlkIterMut<'a>,
+        net: NP,
+    ) -> Result<Self, ParseError> {
+        Packet::parse_outbound(pkt, net).map(PacketOfIndeterminateStateInner::Lite).map(|v| Self { inner: Some(v) })
+    }
+
+    #[inline(always)]
+    pub fn lite(&mut self) -> Option<&mut Packet<LiteParsed<MsgBlkIterMut<'a>, M>>> {
+        match self.inner.as_mut() {
+            Some(PacketOfIndeterminateStateInner::Lite(v)) => Some(v),
+            Some(_) => None,
+            None => unreachable!(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn full(&mut self) -> &mut Packet<FullParsed<MsgBlkIterMut<'a>>> {
+        if matches!(&self.inner, Some(PacketOfIndeterminateStateInner::Lite(_))) {
+            let a = match self.inner.take() {
+                Some(PacketOfIndeterminateStateInner::Lite(v)) => v,
+                _ => unreachable!(),
+            };
+
+            let v = a.to_full_meta();
+            self.inner = Some(PacketOfIndeterminateStateInner::Full(v));
+        }
+
+        match self.inner.as_mut() {
+            Some(PacketOfIndeterminateStateInner::Full(v)) => v,
+            _ => unreachable!(),
+        }
+    }
+}
+
 /// A network packet.
 ///
 /// A packet is made up of one or more segments. Any given header is

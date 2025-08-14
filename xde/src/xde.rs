@@ -158,6 +158,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use opte::engine::packet::PacketOfIndeterminateState;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
@@ -1786,7 +1787,7 @@ fn guest_loopback(
     // the encap on.
     // We might be able to do better in the interim, but that costs us time.
 
-    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), VpcParser {}) {
+    let mut parsed_pkt = match PacketOfIndeterminateState::parse_inbound(pkt.iter_mut(), VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
             stat_parse_error(Direction::In, &e);
@@ -1797,8 +1798,9 @@ fn guest_loopback(
         }
     };
 
-    let meta = parsed_pkt.meta();
-    let old_len = parsed_pkt.len();
+    let lite = parsed_pkt.lite().unwrap();
+    let meta = lite.meta();
+    let old_len = lite.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -1808,9 +1810,9 @@ fn guest_loopback(
         }
     };
 
-    let flow = parsed_pkt.flow();
+    let flow = lite.flow();
 
-    let ether_dst = parsed_pkt.meta().inner_eth.destination();
+    let ether_dst = lite.meta().inner_eth.destination();
     let port_key = VniMac::new(vni, ether_dst);
     let maybe_dest_dev = entry_state.get_by_key(port_key);
 
@@ -1821,8 +1823,9 @@ fn guest_loopback(
             // We have found a matching Port on this host; "loop back"
             // the packet into the inbound processing path of the
             // destination Port.
-            match dest_dev.port.process(In, parsed_pkt) {
+            match dest_dev.port.process(In, &mut parsed_pkt) {
                 Ok(ProcessResult::Modified(emit_spec)) => {
+                    drop(parsed_pkt);
                     let mut pkt = emit_spec.apply(pkt);
                     if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
                         opte::engine::err!("failed to set offload info: {}", e);
@@ -1978,7 +1981,7 @@ fn xde_mc_tx_one<'a>(
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let offload_req = pkt.offload_flags();
-    let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
+    let mut parsed_pkt = match PacketOfIndeterminateState::parse_outbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             stat_parse_error(Direction::Out, &e);
@@ -1996,9 +1999,10 @@ fn xde_mc_tx_one<'a>(
             return;
         }
     };
-    let old_len = parsed_pkt.len();
+    let lite = parsed_pkt.lite().unwrap();
+    let old_len = lite.len();
 
-    let meta = parsed_pkt.meta();
+    let meta = lite.meta();
     let Ok(non_eth_payl_bytes) =
         u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
     else {
@@ -2032,10 +2036,12 @@ fn xde_mc_tx_one<'a>(
     // The port processing code will fire a probe that describes what
     // action was taken -- there should be no need to add probes or
     // prints here.
-    let res = port.process(Direction::Out, parsed_pkt);
+    let res = port.process(Direction::Out, &mut parsed_pkt);
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
+            drop(parsed_pkt);
+
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
@@ -2470,10 +2476,9 @@ fn xde_rx_one(
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
-        Ok(pkt) => pkt,
-        Err(e) => {
-            stat_parse_error(Direction::In, &e);
+    let mut parsed_pkt = PacketOfIndeterminateState::parse_inbound(pkt.iter_mut(), parser);
+    if let Err(e) = &parsed_pkt {
+        stat_parse_error(Direction::In, &e);
 
             // NOTE: We are using the individual mblk_t as read only
             // here to get the pointer value so that the DTrace consumer
@@ -2483,12 +2488,32 @@ fn xde_rx_one(
             opte::engine::dbg!("Rx bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
-            return Some(pkt);
-        }
-    };
+        drop(parsed_pkt);
+        return Some(pkt);
+    }
+    let mut parsed_pkt = parsed_pkt.unwrap();
 
-    let meta = parsed_pkt.meta();
-    let old_len = parsed_pkt.len();
+    // let mut parsed_pkt = match PacketOfIndeterminateState::parse_inbound(pkt.iter_mut(), parser) {
+    //     Ok(pkt) => pkt,
+    //     a @ Err(e) => {
+    //         stat_parse_error(Direction::In, &e);
+
+    //         // NOTE: We are using the individual mblk_t as read only
+    //         // here to get the pointer value so that the DTrace consumer
+    //         // can examine the packet on failure.
+    //         //
+    //         // We don't know the port yet, thus the None.
+    //         opte::engine::dbg!("Rx bad packet: {:?}", &e);
+    //         bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
+
+    //         drop(a);
+    //         return Some(pkt);
+    //     }
+    // };
+
+    let lite = parsed_pkt.lite().unwrap();
+    let meta = lite.meta();
+    let old_len = lite.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -2517,6 +2542,7 @@ fn xde_rx_one(
             vni,
             ether_dst
         );
+        drop(parsed_pkt);
         return Some(pkt);
     };
 
@@ -2550,7 +2576,8 @@ fn xde_rx_one(
 
     let port = &dev.port;
 
-    let res = port.process(Direction::In, parsed_pkt);
+    let res = port.process(Direction::In, &mut parsed_pkt);
+    drop(parsed_pkt);
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
