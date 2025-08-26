@@ -465,7 +465,7 @@ impl StaticAction for DecapAction {
         // switch during NAT -- if found, `oxide_external_packet`
         // is filled.
         if !is_external {
-            action_meta.insert(ACTION_META_VNI.to_string(), vni.to_string());
+            action_meta.insert(ACTION_META_VNI.into(), vni.to_string().into());
         }
 
         Ok(AllowOrDeny::Allow(HdrTransform {
