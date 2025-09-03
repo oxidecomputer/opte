@@ -304,7 +304,7 @@ impl MsgBlk {
     /// Copy the first `n` bytes of this packet into a new `mblk_t`,
     /// increasing the refcount of all remaining segments.
     ///
-    /// On non-illumos platforms this will simple clone the underlying packet
+    /// On non-kernel platforms this will simple clone the underlying packet
     /// with the desired segmentation.
     pub fn pullup(
         &self,
@@ -315,6 +315,8 @@ impl MsgBlk {
         if let Some(n) = n
             && n.get() > totlen
         {
+            // The DDI function will bail out if this is the case, but
+            // we'll be none the wiser to *what* the failure mode was.
             return Err(PktPullupError::TooLong);
         }
 
@@ -332,10 +334,31 @@ impl MsgBlk {
 
                 Ok(Self(mp))
             } else {
-                // We aren't (currently?) simulating refcount tracking in our
-                // userland mblk abstraction.
+                // We aren't (currently?) simulating refcount tracking at all
+                // in our userland mblk abstraction.
                 // Do the segmentation right, but otherwise it's fully cloned.
-                todo!()
+                let to_ensure = n.map(|v| v.get()).unwrap_or(totlen);
+                let mut top_mblk = MsgBlk::new(to_ensure);
+                let mut still_to_write = to_ensure;
+
+                for chunk in self.iter() {
+                    let mut left_in_chunk = chunk.len();
+                    let to_take = chunk.len().min(still_to_write);
+
+                    if still_to_write != 0 {
+                        top_mblk.write_bytes_back(&chunk[..to_take])
+                            .expect("to_take should be <= remaining capacity");
+                    }
+
+                    still_to_write -= to_take;
+                    left_in_chunk -= to_take;
+
+                    if left_in_chunk != 0 {
+                        top_mblk.append(MsgBlk::copy(&chunk[to_take..]));
+                    }
+                }
+
+                Ok(top_mblk)
             }
         }
     }
