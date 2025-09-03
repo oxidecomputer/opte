@@ -16,6 +16,7 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 use core::ops::Deref;
 use core::ops::DerefMut;
 use core::ptr;
@@ -298,6 +299,45 @@ impl MsgBlk {
         // Unwrap safety -- just allocated length of input buffer.
         out.write_bytes_back(buf).unwrap();
         out
+    }
+
+    /// Copy the first `n` bytes of this packet into a new `mblk_t`,
+    /// increasing the refcount of all remaining segments.
+    ///
+    /// On non-illumos platforms this will simple clone the underlying packet
+    /// with the desired segmentation.
+    pub fn pullup(
+        &self,
+        n: Option<NonZeroUsize>,
+    ) -> Result<Self, PktPullupError> {
+        let totlen = self.byte_len();
+
+        if let Some(n) = n
+            && n.get() > totlen
+        {
+            return Err(PktPullupError::TooLong);
+        }
+
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let out = unsafe {
+                    ddi::msgpullup(
+                        self.0.as_ptr(),
+                        n.map(|v| v.get() as isize).unwrap_or(-1),
+                    )
+                };
+
+                let mp = NonNull::new(out)
+                    .ok_or(PktPullupError::AllocFailed)?;
+
+                Ok(Self(mp))
+            } else {
+                // We aren't (currently?) simulating refcount tracking in our
+                // userland mblk abstraction.
+                // Do the segmentation right, but otherwise it's fully cloned.
+                todo!()
+            }
+        }
     }
 
     /// Creates a new [`MsgBlk`] using a given set of packet headers.
@@ -1030,6 +1070,26 @@ impl core::fmt::Display for PktInfoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::PacketShared => "packet has a reference count > 1",
+        })
+    }
+}
+
+/// Reasons a [`MsgBlk`] could not be pulled up.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+pub enum PktPullupError {
+    /// Requested pullup was longer than the underlying packet.
+    TooLong,
+    /// The OS was unable to allocate a [`MsgBlk`].
+    AllocFailed,
+}
+
+impl core::error::Error for PktPullupError {}
+
+impl core::fmt::Display for PktPullupError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::TooLong => "requested pullup is longer than packet",
+            Self::AllocFailed => "failed to allocate an mblk_t",
         })
     }
 }

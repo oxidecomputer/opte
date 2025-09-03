@@ -55,6 +55,11 @@ impl MacAddr {
     pub const fn from_const(bytes: [u8; 6]) -> Self {
         Self { inner: bytes }
     }
+
+    /// Return whether this MAC address is broadcast/multicast.
+    pub const fn is_broadcast(&self) -> bool {
+        (self.inner[0] & 0b0000_0001) != 0
+    }
 }
 
 impl From<MacAddr> for smoltcp::wire::EthernetAddress {

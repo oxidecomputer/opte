@@ -7,9 +7,13 @@
 use crate::postbox::Postbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::btree_set::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
+use opte::api::Ipv6Addr;
 use opte::api::MacAddr;
+use opte::api::OpteError;
 use opte::api::Vni;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
@@ -41,6 +45,7 @@ type Dev = Arc<XdeDev>;
 pub struct DevMap {
     devs: BTreeMap<VniMac, Dev>,
     names: BTreeMap<String, Dev>,
+    mcast_groups: BTreeMap<Ipv6Addr, BTreeSet<VniMac>>,
 }
 
 impl Default for DevMap {
@@ -51,7 +56,11 @@ impl Default for DevMap {
 
 impl DevMap {
     pub const fn new() -> Self {
-        Self { devs: BTreeMap::new(), names: BTreeMap::new() }
+        Self {
+            devs: BTreeMap::new(),
+            names: BTreeMap::new(),
+            mcast_groups: BTreeMap::new(),
+        }
     }
 
     /// Insert an `XdeDev`.
@@ -67,6 +76,52 @@ impl DevMap {
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
         let key = get_key(&self.names.remove(name)?);
         self.devs.remove(&key)
+    }
+
+    /// Allow a port to receive on a given multicast group.
+    ///
+    /// This takes the overlay (outer v6) multicast group address.
+    pub fn multicast_subscribe(
+        &mut self,
+        name: &str,
+        mcast_ip: Ipv6Addr,
+    ) -> Result<(), OpteError> {
+        let port = self
+            .get_by_name(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        // TODO: probably could store Arcs or Weaks here, but want to be safe for now.
+        self.mcast_groups.entry(mcast_ip).or_default().insert(key);
+
+        Ok(())
+    }
+
+    /// Rescind a port's ability to receive on a given multicast group.
+    pub fn multicast_unsubscribe(
+        &mut self,
+        name: &str,
+        mcast_ip: Ipv6Addr,
+    ) -> Result<(), OpteError> {
+        let port = self
+            .get_by_name(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        // TODO: Do we need handling for a special VNI from rack-external traffic?
+        if let Entry::Occupied(set) = self.mcast_groups.entry(mcast_ip) {
+            set.into_mut().remove(&key);
+        }
+
+        Ok(())
+    }
+
+    /// Find the keys for all ports who want to receive a given multicast packet.
+    pub fn multicast_listeners(
+        &self,
+        mcast_ip: &Ipv6Addr,
+    ) -> Option<impl Iterator<Item = &VniMac>> {
+        self.mcast_groups.get(mcast_ip).map(|v| v.iter())
     }
 
     /// Return a reference to an `XdeDev` using its address.
