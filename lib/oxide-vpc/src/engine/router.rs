@@ -267,7 +267,19 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+
+    // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
+    // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
+    // The overlay addresses use any valid multicast prefix; underlay restriction
+    // to ff04::/16 is enforced by M2P mapping validation.
+    let mut mcast_out = Rule::new(0, Action::Allow);
+    mcast_out.add_predicate(Predicate::Any(vec![
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)]),
+        Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)]),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
@@ -294,6 +306,22 @@ fn make_rule(
     target: RouterTarget,
     class: RouterClass,
 ) -> Result<Rule<Finalized>, OpteError> {
+    // Reject router entries with multicast destination CIDRs.
+    // Multicast operates fleet-wide via M2P mappings and subscriptions,
+    // not through VPC routing. Router layer allows multicast through
+    // unconditionally without route lookup.
+    let is_mcast_dst = match dest {
+        IpCidr::Ip4(cidr) => cidr.ip().is_multicast(),
+        IpCidr::Ip6(cidr) => cidr.ip().is_multicast(),
+    };
+    if is_mcast_dst {
+        return Err(OpteError::InvalidRouterEntry {
+            dest,
+            target: "multicast destinations not allowed in router entries"
+                .to_string(),
+        });
+    }
+
     if !valid_router_dest_target_pair(&dest, &target) {
         return Err(OpteError::InvalidRouterEntry {
             dest,

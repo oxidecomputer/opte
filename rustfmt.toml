@@ -4,3 +4,4 @@ max_width = 80
 use_small_heuristics = "max"
 imports_granularity = "Item"
 style_edition = "2024"
+edition = "2024"
