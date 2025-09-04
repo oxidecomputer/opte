@@ -160,6 +160,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::ptr::addr_of;
@@ -185,6 +186,7 @@ use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -212,6 +214,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -444,7 +447,7 @@ pub struct XdeDev {
     // However, that's not where things are today.
     pub port: Arc<Port<VpcNetwork>>,
     vpc_cfg: VpcCfg,
-    port_v2p: Arc<overlay::Virt2Phys>,
+    port_vni_state: Arc<overlay::PerVniMaps>,
 
     // Pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -961,7 +964,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             state.ectx.clone(),
             &req.dhcp,
         )?,
-        port_v2p,
+        port_vni_state: port_v2p,
         vni: cfg.vni,
         vpc_cfg: cfg,
         passthrough: req.passthrough,
@@ -1772,20 +1775,18 @@ fn guest_loopback_probe(
 
 fn guest_loopback(
     src_dev: &XdeDev,
-    entry_state: &DevMap,
+    dest_dev: &XdeDev,
+    port_key: VniMac,
     mut pkt: MsgBlk,
-    vni: Vni,
     postbox: &mut TxPostbox,
 ) {
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
 
-    // Loopback now requires a reparse on loopback to account for UFT fastpath.
-    // When viona serves us larger packets, we needn't worry about allocing
-    // the encap on.
-    // We might be able to do better in the interim, but that costs us time.
-
+    // Loopback requires a reparse to account for UFT fastpath.
+    // We might be able to do better, but the logistics in passing around
+    // the emitspec in lieu of 'full' metadata might be a little troublesome.
     let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
@@ -1810,76 +1811,56 @@ fn guest_loopback(
 
     let flow = parsed_pkt.flow();
 
-    let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let port_key = VniMac::new(vni, ether_dst);
-    let maybe_dest_dev = entry_state.get_by_key(port_key);
+    guest_loopback_probe(mblk_addr, &flow, src_dev, dest_dev);
 
-    match maybe_dest_dev {
-        Some(dest_dev) => {
-            guest_loopback_probe(mblk_addr, &flow, src_dev, dest_dev);
+    match dest_dev.port.process(In, parsed_pkt) {
+        Ok(ProcessResult::Modified(emit_spec)) => {
+            let mut pkt = emit_spec.apply(pkt);
+            if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
+                opte::engine::err!("failed to set offload info: {}", e);
+            }
 
-            // We have found a matching Port on this host; "loop back"
-            // the packet into the inbound processing path of the
-            // destination Port.
-            match dest_dev.port.process(In, parsed_pkt) {
-                Ok(ProcessResult::Modified(emit_spec)) => {
-                    let mut pkt = emit_spec.apply(pkt);
-                    if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
-                        opte::engine::err!("failed to set offload info: {}", e);
-                    }
+            // Having advertised offloads to our guest, looped back
+            // packets are liable to have zero-checksums. Fill these
+            // if necessary.
+            let pkt = if pkt
+                .offload_flags()
+                .flags
+                .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
+            {
+                // We have only asked for cksum emulation, so we
+                // will either have:
+                //  * 0 pkts (checksum could not be emulated,
+                //            packet dropped)
+                //  * 1 pkt.
+                mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
+                    .and_then(|mut v| v.pop_front())
+            } else {
+                Some(pkt)
+            };
 
-                    // Having advertised offloads to our guest, looped back
-                    // packets are liable to have zero-checksums. Fill these
-                    // if necessary.
-                    let pkt = if pkt
-                        .offload_flags()
-                        .flags
-                        .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
-                    {
-                        // We have only asked for cksum emulation, so we
-                        // will either have:
-                        //  * 0 pkts (checksum could not be emulated,
-                        //            packet dropped)
-                        //  * 1 pkt.
-                        mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
-                            .and_then(|mut v| v.pop_front())
-                    } else {
-                        Some(pkt)
-                    };
-
-                    if let Some(pkt) = pkt {
-                        postbox.post_local(port_key, pkt);
-                    }
-                }
-
-                Ok(ProcessResult::Drop { reason }) => {
-                    opte::engine::dbg!("loopback rx drop: {:?}", reason);
-                }
-
-                Ok(ProcessResult::Hairpin(_hppkt)) => {
-                    // There should be no reason for an loopback
-                    // inbound packet to generate a hairpin response
-                    // from the destination port.
-                    opte::engine::dbg!("unexpected loopback rx hairpin");
-                }
-
-                Err(e) => {
-                    opte::engine::dbg!(
-                        "loopback port process error: {} -> {} {:?}",
-                        src_dev.port.name(),
-                        dest_dev.port.name(),
-                        e
-                    );
-                }
+            if let Some(pkt) = pkt {
+                postbox.post_local(port_key, pkt);
             }
         }
 
-        None => {
+        Ok(ProcessResult::Drop { reason }) => {
+            opte::engine::dbg!("loopback rx drop: {:?}", reason);
+        }
+
+        Ok(ProcessResult::Hairpin(_hppkt)) => {
+            // There should be no reason for an loopback
+            // inbound packet to generate a hairpin response
+            // from the destination port.
+            opte::engine::dbg!("unexpected loopback rx hairpin");
+        }
+
+        Err(e) => {
             opte::engine::dbg!(
-                "underlay dest is same as src but the Port was not found \
-                 vni = {}, mac = {}",
-                vni.as_u32(),
-                ether_dst
+                "loopback port process error: {} -> {} {:?}",
+                src_dev.port.name(),
+                dest_dev.port.name(),
+                e
             );
         }
     }
@@ -2039,24 +2020,34 @@ fn xde_mc_tx_one<'a>(
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
-            let (ip6_src, ip6_dst) = match emit_spec.outer_ip6_addrs() {
-                Some(v) => v,
-                None => {
-                    // XXX add SDT probe
-                    // XXX add stat
-                    opte::engine::dbg!("no outer IPv6 header, dropping");
-                    return;
-                }
+            let Some((ip6_src, ip6_dst)) = emit_spec.outer_ip6_addrs() else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("no outer IPv6 header, dropping");
+                return;
             };
 
-            let vni = match emit_spec.outer_encap_vni() {
-                Some(vni) => vni,
-                None => {
-                    // XXX add SDT probe
-                    // XXX add stat
-                    opte::engine::dbg!("no geneve header, dropping");
-                    return;
-                }
+            // EmitSpec applies pushes/pops, but modifications will have occurred
+            // by this point. Pull destination MAC to allow us to reuse code
+            // between unicast & multicast loopback.
+            //
+            // Ingot will have asserted that Ethernet came first, and that it was
+            // contiguous.
+            let Some(ether_dst) = pkt
+                .get(..size_of::<MacAddr>())
+                .map(|v| MacAddr::from_const(v.try_into().unwrap()))
+            else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("couldn't re-read inner MAC, dropping");
+                return;
+            };
+
+            let Some(vni) = emit_spec.outer_encap_vni() else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("no geneve header, dropping");
+                return;
             };
 
             let Some(tun_meoi) = emit_spec.encap_meoi() else {
@@ -2074,7 +2065,21 @@ fn xde_mc_tx_one<'a>(
             if ip6_src == ip6_dst {
                 let entry_state =
                     entry_state.get_or_insert_with(|| src_dev.port_map.read());
-                guest_loopback(src_dev, entry_state, out_pkt, vni, postbox);
+
+                let key = VniMac::new(vni, ether_dst);
+                if let Some(dest_dev) = entry_state.get_by_key(key) {
+                    // We have found a matching Port on this host; "loop back"
+                    // the packet into the inbound processing path of the
+                    // destination Port.
+                    guest_loopback(src_dev, dest_dev, key, out_pkt, postbox);
+                } else {
+                    opte::engine::dbg!(
+                        "underlay dest is same as src but the Port was not found \
+                         vni = {}, mac = {}",
+                        vni.as_u32(),
+                        ether_dst
+                    );
+                }
                 return;
             }
 
@@ -2085,6 +2090,47 @@ fn xde_mc_tx_one<'a>(
                 );
                 return;
             };
+
+            // For a multicast outbound frame, we need to attempt to deliver
+            // to all relevant local ports *and* over whichever underlay ports are
+            // required.
+            if ip6_dst.is_multicast() {
+                // TODO: fill in the mcast forwarding flags using The Table.
+                let entry_state =
+                    entry_state.get_or_insert_with(|| src_dev.port_map.read());
+                if let Some(others) = entry_state.multicast_listeners(&ip6_dst)
+                {
+                    let my_key = VniMac::new(vni, src_dev.port.mac_addr());
+                    for el in others {
+                        if my_key == *el {
+                            continue;
+                        }
+
+                        // This is a more lightweight clone in illumos, and
+                        // gives us an owned form of the headers but a ref
+                        // counted clone of the packet body.
+                        //
+                        // If there are any body transforms internally, OPTE
+                        // will fully clone out the contents if required.
+                        let Ok(my_pkt) = out_pkt.pullup(NonZeroUsize::new(
+                            (encap_len as usize)
+                                + (non_eth_payl_bytes as usize)
+                                + Ethernet::MINIMUM_LENGTH,
+                        )) else {
+                            continue;
+                        };
+                        match entry_state.get_by_key(*el) {
+                            Some(dev) => guest_loopback(
+                                src_dev, dev, *el, my_pkt, postbox,
+                            ),
+                            None => {
+                                // TODO: log, error count, etc.
+                                // Stale state caused this (probably)
+                            }
+                        }
+                    }
+                }
+            }
 
             // 'MSS boosting' is performed here -- we set a 9k (minus overheads)
             // MSS for compatible TCP traffic. This is a kind of 'pseudo-GRO',
@@ -2333,7 +2379,7 @@ fn new_port(
     name: String,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
-    v2p: Arc<overlay::Virt2Phys>,
+    vni_state: Arc<overlay::PerVniMaps>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
     dhcp_cfg: &DhcpCfg,
@@ -2356,7 +2402,7 @@ fn new_port(
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, vni_state, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2454,10 +2500,17 @@ unsafe extern "C" fn xde_rx(
     head
 }
 
-/// Processes an individual packet receiver on the underlay device `stream`.
+/// Processes an individual packet received on the underlay device `stream`.
 ///
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
+///
+/// `xde_rx_one_direct` largely replicates this function due to lifetime issues
+/// around parsing, so changes here may need to be made there too. We could do this
+/// with a single function using an `enum` control parameter (e.g.,
+/// `DoMcastCheck(&DevMap)`, `DeliverDirect(&XdeDev, VniMac)`) but we'd be
+/// really reliant on rustc interpreting these as static choices and inlining
+/// accordingly.
 #[inline]
 fn xde_rx_one(
     stream: &DlsStream,
@@ -2489,6 +2542,42 @@ fn xde_rx_one(
 
     let meta = parsed_pkt.meta();
     let old_len = parsed_pkt.len();
+
+    let ip6_dst = meta.outer_v6.destination();
+    if ip6_dst.is_multicast()
+        && let Some(ports) = devs.multicast_listeners(&ip6_dst)
+    {
+        let pullup_len = (
+            &meta.outer_eth,
+            &meta.outer_v6,
+            &meta.outer_udp,
+            &meta.outer_encap,
+            &meta.inner_eth,
+            &meta.inner_l3,
+            &meta.inner_ulp,
+        )
+            .packet_length();
+        drop(parsed_pkt);
+
+        for el in ports {
+            // As explained in `xde_mc_tx_one`, this is cheaper than a full
+            // packet copy and should be safe to process even in the presence
+            // of body transforms.
+            let Ok(my_pkt) = pkt.pullup(NonZeroUsize::new(pullup_len)) else {
+                continue;
+            };
+            match devs.get_by_key(*el) {
+                Some(dev) => {
+                    xde_rx_one_direct(stream, dev, *el, my_pkt, postbox)
+                }
+                None => {
+                    // TODO: log, error count, etc.
+                    // Stale state caused this (probably)
+                }
+            }
+        }
+        return None;
+    }
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -2593,6 +2682,117 @@ fn xde_rx_one(
     }
 
     None
+}
+
+/// Processes an individual packet after multicast replication has taken place.
+/// This primarily duplicates `xde_rx_one`.
+///
+/// Lifetimes (arond Packet<LiteParsed> etc.) will make this difficult to simplify
+/// the expression of both this and its original implementation. We could insert
+/// the body using macros, but then we really lose a lot (line numbers on crash,
+/// subpar rust-analyzer integration)...
+#[inline]
+fn xde_rx_one_direct(
+    stream: &DlsStream,
+    dev: &XdeDev,
+    port_key: VniMac,
+    mut pkt: MsgBlk,
+    postbox: &mut Postbox,
+) {
+    // TODO: it would be great if we could tell Ingot 'here are all the
+    // layer lengths/types, please believe that they are correct'. And then
+    // to plumb that through `NetworkParser`. I can't say that I *like*
+    // doing this reparse here post-replication.
+    let parser = VpcParser {};
+    let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
+        .expect("this is a reparse of a known-valid packet");
+
+    let meta = parsed_pkt.meta();
+    let old_len = parsed_pkt.len();
+
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return;
+        }
+    };
+
+    let non_payl_bytes = u32::from(ulp_meoi.meoi_l2hlen)
+        + u32::from(ulp_meoi.meoi_l3hlen)
+        + u32::from(ulp_meoi.meoi_l4hlen);
+
+    // Large TCP frames include their MSS in-band, as recipients can require
+    // this to correctly process frames which have been given split into
+    // larger chunks.
+    //
+    // This will be set to a nonzero value when TSO has been asked of the
+    // source packet.
+    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
+    let recovered_mss = if is_tcp {
+        let mut out = None;
+        for opt in WalkOptions::from_raw(&meta.outer_encap) {
+            let Ok(opt) = opt else { break };
+            if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
+                out = NonZeroU32::new(el.mss());
+                break;
+            }
+        }
+        out
+    } else {
+        None
+    };
+
+    // We are in passthrough mode, skip OPTE processing.
+    if dev.passthrough {
+        drop(parsed_pkt);
+        postbox.post(port_key, pkt);
+        return;
+    }
+
+    let port = &dev.port;
+
+    let res = port.process(Direction::In, parsed_pkt);
+
+    match res {
+        Ok(ProcessResult::Modified(emit_spec)) => {
+            let mut npkt = emit_spec.apply(pkt);
+            let len = npkt.byte_len();
+            let pay_len = len
+                - usize::try_from(non_payl_bytes)
+                    .expect("usize > 32b on x86_64");
+
+            // Due to possible pseudo-GRO, we need to inform mac/viona on how
+            // it can split up this packet, if the guest cannot receive it
+            // (e.g., no GRO/large frame support).
+            // HW_LSO will cause viona to treat this packet as though it were
+            // a locally delivered segment making use of LSO.
+            if let Some(mss) = recovered_mss
+                // This packet could be the last segment of a split frame at
+                // which point it could be smaller than the original MSS.
+                // Don't re-tag the MSS if so, as guests may be confused and
+                // MAC emulation will reject the packet if the guest does not
+                // support GRO.
+                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+            {
+                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+            }
+
+            if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
+                opte::engine::err!("failed to set offload info: {}", e);
+            }
+
+            postbox.post(port_key, npkt);
+        }
+        Ok(ProcessResult::Hairpin(hppkt)) => {
+            stream.tx_drop_on_no_desc(
+                hppkt,
+                TxHint::NoneOrMixed,
+                MacTxFlags::empty(),
+            );
+        }
+        _ => {}
+    }
 }
 
 #[unsafe(no_mangle)]

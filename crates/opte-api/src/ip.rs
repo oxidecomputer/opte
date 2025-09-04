@@ -307,6 +307,15 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
+impl IpAddr {
+    pub const fn is_multicast(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_multicast(),
+            IpAddr::Ip6(v6) => v6.is_multicast(),
+        }
+    }
+}
+
 impl From<Ipv4Addr> for IpAddr {
     fn from(ipv4: Ipv4Addr) -> Self {
         IpAddr::Ip4(ipv4)
@@ -430,6 +439,10 @@ impl Ipv4Addr {
         // bytes, then we convert that to an in-memory network-order
         // u32.
         u32::from_be_bytes(self.bytes()).to_be()
+    }
+
+    pub const fn is_multicast(&self) -> bool {
+        matches!(self.inner[0], 224..240)
     }
 }
 
