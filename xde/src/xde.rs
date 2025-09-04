@@ -214,6 +214,7 @@ use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -2503,6 +2504,13 @@ unsafe extern "C" fn xde_rx(
 ///
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
+///
+/// `xde_rx_one_direct` largely replicates this function due to lifetime issues
+/// around parsing, so changes here may need to be made there too. We could do this
+/// with a single function using an `enum` control parameter (e.g.,
+/// `DoMcastCheck(&DevMap)`, `DeliverDirect(&XdeDev, VniMac)`) but we'd be
+/// really reliant on rustc interpreting these as static choices and inlining
+/// accordingly.
 #[inline]
 fn xde_rx_one(
     stream: &DlsStream,
@@ -2535,7 +2543,41 @@ fn xde_rx_one(
     let meta = parsed_pkt.meta();
     let old_len = parsed_pkt.len();
 
-    let is_mcast = meta.outer_eth.destination().is_broadcast();
+    let ip6_dst = meta.outer_v6.destination();
+    if ip6_dst.is_multicast()
+        && let Some(ports) = devs.multicast_listeners(&ip6_dst)
+    {
+        let pullup_len = (
+            &meta.outer_eth,
+            &meta.outer_v6,
+            &meta.outer_udp,
+            &meta.outer_encap,
+            &meta.inner_eth,
+            &meta.inner_l3,
+            &meta.inner_ulp,
+        )
+            .packet_length();
+        drop(parsed_pkt);
+
+        for el in ports {
+            // As explained in `xde_mc_tx_one`, this is cheaper than a full
+            // packet copy and should be safe to process even in the presence
+            // of body transforms.
+            let Ok(my_pkt) = pkt.pullup(NonZeroUsize::new(pullup_len)) else {
+                continue;
+            };
+            match devs.get_by_key(*el) {
+                Some(dev) => {
+                    xde_rx_one_direct(stream, dev, *el, my_pkt, postbox)
+                }
+                None => {
+                    // TODO: log, error count, etc.
+                    // Stale state caused this (probably)
+                }
+            }
+        }
+        return None;
+    }
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -2640,6 +2682,117 @@ fn xde_rx_one(
     }
 
     None
+}
+
+/// Processes an individual packet after multicast replication has taken place.
+/// This primarily duplicates `xde_rx_one`.
+///
+/// Lifetimes (arond Packet<LiteParsed> etc.) will make this difficult to simplify
+/// the expression of both this and its original implementation. We could insert
+/// the body using macros, but then we really lose a lot (line numbers on crash,
+/// subpar rust-analyzer integration)...
+#[inline]
+fn xde_rx_one_direct(
+    stream: &DlsStream,
+    dev: &XdeDev,
+    port_key: VniMac,
+    mut pkt: MsgBlk,
+    postbox: &mut Postbox,
+) {
+    // TODO: it would be great if we could tell Ingot 'here are all the
+    // layer lengths/types, please believe that they are correct'. And then
+    // to plumb that through `NetworkParser`. I can't say that I *like*
+    // doing this reparse here post-replication.
+    let parser = VpcParser {};
+    let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
+        .expect("this is a reparse of a known-valid packet");
+
+    let meta = parsed_pkt.meta();
+    let old_len = parsed_pkt.len();
+
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return;
+        }
+    };
+
+    let non_payl_bytes = u32::from(ulp_meoi.meoi_l2hlen)
+        + u32::from(ulp_meoi.meoi_l3hlen)
+        + u32::from(ulp_meoi.meoi_l4hlen);
+
+    // Large TCP frames include their MSS in-band, as recipients can require
+    // this to correctly process frames which have been given split into
+    // larger chunks.
+    //
+    // This will be set to a nonzero value when TSO has been asked of the
+    // source packet.
+    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
+    let recovered_mss = if is_tcp {
+        let mut out = None;
+        for opt in WalkOptions::from_raw(&meta.outer_encap) {
+            let Ok(opt) = opt else { break };
+            if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
+                out = NonZeroU32::new(el.mss());
+                break;
+            }
+        }
+        out
+    } else {
+        None
+    };
+
+    // We are in passthrough mode, skip OPTE processing.
+    if dev.passthrough {
+        drop(parsed_pkt);
+        postbox.post(port_key, pkt);
+        return;
+    }
+
+    let port = &dev.port;
+
+    let res = port.process(Direction::In, parsed_pkt);
+
+    match res {
+        Ok(ProcessResult::Modified(emit_spec)) => {
+            let mut npkt = emit_spec.apply(pkt);
+            let len = npkt.byte_len();
+            let pay_len = len
+                - usize::try_from(non_payl_bytes)
+                    .expect("usize > 32b on x86_64");
+
+            // Due to possible pseudo-GRO, we need to inform mac/viona on how
+            // it can split up this packet, if the guest cannot receive it
+            // (e.g., no GRO/large frame support).
+            // HW_LSO will cause viona to treat this packet as though it were
+            // a locally delivered segment making use of LSO.
+            if let Some(mss) = recovered_mss
+                // This packet could be the last segment of a split frame at
+                // which point it could be smaller than the original MSS.
+                // Don't re-tag the MSS if so, as guests may be confused and
+                // MAC emulation will reject the packet if the guest does not
+                // support GRO.
+                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+            {
+                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+            }
+
+            if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
+                opte::engine::err!("failed to set offload info: {}", e);
+            }
+
+            postbox.post(port_key, npkt);
+        }
+        Ok(ProcessResult::Hairpin(hppkt)) => {
+            stream.tx_drop_on_no_desc(
+                hppkt,
+                TxHint::NoneOrMixed,
+                MacTxFlags::empty(),
+            );
+        }
+        _ => {}
+    }
 }
 
 #[unsafe(no_mangle)]
