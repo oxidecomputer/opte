@@ -447,7 +447,7 @@ pub struct XdeDev {
     // However, that's not where things are today.
     pub port: Arc<Port<VpcNetwork>>,
     vpc_cfg: VpcCfg,
-    port_v2p: Arc<overlay::Virt2Phys>,
+    port_vni_state: Arc<overlay::PerVniMaps>,
 
     // Pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -964,7 +964,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             state.ectx.clone(),
             &req.dhcp,
         )?,
-        port_v2p,
+        port_vni_state: port_v2p,
         vni: cfg.vni,
         vpc_cfg: cfg,
         passthrough: req.passthrough,
@@ -2379,7 +2379,7 @@ fn new_port(
     name: String,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
-    v2p: Arc<overlay::Virt2Phys>,
+    vni_state: Arc<overlay::PerVniMaps>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
     dhcp_cfg: &DhcpCfg,
@@ -2402,7 +2402,7 @@ fn new_port(
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, vni_state, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual

@@ -529,6 +529,8 @@ pub struct VpcMapResp {
     pub vni: Vni,
     pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
     pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
+    pub mcast_ip4: Vec<(Ipv4Addr, Ipv6Addr)>,
+    pub mcast_ip6: Vec<(Ipv6Addr, Ipv6Addr)>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

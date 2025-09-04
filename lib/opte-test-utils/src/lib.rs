@@ -84,6 +84,7 @@ pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
+pub use oxide_vpc::engine::overlay::PerVniMaps;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
@@ -253,7 +254,7 @@ fn oxide_net_builder(
     name: &str,
     cfg: &oxide_vpc::cfg::VpcCfg,
     vpc_map: Arc<VpcMappings>,
-    v2p: Arc<Virt2Phys>,
+    vni_state: Arc<PerVniMaps>,
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
@@ -272,7 +273,7 @@ fn oxide_net_builder(
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, v2b, one_limit)
+    overlay::setup(&pb, cfg, vni_state, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
