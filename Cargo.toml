@@ -75,7 +75,7 @@ tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "2.0"
 toml = "0.9"
 uuid = { version = "1.0", default-features = false, features = ["serde"]}
-usdt = "0.5"
+usdt = "0.6"
 version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
