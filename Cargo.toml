@@ -82,6 +82,9 @@ zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
 
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 debug = 2
 lto = "thin"
