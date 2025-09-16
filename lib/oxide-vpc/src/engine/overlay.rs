@@ -80,7 +80,7 @@ pub const OVERLAY_LAYER_NAME: &str = "overlay";
 pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
-    v2p: Arc<Virt2Phys>,
+    vni_state: Arc<PerVniMaps>,
     v2b: Arc<Virt2Boundary>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
@@ -88,7 +88,7 @@ pub fn setup(
     let encap = Action::Static(Arc::new(EncapAction::new(
         cfg.phys_ip,
         cfg.vni,
-        v2p,
+        vni_state,
         v2b,
     )));
 
@@ -182,7 +182,7 @@ pub struct EncapAction {
     // sending data.
     phys_ip_src: Ipv6Addr,
     vni: Vni,
-    v2p: Arc<Virt2Phys>,
+    vni_state: Arc<PerVniMaps>,
     v2b: Arc<Virt2Boundary>,
 }
 
@@ -190,10 +190,10 @@ impl EncapAction {
     pub fn new(
         phys_ip_src: Ipv6Addr,
         vni: Vni,
-        v2p: Arc<Virt2Phys>,
+        vni_state: Arc<PerVniMaps>,
         v2b: Arc<Virt2Boundary>,
     ) -> Self {
-        Self { phys_ip_src, vni, v2p, v2b }
+        Self { phys_ip_src, vni, vni_state, v2b }
     }
 }
 
@@ -241,35 +241,68 @@ impl StaticAction for EncapAction {
             }
         };
 
-        let (is_internal, phys_target) = match target {
+        let (is_internal, phys_target, is_mcast) = match target {
             RouterTargetInternal::InternetGateway(_) => {
-                match self.v2b.get(&flow_id.dst_ip()) {
-                    Some(phys) => {
-                        // Hash the packet onto a route target. This is a very
-                        // rudimentary mechanism. Should level-up to an ECMP
-                        // algorithm with well known statistical properties.
-                        let hash = f_hash as usize;
-                        let target = match phys.iter().nth(hash % phys.len()) {
-                            Some(target) => target,
-                            None => return Ok(AllowOrDeny::Deny),
-                        };
-                        (
-                            false,
+                // TODO: Is landing mcast traffic in here right? My intuition says
+                // so atm, given that the address will be outside of the individual
+                // VPC subnets, and mcast send will apply outbound NAT (and we expect
+                // such frames could well leave the rack)!
+                // This may need a new RouterTargetInternal? And/or thought about the
+                // interaction w/ routers?
+                let dst_ip = flow_id.dst_ip();
+                if dst_ip.is_multicast() {
+                    match self.vni_state.m2p.get(&dst_ip) {
+                        Some(phys) => (
+                            true,
                             PhysNet {
-                                ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
-                                ip: target.ip,
-                                vni: target.vni,
+                                ether: phys.dest_mac(),
+                                ip: phys.0,
+                                vni: self.vni,
                             },
-                        )
+                            true,
+                        ),
+
+                        // Landing here implies we don't yet have an internal forwarding
+                        // address for this multicast group, or this VNI does not have
+                        // access to it.
+                        None => return Ok(AllowOrDeny::Deny),
                     }
-                    None => return Ok(AllowOrDeny::Deny),
+                } else {
+                    match self.v2b.get(&dst_ip) {
+                        Some(phys) => {
+                            // Hash the packet onto a route target. This is a very
+                            // rudimentary mechanism. Should level-up to an ECMP
+                            // algorithm with well known statistical properties.
+                            let hash = f_hash as usize;
+                            let target =
+                                match phys.iter().nth(hash % phys.len()) {
+                                    Some(target) => target,
+                                    None => return Ok(AllowOrDeny::Deny),
+                                };
+                            (
+                                false,
+                                PhysNet {
+                                    ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
+                                    ip: target.ip,
+                                    vni: target.vni,
+                                },
+                                false,
+                            )
+                        }
+                        None => return Ok(AllowOrDeny::Deny),
+                    }
                 }
             }
 
-            RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
+            RouterTargetInternal::Ip(virt_ip) => match self
+                .vni_state
+                .v2p
+                .get(&virt_ip)
+            {
                 Some(phys) => (
                     true,
                     PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni },
+                    false,
                 ),
 
                 // The router target has specified a VPC IP we do not
@@ -290,7 +323,7 @@ impl StaticAction for EncapAction {
             },
 
             RouterTargetInternal::VpcSubnet(_) => {
-                match self.v2p.get(&flow_id.dst_ip()) {
+                match self.vni_state.v2p.get(&flow_id.dst_ip()) {
                     Some(phys) => (
                         true,
                         PhysNet {
@@ -298,6 +331,7 @@ impl StaticAction for EncapAction {
                             ip: phys.ip,
                             vni: self.vni,
                         },
+                        false,
                     ),
 
                     // The guest is attempting to contact a VPC IP we
@@ -330,13 +364,25 @@ impl StaticAction for EncapAction {
                 data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
             };
 
+        static GENEVE_MCAST_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
+        static GENEVE_MCAST_OPT: ArbitraryGeneveOption =
+            ArbitraryGeneveOption {
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: OxideOptionType::Multicast as u8,
+                data: Cow::Borrowed(GENEVE_MCAST_OPT_BODY),
+            };
+
+        let outer_mac =
+            if is_mcast { phys_target.ether } else { MacAddr::ZERO };
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
+            // In the multicast case we can, however, derive this.
             outer_ether: HeaderAction::Push(
                 Valid::validated(EtherMeta {
+                    dst: outer_mac,
                     src: MacAddr::ZERO,
-                    dst: MacAddr::ZERO,
                     ether_type: EtherType::Ipv6,
                 })
                 .expect("Ethernet validation is infallible"),
@@ -369,30 +415,45 @@ impl StaticAction for EncapAction {
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,
                     entropy: flow_id.crc32() as u16,
-                    // Allocate space in which we can include the TCP MSS, when
-                    // needed during MSS boosting. It's theoretically doable to
-                    // gate this on seeing an unexpectedly high/low MSS option
-                    // in the TCP handshake, but there are problems in doing so:
-                    // * The MSS for the flow is negotiated, but the UFT entry
-                    //   containing this transform does not know the other side.
-                    // * UFT invalidation means we may rerun this transform in
-                    //   the middle of a flow.
-                    // So, emit it unconditionally for VPC-internal TCP traffic,
-                    // which could need the original MSS to be carried when LSO
-                    // is in use.
-                    options: if pkt_meta.is_inner_tcp() && is_internal {
-                        Cow::Borrowed(core::slice::from_ref(
+                    options: match (
+                        pkt_meta.is_inner_tcp() && is_internal,
+                        is_mcast,
+                    ) {
+                        // Allocate space in which we can include the TCP MSS, when
+                        // needed during MSS boosting. It's theoretically doable to
+                        // gate this on seeing an unexpectedly high/low MSS option
+                        // in the TCP handshake, but there are problems in doing so:
+                        // * The MSS for the flow is negotiated, but the UFT entry
+                        //   containing this transform does not know the other side.
+                        // * UFT invalidation means we may rerun this transform in
+                        //   the middle of a flow.
+                        // So, emit it unconditionally for VPC-internal TCP traffic,
+                        // which could need the original MSS to be carried when LSO
+                        // is in use.
+                        (true, false) => Cow::Borrowed(core::slice::from_ref(
                             &GENEVE_MSS_SIZE_OPT,
-                        ))
-                    } else {
-                        Cow::Borrowed(&[])
+                        )),
+                        (false, true) => Cow::Borrowed(core::slice::from_ref(
+                            &GENEVE_MCAST_OPT,
+                        )),
+                        (false, false) => Cow::Borrowed(&[]),
+                        // TCP is not exactly multicast compatible.
+                        (true, true) => {
+                            return Ok(AllowOrDeny::Deny);
+                        }
                     },
                 }),
             )?),
-            inner_ether: HeaderAction::Modify(EtherMod {
-                dst: Some(phys_target.ether),
-                ..Default::default()
-            }),
+            // For multicast packets, the inner destination MAC should already
+            // correspond to the inner L3 destination address.
+            inner_ether: if is_mcast {
+                HeaderAction::Ignore
+            } else {
+                HeaderAction::Modify(EtherMod {
+                    dst: Some(phys_target.ether),
+                    ..Default::default()
+                })
+            },
             ..Default::default()
         };
 
@@ -483,31 +544,22 @@ impl StaticAction for DecapAction {
 }
 
 pub struct VpcMappings {
-    inner: KMutex<BTreeMap<Vni, Arc<Virt2Phys>>>,
+    inner: KMutex<BTreeMap<Vni, Arc<PerVniMaps>>>,
 }
 
 impl VpcMappings {
     /// Add a new mapping from VIP to [`PhysNet`], returning a pointer
     /// to the [`Virt2Phys`] this mapping belongs to.
-    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
+    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<PerVniMaps> {
         // We convert to GuestPhysAddr because it saves us from
         // redundant storage of the VNI.
         let guest_phys = GuestPhysAddr::from(phys);
         let mut lock = self.inner.lock();
 
-        match lock.get(&phys.vni) {
-            Some(v2p) => {
-                v2p.set(vip, guest_phys);
-                v2p.clone()
-            }
+        let state = lock.entry(phys.vni).or_default();
+        state.v2p.set(vip, guest_phys);
 
-            None => {
-                let v2p = Arc::new(Virt2Phys::new());
-                v2p.set(vip, guest_phys);
-                lock.insert(phys.vni, v2p.clone());
-                v2p
-            }
-        }
+        state.clone()
     }
 
     /// Delete the mapping for the given VIP in the given VNI.
@@ -515,7 +567,7 @@ impl VpcMappings {
     /// Return the existing entry, if there is one.
     pub fn del(&self, vip: &IpAddr, phys: &PhysNet) -> Option<PhysNet> {
         match self.inner.lock().get(&phys.vni) {
-            Some(v2p) => v2p.remove(vip).map(|guest_phys| PhysNet {
+            Some(state) => state.v2p.remove(vip).map(|guest_phys| PhysNet {
                 ether: guest_phys.ether,
                 ip: guest_phys.ip,
                 vni: phys.vni,
@@ -530,11 +582,13 @@ impl VpcMappings {
         let mut mappings = Vec::new();
         let lock = self.inner.lock();
 
-        for (vni, v2p) in lock.iter() {
+        for (vni, state) in lock.iter() {
             mappings.push(VpcMapResp {
                 vni: *vni,
-                ip4: v2p.dump_ip4(),
-                ip6: v2p.dump_ip6(),
+                ip4: state.v2p.dump_ip4(),
+                ip6: state.v2p.dump_ip6(),
+                mcast_ip4: state.m2p.dump_ip4(),
+                mcast_ip6: state.m2p.dump_ip6(),
             });
         }
 
@@ -548,8 +602,8 @@ impl VpcMappings {
     /// assumption is enforced by the control plane; making sure that
     /// peered VPCs do not overlap their VIP ranges.
     pub fn ip_to_vni(&self, vip: &IpAddr) -> Option<Vni> {
-        for (vni, v2p) in self.inner.lock().iter() {
-            if v2p.get(vip).is_some() {
+        for (vni, state) in self.inner.lock().iter() {
+            if state.v2p.get(vip).is_some() {
                 return Some(*vni);
             }
         }
@@ -567,6 +621,10 @@ impl Default for VpcMappings {
         Self::new()
     }
 }
+
+// XXX: Should these not be RwLocks? This is a really unfortunate degree of
+//      contention for multiple ports in the slowpath to block one another.
+//      (Not common by any means, but needless when it does occur!)
 
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
@@ -604,6 +662,21 @@ pub struct Virt2Boundary {
     // with a poptrie that was pre-built out of band.
     pt4: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
     pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
+}
+
+// XXX Isn't this really just a V2P mapping, without a guest MAC?
+/// A mapping from inner multicast destination IPs to underlay multicast groups.
+pub struct Mcast2Phys {
+    // XXX In theory this is vulnerable to the same concerns around validation
+    //     as `Virt2Phys`.
+    ip4: KMutex<BTreeMap<Ipv4Addr, MulticastUnderlay>>,
+    ip6: KMutex<BTreeMap<Ipv6Addr, MulticastUnderlay>>,
+}
+
+#[derive(Default)]
+pub struct PerVniMaps {
+    pub v2p: Virt2Phys,
+    pub m2p: Mcast2Phys,
 }
 
 pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
@@ -825,6 +898,71 @@ impl MappingResource for Virt2Phys {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
+        }
+    }
+}
+
+impl Mcast2Phys {
+    pub fn new() -> Self {
+        Self {
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
+        }
+    }
+
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, Ipv6Addr)> {
+        self.ip4.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+    }
+
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, Ipv6Addr)> {
+        self.ip6.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+    }
+}
+
+impl Default for Mcast2Phys {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct MulticastUnderlay(Ipv6Addr);
+
+impl MulticastUnderlay {
+    pub fn new(addr: Ipv6Addr) -> Option<Self> {
+        if addr.is_multicast() { Some(Self(addr)) } else { None }
+    }
+
+    fn dest_mac(&self) -> MacAddr {
+        self.0.unchecked_multicast_mac()
+    }
+}
+
+impl Resource for Mcast2Phys {}
+impl ResourceEntry for MulticastUnderlay {}
+
+impl MappingResource for Mcast2Phys {
+    type Key = IpAddr;
+    type Entry = MulticastUnderlay;
+
+    fn get(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
+            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+        }
+    }
+
+    fn remove(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().remove(ip4),
+            IpAddr::Ip6(ip6) => self.ip6.lock().remove(ip6),
+        }
+    }
+
+    fn set(&self, vip: Self::Key, mcast: Self::Entry) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
+            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
         }
     }
 }
