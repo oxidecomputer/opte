@@ -25,5 +25,5 @@
     "rustc-abi": "x86-softfloat",
     "staticlib-prefix": "",
     "target-family": "unix",
-    "target-pointer-width": "64"
+    "target-pointer-width": 64
 }
