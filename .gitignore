@@ -1,4 +1,5 @@
 *.html
 target
 download
+scripts
 .DS_STORE

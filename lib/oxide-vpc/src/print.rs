@@ -9,6 +9,7 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
+use crate::api::DumpMcastForwardingResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
@@ -134,4 +135,39 @@ fn print_v2p_ip6(
         phys.ether,
         std::net::Ipv6Addr::from(phys.ip.bytes()),
     )
+}
+
+/// Print the header for the [`print_mcast_fwd()`] output.
+fn print_mcast_fwd_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "GROUP IP\tUNDERLAY IP\tVNI\tREPLICATION")
+}
+
+/// Print a [`DumpMcastForwardingResp`].
+pub fn print_mcast_fwd(resp: &DumpMcastForwardingResp) -> std::io::Result<()> {
+    print_mcast_fwd_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpMcastForwardingResp`] into a given writer.
+pub fn print_mcast_fwd_into(
+    writer: &mut impl Write,
+    resp: &DumpMcastForwardingResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Multicast Forwarding Table")?;
+    write_hrb(&mut t)?;
+    writeln!(t)?;
+    print_mcast_fwd_header(&mut t)?;
+    write_hr(&mut t)?;
+
+    for entry in &resp.entries {
+        for (next_hop, replication) in &entry.next_hops {
+            writeln!(
+                t,
+                "{}\t{}\t{}\t{replication:?}",
+                entry.group, next_hop.addr, next_hop.vni
+            )?;
+        }
+    }
+    writeln!(t)?;
+    t.flush()
 }

@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 pub mod dhcp;
+pub mod geneve_verify;
 pub mod icmp;
 pub mod pcap;
 #[macro_use]
@@ -269,11 +270,11 @@ fn oxide_net_builder(
     let dhcp = base_dhcp_config();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
+    gateway::setup(&pb, cfg, vpc_map.clone(), fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, vni_state, v2b, one_limit)
+    overlay::setup(&pb, cfg, vni_state, vpc_map.clone(), v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -384,10 +385,12 @@ pub fn oxide_net_setup2(
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
         "set:epoch=2",
-        // * Allow inbound IPv6 traffic for guest.
-        // * Allow inbound IPv4 traffic for guest.
+        // * Allow inbound IPv4 unicast traffic for guest.
+        // * Allow inbound IPv4 multicast traffic for guest.
+        // * Allow inbound IPv6 unicast traffic for guest.
+        // * Allow inbound IPv6 multicast traffic for guest.
         // * Deny inbound NDP for guest.
-        "set:gateway.rules.in=3",
+        "set:gateway.rules.in=5",
         // IPv4
         // ----
         //
@@ -395,7 +398,8 @@ pub fn oxide_net_setup2(
         // * ICMP Echo Reply for Gateway
         // * DHCP Offer
         // * DHCP Ack
-        // * Outbound traffic from Guest IP + MAC address
+        // * Outbound unicast traffic from Guest IP + MAC address
+        // * Outbound multicast traffic from Guest IP + MAC address
         //
         // IPv6
         // ----
@@ -406,8 +410,9 @@ pub fn oxide_net_setup2(
         // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
         // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
         // * DHCPv6
-        // * Outbound traffic from Guest IPv6 + MAC Address
-        "set:gateway.rules.out=12",
+        // * Outbound unicast traffic from Guest IPv6 + MAC Address
+        // * Outbound multicast traffic from Guest IPv6 + MAC Address
+        "set:gateway.rules.out=14",
         // * Allow all outbound traffic
         "set:firewall.rules.out=0",
         // * Outbound IPv4 SNAT

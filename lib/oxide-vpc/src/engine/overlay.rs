@@ -9,10 +9,12 @@
 //! This implements the Oxide Network VPC Overlay.
 use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
+use crate::api::DEFAULT_MULTICAST_VNI;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
+use crate::api::Replication;
 use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
@@ -81,6 +83,7 @@ pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
     vni_state: Arc<PerVniMaps>,
+    vpc_map: Arc<VpcMappings>,
     v2b: Arc<Virt2Boundary>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
@@ -89,6 +92,7 @@ pub fn setup(
         cfg.phys_ip,
         cfg.vni,
         vni_state,
+        vpc_map,
         v2b,
     )));
 
@@ -183,6 +187,7 @@ pub struct EncapAction {
     phys_ip_src: Ipv6Addr,
     vni: Vni,
     vni_state: Arc<PerVniMaps>,
+    vpc_map: Arc<VpcMappings>,
     v2b: Arc<Virt2Boundary>,
 }
 
@@ -191,9 +196,10 @@ impl EncapAction {
         phys_ip_src: Ipv6Addr,
         vni: Vni,
         vni_state: Arc<PerVniMaps>,
+        vpc_map: Arc<VpcMappings>,
         v2b: Arc<Virt2Boundary>,
     ) -> Self {
-        Self { phys_ip_src, vni, vni_state, v2b }
+        Self { phys_ip_src, vni, vni_state, vpc_map, v2b }
     }
 }
 
@@ -241,55 +247,56 @@ impl StaticAction for EncapAction {
             }
         };
 
+        // Map the router target to a physical network location.
+        // The router layer has already made the routing decision - we just
+        // execute it here by looking up the appropriate physical mapping.
+        let dst_ip = flow_id.dst_ip();
         let (is_internal, phys_target, is_mcast) = match target {
             RouterTargetInternal::InternetGateway(_) => {
-                // TODO: Is landing mcast traffic in here right? My intuition says
-                // so atm, given that the address will be outside of the individual
-                // VPC subnets, and mcast send will apply outbound NAT (and we expect
-                // such frames could well leave the rack)!
-                // This may need a new RouterTargetInternal? And/or thought about the
-                // interaction w/ routers?
-                let dst_ip = flow_id.dst_ip();
-                if dst_ip.is_multicast() {
-                    match self.vni_state.m2p.get(&dst_ip) {
-                        Some(phys) => (
-                            true,
+                match self.v2b.get(&dst_ip) {
+                    Some(phys) => {
+                        // Hash the packet onto a route target. This is a very
+                        // rudimentary mechanism. Should level-up to an ECMP
+                        // algorithm with well known statistical properties.
+                        let hash = f_hash as usize;
+                        let target = match phys.iter().nth(hash % phys.len()) {
+                            Some(target) => target,
+                            None => return Ok(AllowOrDeny::Deny),
+                        };
+                        (
+                            false,
                             PhysNet {
-                                ether: phys.dest_mac(),
-                                ip: phys.0,
-                                vni: self.vni,
+                                ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
+                                ip: target.ip,
+                                vni: target.vni,
                             },
-                            true,
-                        ),
-
-                        // Landing here implies we don't yet have an internal forwarding
-                        // address for this multicast group, or this VNI does not have
-                        // access to it.
-                        None => return Ok(AllowOrDeny::Deny),
+                            false,
+                        )
                     }
-                } else {
-                    match self.v2b.get(&dst_ip) {
-                        Some(phys) => {
-                            // Hash the packet onto a route target. This is a very
-                            // rudimentary mechanism. Should level-up to an ECMP
-                            // algorithm with well known statistical properties.
-                            let hash = f_hash as usize;
-                            let target =
-                                match phys.iter().nth(hash % phys.len()) {
-                                    Some(target) => target,
-                                    None => return Ok(AllowOrDeny::Deny),
-                                };
-                            (
-                                false,
-                                PhysNet {
-                                    ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
-                                    ip: target.ip,
-                                    vni: target.vni,
-                                },
-                                false,
-                            )
-                        }
-                        None => return Ok(AllowOrDeny::Deny),
+                    None => return Ok(AllowOrDeny::Deny),
+                }
+            }
+
+            // Multicast target - use M2P mapping to get the multicast underlay address.
+            // The router has determined this packet should be multicast forwarded.
+            RouterTargetInternal::Multicast(_) => {
+                // Fleet-level multicast mappings live under DEFAULT_MULTICAST_VNI.
+                // Look up the underlay multicast IPv6 for this group using the
+                // global VPC mappings and encapsulate with the fleet multicast VNI.
+                let mvni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
+                match self.vpc_map.get_mcast_underlay(mvni, dst_ip) {
+                    Some(underlay) => (
+                        true,
+                        PhysNet {
+                            ether: underlay.dst_mac(),
+                            ip: underlay.0,
+                            vni: mvni,
+                        },
+                        true,
+                    ),
+                    None => {
+                        // No mapping configured for this group; deny.
+                        return Ok(AllowOrDeny::Deny);
                     }
                 }
             }
@@ -364,7 +371,18 @@ impl StaticAction for EncapAction {
                 data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
             };
 
-        static GENEVE_MCAST_OPT_BODY: &[u8] = &[0; size_of::<u32>()];
+        // For multicast originated from this host, we set External replication.
+        // The actual replication scope will be determined by the mcast_fwd table.
+        // The first byte encodes Replication in the top 2 bits:
+        //   External=0x00, Underlay=0x40, All=0x80, Reserved=0xC0
+        const REPLICATION_EXTERNAL_BYTE: u8 =
+            (Replication::External as u8) << 6;
+        static GENEVE_MCAST_OPT_BODY: &[u8] = &[
+            REPLICATION_EXTERNAL_BYTE, // Top 2 bits encode replication strategy
+            0x00,
+            0x00,
+            0x00, // Reserved bytes
+        ];
         static GENEVE_MCAST_OPT: ArbitraryGeneveOption =
             ArbitraryGeneveOption {
                 option_class: GENEVE_OPT_CLASS_OXIDE,
@@ -387,14 +405,20 @@ impl StaticAction for EncapAction {
                 })
                 .expect("Ethernet validation is infallible"),
             ),
-            outer_ip: HeaderAction::Push(Valid::validated(IpPush::from(
-                Ipv6Push {
+            outer_ip: HeaderAction::Push({
+                let ip_push = IpPush::from(Ipv6Push {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
                     exts: Cow::Borrowed(&[]),
-                },
-            ))?),
+                });
+                match Valid::validated(ip_push) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
+            }),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -437,7 +461,9 @@ impl StaticAction for EncapAction {
                             &GENEVE_MCAST_OPT,
                         )),
                         (false, false) => Cow::Borrowed(&[]),
-                        // TCP is not exactly multicast compatible.
+                        // We do not support TCP over multicast delivery.
+                        // Multicast replication semantics conflict with TCP's
+                        // connection/ordering guarantees, so deny this case.
                         (true, true) => {
                             return Ok(AllowOrDeny::Deny);
                         }
@@ -548,6 +574,11 @@ pub struct VpcMappings {
 }
 
 impl VpcMappings {
+    /// Generate a new mapping struct.
+    pub fn new() -> Self {
+        Self { inner: KMutex::new(BTreeMap::new()) }
+    }
+
     /// Add a new mapping from VIP to [`PhysNet`], returning a pointer
     /// to the [`Virt2Phys`] this mapping belongs to.
     pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<PerVniMaps> {
@@ -611,8 +642,62 @@ impl VpcMappings {
         None
     }
 
-    pub fn new() -> Self {
-        VpcMappings { inner: KMutex::new(BTreeMap::new()) }
+    /// Add a multicast forwarding entry from a multicast group IP to a physical
+    /// underlay IP.
+    ///
+    /// Returns an error if:
+    /// - The VNI is not DEFAULT_MULTICAST_VNI
+    /// - The underlay address is not a valid IPv6 multicast address
+    pub fn add_mcast(
+        &self,
+        group: IpAddr,
+        underlay: Ipv6Addr,
+        vni: Vni,
+    ) -> Result<Arc<PerVniMaps>, OpteError> {
+        // Validate VNI is DEFAULT_MULTICAST_VNI for fleet-level multicast
+        if vni.as_u32() != DEFAULT_MULTICAST_VNI {
+            return Err(OpteError::System {
+                errno: illumos_sys_hdrs::EINVAL,
+                msg: format!(
+                    "multicast VNI must be DEFAULT_MULTICAST_VNI ({DEFAULT_MULTICAST_VNI}), got: {}",
+                    vni.as_u32()
+                ),
+            });
+        }
+
+        let mut lock = self.inner.lock();
+        let state = lock.entry(vni).or_default();
+
+        let mcast_underlay = MulticastUnderlay::new(underlay).ok_or_else(|| {
+            OpteError::InvalidUnderlayMulticast(format!(
+                "underlay address must be an administratively-scoped multicast address \
+                 (scope 0x4/admin-local, 0x5/site-local, or 0x8/organization-local): {underlay}",
+            ))
+        })?;
+
+        state.m2p.set(group, mcast_underlay);
+        Ok(state.clone())
+    }
+
+    /// Delete a multicast forwarding entry.
+    pub fn del_mcast(&self, group: IpAddr, _underlay: Ipv6Addr, vni: Vni) {
+        let mut lock = self.inner.lock();
+        if let Some(state) = lock.get_mut(&vni) {
+            state.m2p.remove(&group);
+        }
+    }
+
+    /// Get the underlay multicast for a given VNI and overlay multicast group.
+    pub fn get_mcast_underlay(
+        &self,
+        vni: Vni,
+        group: IpAddr,
+    ) -> Option<MulticastUnderlay> {
+        let lock = self.inner.lock();
+        lock.get(&vni).and_then(|state| match group {
+            IpAddr::Ip4(ip4) => state.m2p.ip4.lock().get(&ip4).copied(),
+            IpAddr::Ip6(ip6) => state.m2p.ip6.lock().get(&ip6).copied(),
+        })
     }
 }
 
@@ -664,15 +749,23 @@ pub struct Virt2Boundary {
     pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
 }
 
-// XXX Isn't this really just a V2P mapping, without a guest MAC?
+// NOTE: This is structurally similar to V2P mapping, but maps to MulticastUnderlay
+// which wraps only an IPv6 address. The destination MAC is derived algorithmically
+// from the IPv6 multicast address rather than stored explicitly.
 /// A mapping from inner multicast destination IPs to underlay multicast groups.
+///
+/// Validation is enforced through the `MulticastUnderlay` newtype wrapper, which
+/// ensures only valid IPv6 multicast addresses can be stored.
 pub struct Mcast2Phys {
-    // XXX In theory this is vulnerable to the same concerns around validation
-    //     as `Virt2Phys`.
     ip4: KMutex<BTreeMap<Ipv4Addr, MulticastUnderlay>>,
     ip6: KMutex<BTreeMap<Ipv6Addr, MulticastUnderlay>>,
 }
 
+/// Per-VNI mapping state containing both unicast and multicast address mappings.
+///
+/// This struct holds all address-to-physical mappings organized by VNI:
+/// - `v2p`: Unicast virtual IPs to physical locations
+/// - `m2p`: Multicast group IPs to physical underlay addresses
 #[derive(Default)]
 pub struct PerVniMaps {
     pub v2p: Virt2Phys,
@@ -903,6 +996,7 @@ impl MappingResource for Virt2Phys {
 }
 
 impl Mcast2Phys {
+    /// Create a new empty multicast-to-physical mapping table.
     pub fn new() -> Self {
         Self {
             ip4: KMutex::new(BTreeMap::new()),
@@ -910,10 +1004,12 @@ impl Mcast2Phys {
         }
     }
 
+    /// Dump all IPv4 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, Ipv6Addr)> {
         self.ip4.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
     }
 
+    /// Dump all IPv6 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, Ipv6Addr)> {
         self.ip6.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
     }
@@ -925,15 +1021,32 @@ impl Default for Mcast2Phys {
     }
 }
 
+/// An overlay multicast group address mapped to the underlay (outer) IPv6 multicast address.
+///
+/// This type ensures that the wrapped IPv6 address is a valid multicast address
+/// with administrative scope (admin-local, site-local, or organization-local).
+///
+/// Administrative scopes per RFC 4291 and RFC 7346:
+/// - `0x4`: admin-local scope
+/// - `0x5`: site-local scope
+/// - `0x8`: organization-local scope
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct MulticastUnderlay(Ipv6Addr);
 
 impl MulticastUnderlay {
+    /// Create a new `MulticastUnderlay` if the address is a valid
+    /// administratively-scoped multicast IPv6 address (scope 0x4, 0x5, or 0x8).
     pub fn new(addr: Ipv6Addr) -> Option<Self> {
-        if addr.is_multicast() { Some(Self(addr)) } else { None }
+        if addr.is_admin_scoped_multicast() { Some(Self(addr)) } else { None }
     }
 
-    fn dest_mac(&self) -> MacAddr {
+    /// Return the underlying IPv6 multicast address.
+    pub fn addr(&self) -> Ipv6Addr {
+        self.0
+    }
+
+    /// Return the destination MAC address derived from the IPv6 multicast address.
+    fn dst_mac(&self) -> MacAddr {
         self.0.unchecked_multicast_mac()
     }
 }

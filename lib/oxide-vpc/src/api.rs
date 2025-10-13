@@ -20,12 +20,100 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+/// Multicast packet replication strategy.
+///
+/// Encoding and scope:
+/// - The Geneve Oxide multicast option encodes replication in the top 2 bits
+///   of the option body’s first byte (u2). The remaining 30 bits are reserved.
+/// - External means local customer-facing delivery within the same VNI
+/// - Underlay means Geneve-encapsulated forwarding to underlay infrastructure
+///   members using the fleet multicast VNI.
+/// - All combines both behaviors.
+///
+/// Current implementation uses a single fleet VNI (DEFAULT_MULTICAST_VNI = 77)
+/// for all multicast traffic rack-wide (RFD 488 "Multicast across VPCs").
+#[derive(
+    Clone, Copy, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Hash,
+)]
+#[repr(u8)]
+pub enum Replication {
+    /// Replicate packets to external/customer-facing members (guest instances).
+    ///
+    /// Local delivery within the same VNI. Packets are decapsulated at the
+    /// switch before delivery to guests.
+    #[default]
+    External = 0x00,
+    /// Replicate packets to underlay/infrastructure members.
+    ///
+    /// Forwards Geneve-encapsulated packets to underlay destinations for
+    /// infrastructure delivery (not directly to guest instances). Uses
+    /// DEFAULT_MULTICAST_VNI (77) for encapsulation.
+    Underlay = 0x01,
+    /// Replicate packets to both external and underlay members (bifurcated).
+    ///
+    /// Combines both customer-facing (decapsulated to guests) and infrastructure
+    /// (encapsulated) delivery modes for comprehensive multicast distribution.
+    All = 0x02,
+    /// Reserved for future use. This value exists to account for all possible
+    /// values in the 2-bit Geneve option field.
+    Reserved = 0x03,
+}
+
+impl Replication {
+    /// Merge two replication strategies, preferring the most permissive.
+    ///
+    /// Merging rules:
+    /// - Any `All` -> `All`
+    /// - `External` + `Underlay` -> `All`
+    /// - Same values -> keep the value
+    /// - Default to `All` for unexpected combinations
+    pub const fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::All, _) | (_, Self::All) => Self::All,
+            (Self::External, Self::Underlay)
+            | (Self::Underlay, Self::External) => Self::All,
+            (a, b) if a as u8 == b as u8 => a,
+            // Prefer `All` for unexpected combinations
+            _ => Self::All,
+        }
+    }
+}
+
+#[cfg(any(feature = "std", test))]
+impl FromStr for Replication {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "external" => Ok(Self::External),
+            "underlay" => Ok(Self::Underlay),
+            "all" => Ok(Self::All),
+            lower => Err(format!(
+                "unexpected replication type {lower} -- expected 'external', 'underlay', or 'all'"
+            )),
+        }
+    }
+}
+
 /// This is the MAC address that OPTE uses to act as the virtual gateway.
 pub const GW_MAC_ADDR: MacAddr =
     MacAddr::from_const([0xA8, 0x40, 0x25, 0xFF, 0x77, 0x77]);
 /// The default VNI ID which OPTE uses for outbound packets directed at a
 /// tunnel endpoint.
 pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
+
+/// Default VNI for rack-wide multicast groups (no VPC association).
+/// Must match Omicron's DEFAULT_MULTICAST_VNI.
+///
+/// This is the only VNI currently supported for multicast traffic.
+/// All multicast groups (M2P mappings and forwarding entries) must use this VNI.
+/// OPTE validates that multicast operations specify this VNI and rejects others.
+///
+/// **Security model:** While M2P (Multicast-to-Physical) mappings are stored
+/// per-VNI in the code, the enforcement of DEFAULT_MULTICAST_VNI means all
+/// multicast traffic shares a single namespace across the rack, with no
+/// VPC-level isolation (as multicast groups are fleet-wide).
+pub const DEFAULT_MULTICAST_VNI: u32 = 77u32;
 
 /// Description of Boundary Services, the endpoint used to route traffic
 /// to external networks.
@@ -303,6 +391,44 @@ pub struct PhysNet {
     pub vni: Vni,
 }
 
+/// Represents an IPv6 next hop for multicast forwarding.
+#[derive(
+    Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord,
+)]
+pub struct NextHopV6 {
+    /// The IPv6 address of the next hop
+    pub addr: Ipv6Addr,
+    /// The VNI to use for this next hop
+    pub vni: Vni,
+}
+
+impl NextHopV6 {
+    pub fn new(addr: Ipv6Addr, vni: Vni) -> Self {
+        Self { addr, vni }
+    }
+}
+
+/// A next hop for multicast forwarding (supports both IPv4 and IPv6).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NextHop {
+    /// The IP address of the next hop
+    pub addr: IpAddr,
+    /// The VNI to use for this next hop
+    pub vni: Vni,
+}
+
+impl NextHop {
+    pub fn new(addr: IpAddr, vni: Vni) -> Self {
+        Self { addr, vni }
+    }
+}
+
+impl From<NextHopV6> for NextHop {
+    fn from(v6: NextHopV6) -> Self {
+        Self { addr: v6.addr.into(), vni: v6.vni }
+    }
+}
+
 /// A Geneve tunnel endpoint.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct TunnelEndpoint {
@@ -366,12 +492,18 @@ impl From<PhysNet> for GuestPhysAddr {
 ///   abstraction, it's simply allowing one subnet to talk to another.
 ///   There is no separate VPC router process, the real routing is done
 ///   by the underlay.
+///
+/// * Multicast: Packets matching this entry are multicast traffic.
+///   Uses the M2P (Multicast-to-Physical) mapping to determine underlay
+///   destinations. Does not apply SNAT; the outer IPv6 underlay source
+///   is the physical IP.
 #[derive(Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum RouterTarget {
     Drop,
     InternetGateway(Option<Uuid>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
+    Multicast(IpCidr),
 }
 
 #[cfg(any(feature = "std", test))]
@@ -403,6 +535,15 @@ impl FromStr for RouterTarget {
                     cidr6s.parse().map(|x| Self::VpcSubnet(IpCidr::Ip6(x)))
                 }
 
+                Some(("mcast4", cidr4s)) => {
+                    let cidr4 = cidr4s.parse()?;
+                    Ok(Self::Multicast(IpCidr::Ip4(cidr4)))
+                }
+
+                Some(("mcast6", cidr6s)) => {
+                    cidr6s.parse().map(|x| Self::Multicast(IpCidr::Ip6(x)))
+                }
+
                 Some(("ig", uuid)) => Ok(Self::InternetGateway(Some(
                     uuid.parse::<Uuid>().map_err(|e| e.to_string())?,
                 ))),
@@ -423,6 +564,12 @@ impl Display for RouterTarget {
             Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={ip6}"),
             Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={sub4}"),
             Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={sub6}"),
+            Self::Multicast(IpCidr::Ip4(mcast4)) => {
+                write!(f, "mcast4={mcast4}")
+            }
+            Self::Multicast(IpCidr::Ip6(mcast6)) => {
+                write!(f, "mcast6={mcast6}")
+            }
         }
     }
 }
@@ -567,6 +714,28 @@ pub struct ClearVirt2PhysReq {
     pub phys: PhysNet,
 }
 
+/// Set mapping from multicast group to underlay multicast address.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetMcast2PhysReq {
+    /// Overlay multicast group address
+    pub group: IpAddr,
+    /// Underlay IPv6 multicast address
+    pub underlay: Ipv6Addr,
+    /// VNI for this mapping
+    pub vni: Vni,
+}
+
+/// Clear a mapping from multicast group to underlay multicast address.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearMcast2PhysReq {
+    /// Overlay multicast group address
+    pub group: IpAddr,
+    /// Underlay IPv6 multicast address
+    pub underlay: Ipv6Addr,
+    /// VNI for this mapping
+    pub vni: Vni,
+}
+
 /// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2BoundaryReq {
@@ -607,7 +776,59 @@ pub enum DelRouterEntryResp {
     NotFound,
 }
 
+/// Set multicast forwarding entries for a multicast group.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetMcastForwardingReq {
+    /// The multicast group address (overlay)
+    pub group: IpAddr,
+    /// The next hops (underlay IPv6 addresses) with replication information
+    pub next_hops: Vec<(NextHopV6, Replication)>,
+}
+
+/// Clear multicast forwarding entries for a multicast group.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClearMcastForwardingReq {
+    /// The multicast group address
+    pub group: IpAddr,
+}
+
+/// Response for dumping the multicast forwarding table.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpMcastForwardingResp {
+    /// The multicast forwarding table entries
+    pub entries: Vec<McastForwardingEntry>,
+}
+
+impl CmdOk for DumpMcastForwardingResp {}
+
+/// A single multicast forwarding table entry.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastForwardingEntry {
+    /// The multicast group address (overlay)
+    pub group: IpAddr,
+    /// The next hops (underlay IPv6 addresses) with replication information
+    pub next_hops: Vec<(NextHopV6, Replication)>,
+}
+
 impl opte::api::cmd::CmdOk for DelRouterEntryResp {}
+
+/// Subscribe a port to a multicast group.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastSubscribeReq {
+    /// The port name to subscribe
+    pub port_name: String,
+    /// The multicast group address
+    pub group: IpAddr,
+}
+
+/// Unsubscribe a port from a multicast group.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastUnsubscribeReq {
+    /// The port name to unsubscribe
+    pub port_name: String,
+    /// The multicast group address
+    pub group: IpAddr,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetExternalIpsReq {

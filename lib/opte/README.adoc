@@ -209,10 +209,46 @@ resources.
 Pausing, Saving, & Restoring:: A port may be paused, saved, and
 restored for the purpose of live migration. The pausing of a state
 allows it to halt all packet processing and quiesce to a steady state.
-In this state is is then possible to save the port's state which has
+In this state it is then possible to save the port's state which has
 all data needed to restart the port without rebuilding the entire flow
 state. This is achieved by restoring the port based on some payload of
 save data.
+
+=== Multicast Model
+
+OPTE implements multicast consistent with the rack networking
+architecture described in [RFD 63](https://rfd.shared.oxide.computer/rfd/0063)
+and [RFD 488](https://rfd.shared.oxide.computer/rfd/488). Key points:
+
+Fleet VNI:: All multicast traffic uses a single fleet‑level Geneve VNI
+(`DEFAULT_MULTICAST_VNI`, currently `77`) rather than per‑tenant VNIs.
+Mappings from overlay multicast groups to underlay multicast addresses
+are stored and validated under this VNI. (See `RFD 488` for the rationale behind
+fleet-level VNI.)
+
+Delivery Modes (Replication):: The Oxide Geneve multicast option carries
+the delivery mode as a 2‑bit field in the top two bits of the option
+body's first byte:
+
+* External — local guest delivery within the same VNI: OPTE decapsulates
+  and delivers to all local subscribers (guests) on the port map.
+* Underlay — infrastructure delivery: OPTE sends Geneve‑encapsulated
+  packets towards the configured underlay multicast address in fleet
+  VNI 77. The underlay performs any further replication.
+* All — both behaviors above.
+
+Encapsulation Path:: The overlay layer sets `External` in the multicast
+option on initial encapsulation. XDE uses its multicast forwarding table
+to decide whether to additionally forward to underlay next hops, and, if
+so, marks those forwarded copies as `Underlay` or `All` to prevent
+re‑relay at downstream receivers.
+
+Constraints & Validation::
+
+* M2P (multicast‑to‑physical) mappings must use `DEFAULT_MULTICAST_VNI`.
+* Any next hop that causes underlay forwarding must specify VNI 77.
+* Underlay multicast addresses must be IPv6 admin‑scoped (e.g.,
+  `ff04::/16`, `ff05::/16`, `ff08::/16`).
 
 === Layers
 

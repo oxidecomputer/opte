@@ -25,31 +25,38 @@ pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum OpteCmd {
-    ListPorts = 1,           // list all ports
-    AddFwRule = 20,          // add firewall rule
-    RemFwRule = 21,          // remove firewall rule
-    SetFwRules = 22,         // set/replace all firewall rules at once
-    DumpTcpFlows = 30,       // dump TCP flows
-    DumpLayer = 31,          // dump the specified Layer
-    DumpUft = 32,            // dump the Unified Flow Table
-    ListLayers = 33,         // list the layers on a given port
-    ClearUft = 40,           // clear the UFT
-    ClearLft = 41,           // clear the given Layer's Flow Table
-    SetVirt2Phys = 50,       // set a v2p mapping
-    DumpVirt2Phys = 51,      // dump the v2p mappings
-    SetVirt2Boundary = 52,   // set a v2b mapping
-    ClearVirt2Boundary = 53, // clear a v2b mapping
-    DumpVirt2Boundary = 54,  // dump the v2b mappings
-    ClearVirt2Phys = 55,     // clear a v2p mapping
-    AddRouterEntry = 60,     // add a router entry for IP dest
-    DelRouterEntry = 61,     // remove a router entry for IP dest
-    CreateXde = 70,          // create a new xde device
-    DeleteXde = 71,          // delete an xde device
-    SetXdeUnderlay = 72,     // set xde underlay devices
-    ClearXdeUnderlay = 73,   // clear xde underlay devices
-    SetExternalIps = 80,     // set xde external IPs for a port
-    AllowCidr = 90,          // allow ip block through gateway tx/rx
-    RemoveCidr = 91,         // deny ip block through gateway tx/rx
+    ListPorts = 1,              // list all ports
+    AddFwRule = 20,             // add firewall rule
+    RemFwRule = 21,             // remove firewall rule
+    SetFwRules = 22,            // set/replace all firewall rules at once
+    DumpTcpFlows = 30,          // dump TCP flows
+    DumpLayer = 31,             // dump the specified Layer
+    DumpUft = 32,               // dump the Unified Flow Table
+    ListLayers = 33,            // list the layers on a given port
+    ClearUft = 40,              // clear the UFT
+    ClearLft = 41,              // clear the given Layer's Flow Table
+    SetVirt2Phys = 50,          // set a v2p mapping
+    DumpVirt2Phys = 51,         // dump the v2p mappings
+    SetVirt2Boundary = 52,      // set a v2b mapping
+    ClearVirt2Boundary = 53,    // clear a v2b mapping
+    DumpVirt2Boundary = 54,     // dump the v2b mappings
+    ClearVirt2Phys = 55,        // clear a v2p mapping
+    AddRouterEntry = 60,        // add a router entry for IP dest
+    DelRouterEntry = 61,        // remove a router entry for IP dest
+    CreateXde = 70,             // create a new xde device
+    DeleteXde = 71,             // delete an xde device
+    SetXdeUnderlay = 72,        // set xde underlay devices
+    ClearXdeUnderlay = 73,      // clear xde underlay devices
+    SetExternalIps = 80,        // set xde external IPs for a port
+    AllowCidr = 90,             // allow ip block through gateway tx/rx
+    RemoveCidr = 91,            // deny ip block through gateway tx/rx
+    SetMcastForwarding = 100,   // set multicast forwarding entries
+    ClearMcastForwarding = 101, // clear multicast forwarding entries
+    DumpMcastForwarding = 102,  // dump multicast forwarding table
+    McastSubscribe = 103,       // subscribe a port to a multicast group
+    McastUnsubscribe = 104,     // unsubscribe a port from a multicast group
+    SetMcast2Phys = 105,        // set M2P mapping (group -> underlay mcast)
+    ClearMcast2Phys = 106,      // clear M2P mapping
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -82,6 +89,13 @@ impl TryFrom<c_int> for OpteCmd {
             80 => Ok(Self::SetExternalIps),
             90 => Ok(Self::AllowCidr),
             91 => Ok(Self::RemoveCidr),
+            100 => Ok(Self::SetMcastForwarding),
+            101 => Ok(Self::ClearMcastForwarding),
+            102 => Ok(Self::DumpMcastForwarding),
+            103 => Ok(Self::McastSubscribe),
+            104 => Ok(Self::McastUnsubscribe),
+            105 => Ok(Self::SetMcast2Phys),
+            106 => Ok(Self::ClearMcast2Phys),
             _ => Err(()),
         }
     }
@@ -177,6 +191,7 @@ pub enum OpteError {
         dest: IpCidr,
         target: String,
     },
+    InvalidUnderlayMulticast(String),
     LayerNotFound(String),
     MacExists {
         port: String,
@@ -230,6 +245,7 @@ impl OpteError {
             Self::DeserCmdReq(_) => ENOMSG,
             Self::FlowExists(_) => EEXIST,
             Self::InvalidRouterEntry { .. } => EINVAL,
+            Self::InvalidUnderlayMulticast(_) => EINVAL,
             Self::LayerNotFound(_) => ENOENT,
             Self::MacExists { .. } => EEXIST,
             Self::MaxCapacity(_) => ENFILE,

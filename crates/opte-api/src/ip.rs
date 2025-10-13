@@ -653,6 +653,24 @@ impl Ipv6Addr {
         self.inner[0] == 0xFF
     }
 
+    /// Return `true` if this is a multicast IPv6 address with administrative scope
+    /// (admin-local, site-local, or organization-local) as defined in RFC 4291 and RFC 7346.
+    ///
+    /// The three administrative scopes are:
+    /// - `0x4`: admin-local scope
+    /// - `0x5`: site-local scope
+    /// - `0x8`: organization-local scope
+    pub const fn is_admin_scoped_multicast(&self) -> bool {
+        if !self.is_multicast() {
+            return false;
+        }
+
+        // Extract the scope field from the lower 4 bits of the second byte
+        // (first byte is 0xFF for all multicast, second byte contains flags and scope)
+        let scope = self.inner[1] & 0x0F;
+        matches!(scope, 0x4 | 0x5 | 0x8)
+    }
+
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
@@ -1002,6 +1020,12 @@ impl Display for Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
+    /// IPv4 multicast address range, `224.0.0.0/4`.
+    pub const MCAST: Self = Self {
+        ip: Ipv4Addr::from_const([224, 0, 0, 0]),
+        prefix_len: Ipv4PrefixLen(4),
+    };
+
     pub fn ip(&self) -> Ipv4Addr {
         self.parts().0
     }
@@ -1157,6 +1181,24 @@ impl Ipv6Cidr {
     pub const LINK_LOCAL: Self = Self {
         ip: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 0, 0, 0, 0]),
         prefix_len: Ipv6PrefixLen(64),
+    };
+
+    /// IPv6 admin-local multicast scope prefix, `ff04::/16`.
+    pub const MCAST_ADMIN_LOCAL: Self = Self {
+        ip: Ipv6Addr::from_const([0xff04, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(16),
+    };
+
+    /// IPv6 site-local multicast scope prefix, `ff05::/16`.
+    pub const MCAST_SITE_LOCAL: Self = Self {
+        ip: Ipv6Addr::from_const([0xff05, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(16),
+    };
+
+    /// IPv6 organization-local multicast scope prefix, `ff08::/16`.
+    pub const MCAST_ORG_LOCAL: Self = Self {
+        ip: Ipv6Addr::from_const([0xff08, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(16),
     };
 
     pub fn new(ip: Ipv6Addr, prefix_len: Ipv6PrefixLen) -> Self {
@@ -1479,6 +1521,24 @@ mod test {
         let addr = to_ipv6("fd00:abcd:abcd:abcd:abcd:abcd:abcd:abcd");
         let expected = to_ipv6("ff02::1:ffcd:abcd");
         assert_eq!(addr.solicited_node_multicast(), expected);
+    }
+
+    #[test]
+    fn test_ipv6_admin_scoped_multicast() {
+        // Test the three valid administrative scopes
+        assert!(to_ipv6("ff04::1").is_admin_scoped_multicast()); // admin-local (0x4)
+        assert!(to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local (0x5)
+        assert!(to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local (0x8)
+
+        // Test non-admin scoped multicast addresses
+        assert!(!to_ipv6("ff01::1").is_admin_scoped_multicast()); // interface-local
+        assert!(!to_ipv6("ff02::1").is_admin_scoped_multicast()); // link-local
+        assert!(!to_ipv6("ff0e::1").is_admin_scoped_multicast()); // global
+
+        // Test non-multicast addresses
+        assert!(!to_ipv6("fd00::1").is_admin_scoped_multicast()); // ULA
+        assert!(!to_ipv6("fe80::1").is_admin_scoped_multicast()); // link-local unicast
+        assert!(!to_ipv6("2001:db8::1").is_admin_scoped_multicast()); // global unicast
     }
 
     #[test]
