@@ -46,7 +46,7 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.7"
-ctor = "0.5"
+ctor = "0.6"
 darling = "0.21"
 dyn-clone = "1.0"
 heapless = "0.8"
