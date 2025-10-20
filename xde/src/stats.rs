@@ -55,9 +55,72 @@ pub struct XdeStats {
     out_drop_misc: KStatU64,
     // NOTE: tun_opt is not relevant to outbound packets -- no encapsulation
     // is in use.
+    /// The number of multicast packets delivered to external/customer
+    /// members (decapsulated packets to local guest instances).
+    mcast_tx_external: KStatU64,
+    /// The number of multicast packets forwarded to underlay/infrastructure
+    /// members (encapsulated Geneve packets to infrastructure destinations).
+    mcast_tx_underlay: KStatU64,
+    /// The number of times a stale multicast listener was encountered
+    /// during external delivery.
+    mcast_tx_stale_external: KStatU64,
+
+    /// The number of multicast packets received and delivered to external/customer
+    /// members (decapsulated packets to local guest instances).
+    mcast_rx_external: KStatU64,
+    /// The number of multicast packets received and forwarded to underlay/infrastructure
+    /// members (re-encapsulated Geneve packets to infrastructure destinations).
+    mcast_rx_underlay: KStatU64,
+    /// The number of times a stale multicast listener was encountered
+    /// during Rx external delivery.
+    mcast_rx_stale_external: KStatU64,
+    /// The number of multicast packets received with no forwarding entry.
+    mcast_rx_no_fwd_entry: KStatU64,
+    /// The number of times a pullup operation failed during multicast TX
+    /// (packet replication), causing a packet to be dropped.
+    mcast_tx_pullup_fail: KStatU64,
+    /// The number of times a pullup operation failed during multicast RX
+    /// (packet delivery/relay), causing a packet to be dropped.
+    mcast_rx_pullup_fail: KStatU64,
 }
 
 impl XdeStats {
+    pub fn mcast_tx_external(&self) -> &KStatU64 {
+        &self.mcast_tx_external
+    }
+
+    pub fn mcast_tx_underlay(&self) -> &KStatU64 {
+        &self.mcast_tx_underlay
+    }
+
+    pub fn mcast_tx_stale_external(&self) -> &KStatU64 {
+        &self.mcast_tx_stale_external
+    }
+
+    pub fn mcast_rx_external(&self) -> &KStatU64 {
+        &self.mcast_rx_external
+    }
+
+    pub fn mcast_rx_underlay(&self) -> &KStatU64 {
+        &self.mcast_rx_underlay
+    }
+
+    pub fn mcast_rx_stale_external(&self) -> &KStatU64 {
+        &self.mcast_rx_stale_external
+    }
+
+    pub fn mcast_rx_no_fwd_entry(&self) -> &KStatU64 {
+        &self.mcast_rx_no_fwd_entry
+    }
+
+    pub fn mcast_tx_pullup_fail(&self) -> &KStatU64 {
+        &self.mcast_tx_pullup_fail
+    }
+
+    pub fn mcast_rx_pullup_fail(&self) -> &KStatU64 {
+        &self.mcast_rx_pullup_fail
+    }
+
     pub fn parse_error(&self, dir: Direction, err: &ParseError) {
         use Direction::*;
         (match (dir, err) {

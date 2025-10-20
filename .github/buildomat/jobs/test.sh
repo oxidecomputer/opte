@@ -82,3 +82,15 @@ pfexec add_drv xde
 banner "test"
 pfexec chmod +x /input/xde/work/test/loopback
 pfexec /input/xde/work/test/loopback --nocapture
+
+# Multicast tests must run with --test-threads=1 because they share
+# hardcoded device names (xde_test_sim0/1, xde_test_vnic0/1) that conflict
+# when tests run in parallel
+pfexec chmod +x /input/xde/work/test/multicast_rx
+pfexec /input/xde/work/test/multicast_rx --nocapture --test-threads=1
+
+pfexec chmod +x /input/xde/work/test/multicast_multi_sub
+pfexec /input/xde/work/test/multicast_multi_sub --nocapture --test-threads=1
+
+pfexec chmod +x /input/xde/work/test/multicast_validation
+pfexec /input/xde/work/test/multicast_validation --nocapture --test-threads=1

@@ -56,6 +56,8 @@ use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
+use opte::engine::ip::v4::Ipv4Cidr;
+use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -173,7 +175,7 @@ fn setup_ipv4(
 
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
 
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
     ]));
@@ -196,6 +198,27 @@ fn setup_ipv4(
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
 
+    // Multicast prefixes (224.0.0.0/4)
+    let ipv4_mcast = vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)];
+
+    // Outbound multicast - allow from guest's MAC to multicast destinations
+    let mut mcast_out = Rule::new(1001, Action::Meta(vpc_meta.clone()));
+    mcast_out.add_predicate(Predicate::InnerDstIp4(ipv4_mcast.clone()));
+    mcast_out.add_predicate(Predicate::InnerEtherSrc(vec![
+        EtherAddrMatch::Exact(cfg.guest_mac),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
+    // Inbound multicast - allow multicast destinations to guest
+    let mut mcast_in = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in.add_predicate(Predicate::InnerDstIp4(ipv4_mcast));
+    layer.add_rule(Direction::In, mcast_in.finalize());
+
     Ok(())
 }
 
@@ -209,7 +232,7 @@ fn setup_ipv6(
     icmpv6::setup(layer, cfg, ip_cfg)?;
     dhcpv6::setup(layer, cfg, dhcp_cfg)?;
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
     ]));
@@ -231,6 +254,32 @@ fn setup_ipv6(
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
+
+    // Admin-/site-/org-scoped multicast prefixes (for underlay forwarding)
+    let admin_mcast_prefixes = vec![
+        Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST_ADMIN_LOCAL),
+        Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST_SITE_LOCAL),
+        Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST_ORG_LOCAL),
+    ];
+
+    // Outbound multicast - allow from guest's MAC to multicast destinations
+    let mut mcast_out = Rule::new(1001, Action::Meta(vpc_meta.clone()));
+    mcast_out
+        .add_predicate(Predicate::InnerDstIp6(admin_mcast_prefixes.clone()));
+    mcast_out.add_predicate(Predicate::InnerEtherSrc(vec![
+        EtherAddrMatch::Exact(cfg.guest_mac),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
+    // Inbound multicast - allow multicast destinations to guest
+    let mut mcast_in = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in.add_predicate(Predicate::InnerDstIp6(admin_mcast_prefixes));
+    layer.add_rule(Direction::In, mcast_in.finalize());
 
     Ok(())
 }

@@ -27,8 +27,10 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
+use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
@@ -39,22 +41,26 @@ use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
 use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::ProtoFilter;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::Replication;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::print::print_mcast_fwd;
 use oxide_vpc::print::print_v2b;
 use oxide_vpc::print::print_v2p;
 use std::io;
@@ -224,6 +230,31 @@ enum Command {
 
     /// Clear a virtual-to-boundary mapping
     ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+
+    /// Set a multicast forwarding entry
+    SetMcastFwd {
+        /// The multicast group address (IPv4 or IPv6)
+        group: IpAddr,
+        /// Next hop IPv6 address
+        next_hop_addr: Ipv6Addr,
+        /// Next hop VNI (defaults to fleet-level DEFAULT_MULTICAST_VNI)
+        #[arg(default_value_t = Vni::new(DEFAULT_MULTICAST_VNI).unwrap())]
+        next_hop_vni: Vni,
+        /// Delivery mode (replication):
+        /// - external: local guests in same VNI
+        /// - underlay: infrastructure via underlay multicast
+        /// - all: both local and underlay
+        replication: Replication,
+    },
+
+    /// Clear a multicast forwarding entry
+    ClearMcastFwd {
+        /// The multicast group address (IPv4 or IPv6)
+        group: IpAddr,
+    },
+
+    /// Dump the multicast forwarding table
+    DumpMcastFwd,
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -762,6 +793,29 @@ fn main() -> anyhow::Result<()> {
                 .collect();
             let req = ClearVirt2BoundaryReq { vip: prefix, tep };
             hdl.clear_v2b(&req)?;
+        }
+
+        Command::SetMcastFwd {
+            group,
+            next_hop_addr,
+            next_hop_vni,
+            replication,
+        } => {
+            let next_hop = NextHopV6::new(next_hop_addr, next_hop_vni);
+            let req = SetMcastForwardingReq {
+                group,
+                next_hops: vec![(next_hop, replication)],
+            };
+            hdl.set_mcast_fwd(&req)?;
+        }
+
+        Command::ClearMcastFwd { group } => {
+            let req = ClearMcastForwardingReq { group };
+            hdl.clear_mcast_fwd(&req)?;
+        }
+
+        Command::DumpMcastFwd => {
+            print_mcast_fwd(&hdl.dump_mcast_fwd()?)?;
         }
 
         Command::AddRouterEntry {
