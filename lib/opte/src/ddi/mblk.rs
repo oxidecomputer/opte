@@ -83,7 +83,7 @@ struct MsgBlkChainInner {
 /// A chain of illumos MsgBlk/`mblk_t` buffers.
 ///
 /// Network packets are provided by illumos as a linked list of linked lists,
-/// using the `b_next` and `b_prev` fields.
+/// using the `b_next` and `b_cont` fields.
 ///
 /// See the documentation for [`crate::engine::packet::Packet`] and/or [`MsgBlk`]
 /// for full context.
@@ -138,11 +138,11 @@ impl MsgBlkChain {
                 let curr = curr_b.as_ptr();
                 let next = NonNull::new((*curr).b_next);
 
-                // Break the forward link on the packet we have access to,
-                // and the backward link on the next element if possible.
-                if let Some(next) = next {
-                    (*next.as_ptr()).b_prev = ptr::null_mut();
-                }
+                // `b_prev` on the next packet is nominally used to provide a
+                // doubly linked list of `mblk_t`s, but `mac` does not use it
+                // as such or expect that anyone will (to the point that its
+                // meaning is overloaded within some modules). Break *only* the
+                // forward link on the current packet.
                 (*curr).b_next = ptr::null_mut();
 
                 // Update the current head. If the next element is null,
@@ -173,8 +173,10 @@ impl MsgBlkChain {
         // We're guaranteeing today that a 'static Packet has
         // no neighbours and is not part of a chain.
         // This simplifies tail updates in both cases (no chain walk).
+        //
+        // See the commentary in `pop_front` on the role/non-use of
+        // `b_prev`.
         unsafe {
-            assert!((*pkt.as_ptr()).b_prev.is_null());
             assert!((*pkt.as_ptr()).b_next.is_null());
         }
 
@@ -183,7 +185,6 @@ impl MsgBlkChain {
             let tail_p = list.tail.as_ptr();
             unsafe {
                 (*tail_p).b_next = pkt_p;
-                (*pkt_p).b_prev = tail_p;
                 // pkt_p->b_next is already null.
             }
             list.tail = pkt;
@@ -704,7 +705,7 @@ impl MsgBlk {
         let inner_ref = inner.as_ptr();
 
         unsafe {
-            if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
+            if (*inner_ref).b_next.is_null() {
                 Ok(Self(inner))
             } else {
                 Err(WrapError::Chain)
@@ -1482,7 +1483,6 @@ mod test {
         for (lhs, rhs) in els.iter().zip(els[1..].iter()) {
             unsafe {
                 (**lhs).b_next = *rhs;
-                (**rhs).b_prev = *lhs;
             }
         }
 
@@ -1538,9 +1538,9 @@ mod test {
         assert_eq!(chain_inner.tail.as_ptr(), new_el);
 
         // Last el has been linked to the new pkt, and it has a valid
-        // backward link.
+        // forward link. `b_prev` is unaltered.
         unsafe {
-            assert_eq!((*new_el).b_prev, els[2]);
+            assert!((*new_el).b_prev.is_null());
             assert!((*new_el).b_next.is_null());
             assert_eq!((*els[2]).b_next, new_el);
         }
