@@ -36,6 +36,7 @@ use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::ip::v4::Ipv4Ref;
 use opte::engine::ip::v4::ValidIpv4;
 use opte::engine::ip::v6::Ipv6;
+use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::ip::v6::ValidIpv6;
 use opte::engine::packet::InnerFlowId;
@@ -43,10 +44,14 @@ use opte::engine::packet::MblkFullParsed;
 use opte::engine::packet::MismatchError;
 use opte::engine::packet::Packet;
 use opte::engine::parse::ValidUlp;
+use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
+use opte::engine::port::ProcessResult;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
+use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::GeneveRef;
 use opte::ingot::icmp::IcmpV6Ref;
+use opte::ingot::ip::IpProtocol;
 use opte::ingot::tcp::TcpRef;
 use opte::ingot::types::Emit;
 use opte::ingot::types::HeaderLen;
@@ -59,6 +64,7 @@ use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::geneve;
 use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
@@ -4678,7 +4684,7 @@ fn icmp_inner_has_nat_applied() {
         header: smoltcp::wire::Ipv4Repr {
             src_addr: remote_addr.into(),
             dst_addr: g1_cfg.ipv4().private_ip.into(),
-            next_header: IpProtocol::Udp,
+            next_header: smoltcp::wire::IpProtocol::Udp,
             payload_len: 256,
             hop_limit: 0,
         },
@@ -4747,7 +4753,7 @@ fn icmpv6_inner_has_nat_applied() {
         header: smoltcp::wire::Ipv6Repr {
             src_addr: eph_ip.into(),
             dst_addr: remote_addr.into(),
-            next_header: IpProtocol::Udp,
+            next_header: smoltcp::wire::IpProtocol::Udp,
             // Unimportant -- header is truncated.
             payload_len: 256,
             hop_limit: 255,
@@ -4810,4 +4816,339 @@ fn icmpv6_inner_has_nat_applied() {
     let body = meta.body().unwrap();
     let (v6, ..) = ValidIpv6::parse(body).unwrap();
     assert_eq!(v6.source(), g1_cfg.ipv6().private_ip);
+}
+
+// Test that IPv6 multicast packets get encapsulated with Geneve
+#[test]
+fn test_ipv6_multicast_encapsulation() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    // Create an IPv6 multicast packet (ff04::1:3 - admin-local multicast)
+    let mcast_dst = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x03,
+    ]);
+
+    // Create a multicast underlay address (must be multicast for forwarding)
+    let mcast_underlay = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    // Add multicast forwarding entry BEFORE starting the port
+    let mcast_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap();
+    g1.vpc_map.add_mcast(mcast_dst.into(), mcast_underlay, mcast_vni).unwrap();
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Add router entry for IPv6 multicast traffic (ff00::/8) via Multicast target
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("ff00::/8".parse().unwrap()),
+        RouterTarget::Multicast(IpCidr::Ip6("ff00::/8".parse().unwrap())),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Build a UDP packet to the multicast address
+    // (TCP + multicast is incompatible and would be denied)
+    let eth = Ethernet {
+        destination: MacAddr::from([0x33, 0x33, 0x00, 0x01, 0x00, 0x03]),
+        source: g1_cfg.guest_mac,
+        ethertype: Ethertype::IPV6,
+    };
+    let ip = Ipv6 {
+        source: g1_cfg.ipv6().private_ip,
+        destination: mcast_dst,
+        next_header: IpProtocol::UDP,
+        payload_len: (Udp::MINIMUM_LENGTH) as u16,
+        hop_limit: 64,
+        ..Default::default()
+    };
+    let udp = Udp {
+        source: 12345,
+        destination: 5353, // mDNS port as an example multicast UDP service
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
+    let mut pkt_m = ulp_pkt(eth, ip, udp, &[]);
+
+    let pkt = parse_outbound(&mut pkt_m, GenericUlp {}).unwrap();
+    let res = g1.port.process(Out, pkt);
+
+    // Verify packet was encapsulated
+    let Ok(Modified(spec)) = res else {
+        panic!("Expected Modified result, got {res:?}");
+    };
+    let mut pkt_m = spec.apply(pkt_m);
+
+    // Parse the encapsulated packet as inbound (it's now on the wire with Geneve)
+    let parsed = Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let meta = parsed.meta();
+
+    // Verify the outer IPv6 destination is the multicast underlay address
+    assert_eq!(
+        meta.outer_v6.destination(),
+        mcast_underlay,
+        "Outer IPv6 destination should be multicast underlay address"
+    );
+
+    // Verify the outer IPv6 source is the physical IP of the guest
+    assert_eq!(
+        meta.outer_v6.source(),
+        g1_cfg.phys_ip,
+        "Outer IPv6 source should be the physical IP"
+    );
+
+    // Verify the outer Ethernet destination MAC is the IPv6 multicast MAC
+    // For IPv6 multicast, MAC is 33:33:xx:xx:xx:xx where xx:xx:xx:xx are the last 4 bytes of the IPv6 address
+    let expected_outer_mac = mcast_underlay.multicast_mac().unwrap();
+    assert_eq!(
+        meta.outer_eth.destination(),
+        expected_outer_mac,
+        "Outer Ethernet MAC should be IPv6 multicast MAC"
+    );
+
+    // Verify we have Geneve encapsulation with the correct VNI (fleet multicast VNI)
+    assert_eq!(
+        meta.outer_encap.vni(),
+        mcast_vni,
+        "Geneve VNI should match DEFAULT_MULTICAST_VNI"
+    );
+
+    // Verify the Geneve multicast option is present with External replication
+    let replication = geneve::extract_multicast_replication(&meta.outer_encap)
+        .expect("Geneve packet should have multicast option");
+    assert_eq!(
+        replication,
+        oxide_vpc::api::Replication::External,
+        "Multicast option should have External replication"
+    );
+}
+
+// Test that TCP + multicast packets are denied (TCP is incompatible with multicast)
+#[test]
+fn test_tcp_multicast_denied() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    // Create an IPv6 multicast address
+    let mcast_dst = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x03,
+    ]);
+
+    let mcast_underlay = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    let mcast_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap();
+    g1.vpc_map.add_mcast(mcast_dst.into(), mcast_underlay, mcast_vni).unwrap();
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip6("ff00::/8".parse().unwrap()),
+        RouterTarget::Multicast(IpCidr::Ip6("ff00::/8".parse().unwrap())),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    // Build a TCP packet to the multicast address (should be denied)
+    let mut pkt_m = http_syn3(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv6().private_ip,
+        MacAddr::from([0x33, 0x33, 0x00, 0x01, 0x00, 0x03]),
+        mcast_dst,
+        12345,
+        80,
+    );
+
+    let pkt = parse_outbound(&mut pkt_m, GenericUlp {}).unwrap();
+    let res = g1.port.process(Out, pkt);
+
+    // Verify packet was denied (TCP + multicast is incompatible)
+    match res {
+        Ok(Hairpin(_)) => panic!("Expected packet to be denied, got Hairpin"),
+        Ok(Modified(_)) => panic!("Expected packet to be denied, got Modified"),
+        Ok(ProcessResult::Drop { reason: DropReason::Layer { .. } }) => {
+            // Expected - TCP + multicast is denied by overlay layer
+        }
+        other => panic!("Expected Drop with Layer reason, got: {:?}", other),
+    }
+}
+
+// Ensure packets with unknown critical Geneve options are rejected during
+// option validation (fail-closed on unrecognised critical options).
+#[test]
+fn test_drop_on_unknown_critical_option() {
+    // Build Ethernet + IPv6 (with no extensions) + UDP + Geneve header
+    // carrying a single unknown critical option (class=0xffff, type=0x80, len=0).
+    // Minimal inner Ethernet + IPv4 + UDP follows to satisfy the parser.
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Ethernet (14B)
+    buf.extend_from_slice(&[
+        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, // dst
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+        0x86, 0xdd, // ethertype IPv6
+    ]);
+
+    // IPv6 header (40B)
+    // ver/tc/fl, payload_len, next_header=UDP(17), hop_limit
+    // payload_len = UDP length (we'll compute)
+    let ip6_hdr_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x60, 0x00, 0x00, 0x00, // ver+tc+fl
+        0x00, 0x00, // payload length (placeholder)
+        0x11, // next header UDP
+        0x40, // hop limit
+        // src
+        0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, // dst
+        0xff, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x03,
+    ]);
+
+    // UDP header (8B)
+    let udp_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x1e, 0x61, // source port
+        0x17, 0xc1, // dest 6081
+        0x00, 0x00, // length (placeholder)
+        0x00, 0x00, // checksum
+    ]);
+
+    // Geneve header (8B): ver+optlen=1 (4B option header), flags=critical opts
+    buf.extend_from_slice(&[
+        0x01, // ver=0, optlen=1 word (4B option header)
+        0x40, // flags: critical options present
+        0x65, 0x58, // protocol type 0x6558
+        0x00, 0x00, 0x00, 0x00, // VNI=0, reserved
+    ]);
+    // Unknown critical option: class=0xffff, type=0x80 (critical), len=0
+    buf.extend_from_slice(&[
+        0xff, 0xff, // class
+        0x80, // critical + type
+        0x00, // rsvd+len=0
+    ]);
+    // No body (len=0)
+
+    // Minimal inner Ethernet + IPv4 + UDP (to satisfy inner parse)
+    buf.extend_from_slice(&[
+        // inner Ethernet
+        0x00, 0x16, 0x3e, 0x00, 0x00, 0x02, 0x00, 0x16, 0x3e, 0x00, 0x00, 0x01,
+        0x08, 0x00, // IPv4
+        // inner IPv4 (20B)
+        0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x11, 0x00, 0x0a, 0x00,
+        0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, // src=10.0.0.1, dst=10.0.0.2
+        // inner UDP (8B)
+        0x12, 0x34, 0x13, 0x37, 0x00, 0x08, 0x00, 0x00,
+    ]);
+
+    // Compute UDP length and IPv6 payload length
+    let udp_len = (buf.len() - udp_pos) as u16;
+    buf[udp_pos + 4] = (udp_len >> 8) as u8;
+    buf[udp_pos + 5] = (udp_len & 0xff) as u8;
+
+    let ip6_payload_len = (buf.len() - (ip6_hdr_pos + 40)) as u16;
+    buf[ip6_hdr_pos + 4] = (ip6_payload_len >> 8) as u8;
+    buf[ip6_hdr_pos + 5] = (ip6_payload_len & 0xff) as u8;
+
+    // Parse Geneve directly from the UDP payload (skip L2/L3) and validate options
+    let geneve_offset = 14 /*eth*/ + 40 /*ipv6*/ + 8 /*udp*/;
+    let (geneve, _, _) =
+        opte::ingot::geneve::ValidGeneve::parse(&buf[geneve_offset..])
+            .expect("parse geneve header");
+    assert!(matches!(
+        geneve::validate_options(&geneve),
+        Err(opte::engine::packet::ParseError::UnrecognisedTunnelOpt { .. })
+    ));
+}
+
+// Ensure Geneve parsing works correctly when an IPv6 extension header is present
+// before UDP (e.g., Hop-by-Hop). Verifies that option walking is positioned at
+// the correct Geneve offset.
+#[test]
+fn test_v6_ext_hdr_geneve_offset_ok() {
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Ethernet
+    buf.extend_from_slice(&[
+        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+        0x86, 0xdd,
+    ]);
+
+    // IPv6 header (Next Header = Hop-by-Hop (0))
+    let ip6_hdr_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x60, 0x00, 0x00, 0x00, 0x00,
+        0x00, // payload length (placeholder)
+        0x00, // next header: Hop-by-Hop
+        0x40, // hop limit
+        // src
+        0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, // dst
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    // Hop-by-Hop extension header (8B) -> next header UDP (17), hdr ext len=0
+    buf.extend_from_slice(&[0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+
+    // UDP header (8B)
+    let udp_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x1e, 0x61, // source
+        0x17, 0xc1, // dest 6081
+        0x00, 0x00, // length (placeholder)
+        0x00, 0x00, // checksum
+    ]);
+
+    // Geneve header (8B): ver+optlen=2 (8B option area), flags=0
+    buf.extend_from_slice(&[0x02, 0x00, 0x65, 0x58, 0x00, 0x00, 0x00, 0x00]);
+    // Multicast option: class=0x0129, type=0x01, len=1; body=4B with External
+    buf.extend_from_slice(&[
+        0x01,
+        0x29,
+        0x01,
+        0x01, // class, type, rsvd+len
+        (oxide_vpc::api::Replication::External as u8) << 6,
+        0x00,
+        0x00,
+        0x00,
+    ]);
+
+    // Minimal inner Ethernet + IPv4 + UDP
+    buf.extend_from_slice(&[
+        0x00, 0x16, 0x3e, 0x00, 0x00, 0x02, 0x00, 0x16, 0x3e, 0x00, 0x00, 0x01,
+        0x08, 0x00, 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x11, 0x00,
+        0x0a, 0x00, 0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, 0x12, 0x34, 0x13, 0x37,
+        0x00, 0x08, 0x00, 0x00,
+    ]);
+
+    // Set UDP and IPv6 payload lengths
+    let udp_len = (buf.len() - udp_pos) as u16;
+    buf[udp_pos + 4] = (udp_len >> 8) as u8;
+    buf[udp_pos + 5] = (udp_len & 0xff) as u8;
+
+    let ip6_payload_len = (buf.len() - (ip6_hdr_pos + 40)) as u16;
+    buf[ip6_hdr_pos + 4] = (ip6_payload_len >> 8) as u8;
+    buf[ip6_hdr_pos + 5] = (ip6_payload_len & 0xff) as u8;
+
+    // Parse Geneve directly after IPv6 ext header and UDP, then check multicast option
+    let geneve_offset = 14 /*eth*/ + 40 /*ipv6*/ + 8 /*hop-by-hop*/ + 8 /*udp*/;
+    let (geneve, _, _) =
+        opte::ingot::geneve::ValidGeneve::parse(&buf[geneve_offset..])
+            .expect("parse geneve header after ext hdr");
+    let repl = geneve::extract_multicast_replication(&geneve)
+        .expect("multicast option present");
+    assert_eq!(repl, oxide_vpc::api::Replication::External);
 }

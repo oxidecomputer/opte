@@ -65,6 +65,7 @@ pub enum RouterTargetInternal {
     InternetGateway(Option<Uuid>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
+    Multicast(IpCidr),
 }
 
 impl RouterTargetInternal {
@@ -86,6 +87,7 @@ impl RouterTargetInternal {
             }
             RouterTargetInternal::Ip(_) => RouterTargetClass::Ip,
             RouterTargetInternal::VpcSubnet(_) => RouterTargetClass::VpcSubnet,
+            RouterTargetInternal::Multicast(_) => RouterTargetClass::Multicast,
         }
     }
 }
@@ -117,6 +119,16 @@ impl ActionMetaValue for RouterTargetInternal {
                     Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
                 }
 
+                Some(("mcast4", cidr4_s)) => {
+                    let cidr4 = cidr4_s.parse::<Ipv4Cidr>()?;
+                    Ok(Self::Multicast(IpCidr::Ip4(cidr4)))
+                }
+
+                Some(("mcast6", cidr6_s)) => {
+                    let cidr6 = cidr6_s.parse::<Ipv6Cidr>()?;
+                    Ok(Self::Multicast(IpCidr::Ip6(cidr6)))
+                }
+
                 Some(("ig", ig)) => {
                     let ig = ig.parse::<Uuid>().map_err(|e| e.to_string())?;
                     Ok(Self::InternetGateway(Some(ig)))
@@ -141,6 +153,12 @@ impl ActionMetaValue for RouterTargetInternal {
             Self::VpcSubnet(IpCidr::Ip6(cidr6)) => {
                 format!("sub6={cidr6}").into()
             }
+            Self::Multicast(IpCidr::Ip4(mcast4)) => {
+                format!("mcast4={mcast4}").into()
+            }
+            Self::Multicast(IpCidr::Ip6(mcast6)) => {
+                format!("mcast6={mcast6}").into()
+            }
         }
     }
 }
@@ -151,6 +169,7 @@ impl fmt::Display for RouterTargetInternal {
             Self::InternetGateway(addr) => format!("IG({addr:?})"),
             Self::Ip(addr) => format!("IP: {addr}"),
             Self::VpcSubnet(sub) => format!("Subnet: {sub}"),
+            Self::Multicast(mcast) => format!("Multicast: {mcast}"),
         };
         write!(f, "{s}")
     }
@@ -161,6 +180,7 @@ pub enum RouterTargetClass {
     InternetGateway,
     Ip,
     VpcSubnet,
+    Multicast,
 }
 
 impl ActionMetaValue for RouterTargetClass {
@@ -171,6 +191,7 @@ impl ActionMetaValue for RouterTargetClass {
             "ig" => Ok(Self::InternetGateway),
             "ip" => Ok(Self::Ip),
             "subnet" => Ok(Self::VpcSubnet),
+            "mcast" => Ok(Self::Multicast),
             _ => Err(format!("bad router target class: {s}")),
         }
     }
@@ -180,6 +201,7 @@ impl ActionMetaValue for RouterTargetClass {
             Self::InternetGateway => "ig".into(),
             Self::Ip => "ip".into(),
             Self::VpcSubnet => "subnet".into(),
+            Self::Multicast => "mcast".into(),
         }
     }
 }
@@ -190,6 +212,7 @@ impl fmt::Display for RouterTargetClass {
             Self::InternetGateway => write!(f, "IG"),
             Self::Ip => write!(f, "IP"),
             Self::VpcSubnet => write!(f, "Subnet"),
+            Self::Multicast => write!(f, "Multicast"),
         }
     }
 }
@@ -278,6 +301,8 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         (_, RouterTarget::Drop) |
         // Internet gateways are valid for any IP family.
         (_, RouterTarget::InternetGateway(_)) |
+        // Multicast targets are valid for any IP family
+        (_, RouterTarget::Multicast(_)) |
         // IPv4 destination, IPv4 address
         (IpCidr::Ip4(_), RouterTarget::Ip(IpAddr::Ip4(_))) |
         // IPv4 destination, IPv4 subnet
@@ -359,6 +384,22 @@ fn make_rule(
             };
             let action = Action::Meta(Arc::new(RouterAction::new(
                 RouterTargetInternal::VpcSubnet(vpc),
+            )));
+            (predicate, action)
+        }
+
+        RouterTarget::Multicast(mcast) => {
+            let predicate = match dest {
+                IpCidr::Ip4(ip4) => {
+                    Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4)])
+                }
+
+                IpCidr::Ip6(ip6) => {
+                    Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(ip6)])
+                }
+            };
+            let action = Action::Meta(Arc::new(RouterAction::new(
+                RouterTargetInternal::Multicast(mcast),
             )));
             (predicate, action)
         }

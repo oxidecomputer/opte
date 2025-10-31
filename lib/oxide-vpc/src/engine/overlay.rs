@@ -9,10 +9,12 @@
 //! This implements the Oxide Network VPC Overlay.
 use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
+use crate::api::DEFAULT_MULTICAST_VNI;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
+use crate::api::Replication;
 use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
@@ -80,7 +82,8 @@ pub const OVERLAY_LAYER_NAME: &str = "overlay";
 pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
-    v2p: Arc<Virt2Phys>,
+    vni_state: Arc<PerVniMaps>,
+    vpc_map: Arc<VpcMappings>,
     v2b: Arc<Virt2Boundary>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
@@ -88,7 +91,8 @@ pub fn setup(
     let encap = Action::Static(Arc::new(EncapAction::new(
         cfg.phys_ip,
         cfg.vni,
-        v2p,
+        vni_state,
+        vpc_map,
         v2b,
     )));
 
@@ -182,7 +186,8 @@ pub struct EncapAction {
     // sending data.
     phys_ip_src: Ipv6Addr,
     vni: Vni,
-    v2p: Arc<Virt2Phys>,
+    vni_state: Arc<PerVniMaps>,
+    vpc_map: Arc<VpcMappings>,
     v2b: Arc<Virt2Boundary>,
 }
 
@@ -190,10 +195,11 @@ impl EncapAction {
     pub fn new(
         phys_ip_src: Ipv6Addr,
         vni: Vni,
-        v2p: Arc<Virt2Phys>,
+        vni_state: Arc<PerVniMaps>,
+        vpc_map: Arc<VpcMappings>,
         v2b: Arc<Virt2Boundary>,
     ) -> Self {
-        Self { phys_ip_src, vni, v2p, v2b }
+        Self { phys_ip_src, vni, vni_state, vpc_map, v2b }
     }
 }
 
@@ -241,9 +247,13 @@ impl StaticAction for EncapAction {
             }
         };
 
-        let (is_internal, phys_target) = match target {
+        // Map the router target to a physical network location.
+        // The router layer has already made the routing decision - we just
+        // execute it here by looking up the appropriate physical mapping.
+        let dst_ip = flow_id.dst_ip();
+        let (is_internal, phys_target, is_mcast) = match target {
             RouterTargetInternal::InternetGateway(_) => {
-                match self.v2b.get(&flow_id.dst_ip()) {
+                match self.v2b.get(&dst_ip) {
                     Some(phys) => {
                         // Hash the packet onto a route target. This is a very
                         // rudimentary mechanism. Should level-up to an ECMP
@@ -260,16 +270,46 @@ impl StaticAction for EncapAction {
                                 ip: target.ip,
                                 vni: target.vni,
                             },
+                            false,
                         )
                     }
                     None => return Ok(AllowOrDeny::Deny),
                 }
             }
 
-            RouterTargetInternal::Ip(virt_ip) => match self.v2p.get(&virt_ip) {
+            // Multicast target - use M2P mapping to get the multicast underlay address.
+            // The router has determined this packet should be multicast forwarded.
+            RouterTargetInternal::Multicast(_) => {
+                // Fleet-level multicast mappings live under DEFAULT_MULTICAST_VNI.
+                // Look up the underlay multicast IPv6 for this group using the
+                // global VPC mappings and encapsulate with the fleet multicast VNI.
+                let mvni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
+                match self.vpc_map.get_mcast_underlay(mvni, dst_ip) {
+                    Some(underlay) => (
+                        true,
+                        PhysNet {
+                            ether: underlay.dst_mac(),
+                            ip: underlay.0,
+                            vni: mvni,
+                        },
+                        true,
+                    ),
+                    None => {
+                        // No mapping configured for this group; deny.
+                        return Ok(AllowOrDeny::Deny);
+                    }
+                }
+            }
+
+            RouterTargetInternal::Ip(virt_ip) => match self
+                .vni_state
+                .v2p
+                .get(&virt_ip)
+            {
                 Some(phys) => (
                     true,
                     PhysNet { ether: phys.ether, ip: phys.ip, vni: self.vni },
+                    false,
                 ),
 
                 // The router target has specified a VPC IP we do not
@@ -290,7 +330,7 @@ impl StaticAction for EncapAction {
             },
 
             RouterTargetInternal::VpcSubnet(_) => {
-                match self.v2p.get(&flow_id.dst_ip()) {
+                match self.vni_state.v2p.get(&flow_id.dst_ip()) {
                     Some(phys) => (
                         true,
                         PhysNet {
@@ -298,6 +338,7 @@ impl StaticAction for EncapAction {
                             ip: phys.ip,
                             vni: self.vni,
                         },
+                        false,
                     ),
 
                     // The guest is attempting to contact a VPC IP we
@@ -330,25 +371,54 @@ impl StaticAction for EncapAction {
                 data: Cow::Borrowed(GENEVE_MSS_SIZE_OPT_BODY),
             };
 
+        // For multicast originated from this host, we set External replication.
+        // The actual replication scope will be determined by the mcast_fwd table.
+        // The first byte encodes Replication in the top 2 bits:
+        //   External=0x00, Underlay=0x40, All=0x80, Reserved=0xC0
+        const REPLICATION_EXTERNAL_BYTE: u8 =
+            (Replication::External as u8) << 6;
+        static GENEVE_MCAST_OPT_BODY: &[u8] = &[
+            REPLICATION_EXTERNAL_BYTE, // Top 2 bits encode replication strategy
+            0x00,
+            0x00,
+            0x00, // Reserved bytes
+        ];
+        static GENEVE_MCAST_OPT: ArbitraryGeneveOption =
+            ArbitraryGeneveOption {
+                option_class: GENEVE_OPT_CLASS_OXIDE,
+                option_type: OxideOptionType::Multicast as u8,
+                data: Cow::Borrowed(GENEVE_MCAST_OPT_BODY),
+            };
+
+        let outer_mac =
+            if is_mcast { phys_target.ether } else { MacAddr::ZERO };
+
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
             // We leave the outer src/dst up to the driver.
+            // In the multicast case we can, however, derive this.
             outer_ether: HeaderAction::Push(
                 Valid::validated(EtherMeta {
+                    dst: outer_mac,
                     src: MacAddr::ZERO,
-                    dst: MacAddr::ZERO,
                     ether_type: EtherType::Ipv6,
                 })
                 .expect("Ethernet validation is infallible"),
             ),
-            outer_ip: HeaderAction::Push(Valid::validated(IpPush::from(
-                Ipv6Push {
+            outer_ip: HeaderAction::Push({
+                let ip_push = IpPush::from(Ipv6Push {
                     src: self.phys_ip_src,
                     dst: phys_target.ip,
                     proto: Protocol::UDP,
                     exts: Cow::Borrowed(&[]),
-                },
-            ))?),
+                });
+                match Valid::validated(ip_push) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(e.into());
+                    }
+                }
+            }),
             // XXX Geneve uses the UDP source port as a flow label
             // value for the purposes of ECMP -- a hash of the
             // 5-tuple. However, when using Geneve in IPv6 one could
@@ -369,30 +439,47 @@ impl StaticAction for EncapAction {
                 EncapPush::from(GenevePush {
                     vni: phys_target.vni,
                     entropy: flow_id.crc32() as u16,
-                    // Allocate space in which we can include the TCP MSS, when
-                    // needed during MSS boosting. It's theoretically doable to
-                    // gate this on seeing an unexpectedly high/low MSS option
-                    // in the TCP handshake, but there are problems in doing so:
-                    // * The MSS for the flow is negotiated, but the UFT entry
-                    //   containing this transform does not know the other side.
-                    // * UFT invalidation means we may rerun this transform in
-                    //   the middle of a flow.
-                    // So, emit it unconditionally for VPC-internal TCP traffic,
-                    // which could need the original MSS to be carried when LSO
-                    // is in use.
-                    options: if pkt_meta.is_inner_tcp() && is_internal {
-                        Cow::Borrowed(core::slice::from_ref(
+                    options: match (
+                        pkt_meta.is_inner_tcp() && is_internal,
+                        is_mcast,
+                    ) {
+                        // Allocate space in which we can include the TCP MSS, when
+                        // needed during MSS boosting. It's theoretically doable to
+                        // gate this on seeing an unexpectedly high/low MSS option
+                        // in the TCP handshake, but there are problems in doing so:
+                        // * The MSS for the flow is negotiated, but the UFT entry
+                        //   containing this transform does not know the other side.
+                        // * UFT invalidation means we may rerun this transform in
+                        //   the middle of a flow.
+                        // So, emit it unconditionally for VPC-internal TCP traffic,
+                        // which could need the original MSS to be carried when LSO
+                        // is in use.
+                        (true, false) => Cow::Borrowed(core::slice::from_ref(
                             &GENEVE_MSS_SIZE_OPT,
-                        ))
-                    } else {
-                        Cow::Borrowed(&[])
+                        )),
+                        (false, true) => Cow::Borrowed(core::slice::from_ref(
+                            &GENEVE_MCAST_OPT,
+                        )),
+                        (false, false) => Cow::Borrowed(&[]),
+                        // We do not support TCP over multicast delivery.
+                        // Multicast replication semantics conflict with TCP's
+                        // connection/ordering guarantees, so deny this case.
+                        (true, true) => {
+                            return Ok(AllowOrDeny::Deny);
+                        }
                     },
                 }),
             )?),
-            inner_ether: HeaderAction::Modify(EtherMod {
-                dst: Some(phys_target.ether),
-                ..Default::default()
-            }),
+            // For multicast packets, the inner destination MAC should already
+            // correspond to the inner L3 destination address.
+            inner_ether: if is_mcast {
+                HeaderAction::Ignore
+            } else {
+                HeaderAction::Modify(EtherMod {
+                    dst: Some(phys_target.ether),
+                    ..Default::default()
+                })
+            },
             ..Default::default()
         };
 
@@ -483,31 +570,27 @@ impl StaticAction for DecapAction {
 }
 
 pub struct VpcMappings {
-    inner: KMutex<BTreeMap<Vni, Arc<Virt2Phys>>>,
+    inner: KMutex<BTreeMap<Vni, Arc<PerVniMaps>>>,
 }
 
 impl VpcMappings {
+    /// Generate a new mapping struct.
+    pub fn new() -> Self {
+        Self { inner: KMutex::new(BTreeMap::new()) }
+    }
+
     /// Add a new mapping from VIP to [`PhysNet`], returning a pointer
     /// to the [`Virt2Phys`] this mapping belongs to.
-    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<Virt2Phys> {
+    pub fn add(&self, vip: IpAddr, phys: PhysNet) -> Arc<PerVniMaps> {
         // We convert to GuestPhysAddr because it saves us from
         // redundant storage of the VNI.
         let guest_phys = GuestPhysAddr::from(phys);
         let mut lock = self.inner.lock();
 
-        match lock.get(&phys.vni) {
-            Some(v2p) => {
-                v2p.set(vip, guest_phys);
-                v2p.clone()
-            }
+        let state = lock.entry(phys.vni).or_default();
+        state.v2p.set(vip, guest_phys);
 
-            None => {
-                let v2p = Arc::new(Virt2Phys::new());
-                v2p.set(vip, guest_phys);
-                lock.insert(phys.vni, v2p.clone());
-                v2p
-            }
-        }
+        state.clone()
     }
 
     /// Delete the mapping for the given VIP in the given VNI.
@@ -515,7 +598,7 @@ impl VpcMappings {
     /// Return the existing entry, if there is one.
     pub fn del(&self, vip: &IpAddr, phys: &PhysNet) -> Option<PhysNet> {
         match self.inner.lock().get(&phys.vni) {
-            Some(v2p) => v2p.remove(vip).map(|guest_phys| PhysNet {
+            Some(state) => state.v2p.remove(vip).map(|guest_phys| PhysNet {
                 ether: guest_phys.ether,
                 ip: guest_phys.ip,
                 vni: phys.vni,
@@ -530,11 +613,13 @@ impl VpcMappings {
         let mut mappings = Vec::new();
         let lock = self.inner.lock();
 
-        for (vni, v2p) in lock.iter() {
+        for (vni, state) in lock.iter() {
             mappings.push(VpcMapResp {
                 vni: *vni,
-                ip4: v2p.dump_ip4(),
-                ip6: v2p.dump_ip6(),
+                ip4: state.v2p.dump_ip4(),
+                ip6: state.v2p.dump_ip6(),
+                mcast_ip4: state.m2p.dump_ip4(),
+                mcast_ip6: state.m2p.dump_ip6(),
             });
         }
 
@@ -548,8 +633,8 @@ impl VpcMappings {
     /// assumption is enforced by the control plane; making sure that
     /// peered VPCs do not overlap their VIP ranges.
     pub fn ip_to_vni(&self, vip: &IpAddr) -> Option<Vni> {
-        for (vni, v2p) in self.inner.lock().iter() {
-            if v2p.get(vip).is_some() {
+        for (vni, state) in self.inner.lock().iter() {
+            if state.v2p.get(vip).is_some() {
                 return Some(*vni);
             }
         }
@@ -557,8 +642,62 @@ impl VpcMappings {
         None
     }
 
-    pub fn new() -> Self {
-        VpcMappings { inner: KMutex::new(BTreeMap::new()) }
+    /// Add a multicast forwarding entry from a multicast group IP to a physical
+    /// underlay IP.
+    ///
+    /// Returns an error if:
+    /// - The VNI is not DEFAULT_MULTICAST_VNI
+    /// - The underlay address is not a valid IPv6 multicast address
+    pub fn add_mcast(
+        &self,
+        group: IpAddr,
+        underlay: Ipv6Addr,
+        vni: Vni,
+    ) -> Result<Arc<PerVniMaps>, OpteError> {
+        // Validate VNI is DEFAULT_MULTICAST_VNI for fleet-level multicast
+        if vni.as_u32() != DEFAULT_MULTICAST_VNI {
+            return Err(OpteError::System {
+                errno: illumos_sys_hdrs::EINVAL,
+                msg: format!(
+                    "multicast VNI must be DEFAULT_MULTICAST_VNI ({DEFAULT_MULTICAST_VNI}), got: {}",
+                    vni.as_u32()
+                ),
+            });
+        }
+
+        let mut lock = self.inner.lock();
+        let state = lock.entry(vni).or_default();
+
+        let mcast_underlay = MulticastUnderlay::new(underlay).ok_or_else(|| {
+            OpteError::InvalidUnderlayMulticast(format!(
+                "underlay address must be an administratively-scoped multicast address \
+                 (scope 0x4/admin-local, 0x5/site-local, or 0x8/organization-local): {underlay}",
+            ))
+        })?;
+
+        state.m2p.set(group, mcast_underlay);
+        Ok(state.clone())
+    }
+
+    /// Delete a multicast forwarding entry.
+    pub fn del_mcast(&self, group: IpAddr, _underlay: Ipv6Addr, vni: Vni) {
+        let mut lock = self.inner.lock();
+        if let Some(state) = lock.get_mut(&vni) {
+            state.m2p.remove(&group);
+        }
+    }
+
+    /// Get the underlay multicast for a given VNI and overlay multicast group.
+    pub fn get_mcast_underlay(
+        &self,
+        vni: Vni,
+        group: IpAddr,
+    ) -> Option<MulticastUnderlay> {
+        let lock = self.inner.lock();
+        lock.get(&vni).and_then(|state| match group {
+            IpAddr::Ip4(ip4) => state.m2p.ip4.lock().get(&ip4).copied(),
+            IpAddr::Ip6(ip6) => state.m2p.ip6.lock().get(&ip6).copied(),
+        })
     }
 }
 
@@ -567,6 +706,10 @@ impl Default for VpcMappings {
         Self::new()
     }
 }
+
+// XXX: Should these not be RwLocks? This is a really unfortunate degree of
+//      contention for multiple ports in the slowpath to block one another.
+//      (Not common by any means, but needless when it does occur!)
 
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
@@ -604,6 +747,29 @@ pub struct Virt2Boundary {
     // with a poptrie that was pre-built out of band.
     pt4: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
     pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
+}
+
+// NOTE: This is structurally similar to V2P mapping, but maps to MulticastUnderlay
+// which wraps only an IPv6 address. The destination MAC is derived algorithmically
+// from the IPv6 multicast address rather than stored explicitly.
+/// A mapping from inner multicast destination IPs to underlay multicast groups.
+///
+/// Validation is enforced through the `MulticastUnderlay` newtype wrapper, which
+/// ensures only valid IPv6 multicast addresses can be stored.
+pub struct Mcast2Phys {
+    ip4: KMutex<BTreeMap<Ipv4Addr, MulticastUnderlay>>,
+    ip6: KMutex<BTreeMap<Ipv6Addr, MulticastUnderlay>>,
+}
+
+/// Per-VNI mapping state containing both unicast and multicast address mappings.
+///
+/// This struct holds all address-to-physical mappings organized by VNI:
+/// - `v2p`: Unicast virtual IPs to physical locations
+/// - `m2p`: Multicast group IPs to physical underlay addresses
+#[derive(Default)]
+pub struct PerVniMaps {
+    pub v2p: Virt2Phys,
+    pub m2p: Mcast2Phys,
 }
 
 pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
@@ -825,6 +991,91 @@ impl MappingResource for Virt2Phys {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
+        }
+    }
+}
+
+impl Mcast2Phys {
+    /// Create a new empty multicast-to-physical mapping table.
+    pub fn new() -> Self {
+        Self {
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Dump all IPv4 overlay multicast group to underlay IPv6 multicast mappings.
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, Ipv6Addr)> {
+        self.ip4.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+    }
+
+    /// Dump all IPv6 overlay multicast group to underlay IPv6 multicast mappings.
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, Ipv6Addr)> {
+        self.ip6.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+    }
+}
+
+impl Default for Mcast2Phys {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// An overlay multicast group address mapped to the underlay (outer) IPv6 multicast address.
+///
+/// This type ensures that the wrapped IPv6 address is a valid multicast address
+/// with administrative scope (admin-local, site-local, or organization-local).
+///
+/// Administrative scopes per RFC 4291 and RFC 7346:
+/// - `0x4`: admin-local scope
+/// - `0x5`: site-local scope
+/// - `0x8`: organization-local scope
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct MulticastUnderlay(Ipv6Addr);
+
+impl MulticastUnderlay {
+    /// Create a new `MulticastUnderlay` if the address is a valid
+    /// administratively-scoped multicast IPv6 address (scope 0x4, 0x5, or 0x8).
+    pub fn new(addr: Ipv6Addr) -> Option<Self> {
+        if addr.is_admin_scoped_multicast() { Some(Self(addr)) } else { None }
+    }
+
+    /// Return the underlying IPv6 multicast address.
+    pub fn addr(&self) -> Ipv6Addr {
+        self.0
+    }
+
+    /// Return the destination MAC address derived from the IPv6 multicast address.
+    fn dst_mac(&self) -> MacAddr {
+        self.0.unchecked_multicast_mac()
+    }
+}
+
+impl Resource for Mcast2Phys {}
+impl ResourceEntry for MulticastUnderlay {}
+
+impl MappingResource for Mcast2Phys {
+    type Key = IpAddr;
+    type Entry = MulticastUnderlay;
+
+    fn get(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
+            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+        }
+    }
+
+    fn remove(&self, vip: &Self::Key) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().remove(ip4),
+            IpAddr::Ip6(ip6) => self.ip6.lock().remove(ip6),
+        }
+    }
+
+    fn set(&self, vip: Self::Key, mcast: Self::Entry) -> Option<Self::Entry> {
+        match vip {
+            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
+            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
         }
     }
 }

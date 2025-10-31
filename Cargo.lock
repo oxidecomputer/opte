@@ -2679,6 +2679,7 @@ dependencies = [
  "anyhow",
  "libnet",
  "opte-ioctl",
+ "opte-test-utils",
  "oxide-vpc",
  "rand",
  "slog",

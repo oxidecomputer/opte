@@ -7,12 +7,17 @@
 use crate::postbox::Postbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::collections::btree_map::Entry;
+use alloc::collections::btree_set::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
+use opte::api::IpAddr;
 use opte::api::MacAddr;
+use opte::api::OpteError;
 use opte::api::Vni;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
+use opte::ddi::sync::KRwLockWriteGuard;
 
 /// A map/set lookup key for ports indexed on `(Vni, MacAddr)`.
 ///
@@ -26,6 +31,11 @@ impl VniMac {
     #[inline]
     pub fn new(vni: Vni, mac: MacAddr) -> Self {
         VniMac(vni.as_u32(), mac_to_u64(mac))
+    }
+
+    #[inline]
+    pub fn vni(&self) -> Vni {
+        Vni::new(self.0).expect("VniMac contains valid VNI")
     }
 }
 
@@ -41,6 +51,7 @@ type Dev = Arc<XdeDev>;
 pub struct DevMap {
     devs: BTreeMap<VniMac, Dev>,
     names: BTreeMap<String, Dev>,
+    mcast_groups: BTreeMap<IpAddr, BTreeSet<VniMac>>,
 }
 
 impl Default for DevMap {
@@ -51,7 +62,11 @@ impl Default for DevMap {
 
 impl DevMap {
     pub const fn new() -> Self {
-        Self { devs: BTreeMap::new(), names: BTreeMap::new() }
+        Self {
+            devs: BTreeMap::new(),
+            names: BTreeMap::new(),
+            mcast_groups: BTreeMap::new(),
+        }
     }
 
     /// Insert an `XdeDev`.
@@ -66,7 +81,68 @@ impl DevMap {
     /// Remove an `XdeDev` using its name.
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
         let key = get_key(&self.names.remove(name)?);
+
+        // Clean up all multicast group subscriptions for this port
+        self.mcast_groups.retain(|_group, subscribers| {
+            subscribers.remove(&key);
+            !subscribers.is_empty()
+        });
+
         self.devs.remove(&key)
+    }
+
+    /// Allow a port to receive on a given multicast group.
+    ///
+    /// This takes the overlay (outer v6) multicast group address.
+    pub fn mcast_subscribe(
+        &mut self,
+        name: &str,
+        mcast_ip: IpAddr,
+    ) -> Result<(), OpteError> {
+        // Validate that the IP is actually a multicast address
+        if !mcast_ip.is_multicast() {
+            return Err(OpteError::BadState(format!(
+                "IP address {} is not a multicast address",
+                mcast_ip
+            )));
+        }
+
+        let port = self
+            .get_by_name(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        // TODO: probably could store Arcs or Weaks here, but want to be safe for now.
+        self.mcast_groups.entry(mcast_ip).or_default().insert(key);
+
+        Ok(())
+    }
+
+    /// Rescind a port's ability to receive on a given multicast group.
+    pub fn mcast_unsubscribe(
+        &mut self,
+        name: &str,
+        mcast_ip: IpAddr,
+    ) -> Result<(), OpteError> {
+        let port = self
+            .get_by_name(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        // TODO: Do we need handling for a special VNI from rack-external traffic?
+        if let Entry::Occupied(set) = self.mcast_groups.entry(mcast_ip) {
+            set.into_mut().remove(&key);
+        }
+
+        Ok(())
+    }
+
+    /// Find the keys for all ports who want to receive a given multicast packet.
+    pub fn mcast_listeners(
+        &self,
+        mcast_ip: &IpAddr,
+    ) -> Option<impl Iterator<Item = &VniMac>> {
+        self.mcast_groups.get(mcast_ip).map(|v| v.iter())
     }
 
     /// Return a reference to an `XdeDev` using its address.
@@ -134,5 +210,9 @@ impl ReadOnlyDevMap {
 
     pub fn read(&self) -> KRwLockReadGuard<'_, DevMap> {
         self.0.read()
+    }
+
+    pub fn write(&self) -> KRwLockWriteGuard<'_, DevMap> {
+        self.0.write()
     }
 }
