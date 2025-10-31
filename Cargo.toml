@@ -41,12 +41,12 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
-cargo_metadata = "0.22"
+cargo_metadata = "0.23"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.7"
-ctor = "0.5"
+ctor = "0.6"
 darling = "0.21"
 dyn-clone = "1.0"
 heapless = "0.8"
@@ -61,7 +61,7 @@ postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
 quote = "1.0"
 rand = "0.9.2"
-ref-cast = "1.0.24"
+ref-cast = "1.0.25"
 ron = "0.11"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }
@@ -75,12 +75,15 @@ tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "2.0"
 toml = "0.9"
 uuid = { version = "1.0", default-features = false, features = ["serde"]}
-usdt = "0.5"
+usdt = "0.6"
 version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+
+[profile.dev]
+opt-level = 1
 
 [profile.release]
 debug = 2
