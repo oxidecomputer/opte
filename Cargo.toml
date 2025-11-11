@@ -69,7 +69,7 @@ slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trac
 slog-async = "2.8"
 slog-envlogger = "2.2"
 slog-term = "2.9"
-smoltcp = { version = "0.11", default-features = false }
+smoltcp = { version = "0.12", default-features = false }
 syn = "2"
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "2.0"
