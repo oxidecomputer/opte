@@ -37,6 +37,7 @@ use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::DumpMcastForwardingResp;
+use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
@@ -262,6 +263,12 @@ impl OpteHdl {
     /// Dump the multicast forwarding table.
     pub fn dump_mcast_fwd(&self) -> Result<DumpMcastForwardingResp, Error> {
         let cmd = OpteCmd::DumpMcastForwarding;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    /// Dump the multicast subscription table (group -> ports on this sled).
+    pub fn dump_mcast_subs(&self) -> Result<DumpMcastSubscriptionsResp, Error> {
+        let cmd = OpteCmd::DumpMcastSubscriptions;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 

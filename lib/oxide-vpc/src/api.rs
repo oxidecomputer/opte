@@ -20,15 +20,26 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-/// Multicast packet replication strategy.
+/// TX-only instruction to switches for multicast packet replication.
 ///
-/// Encoding and scope:
-/// - The Geneve Oxide multicast option encodes replication in the top 2 bits
-///   of the option body’s first byte (u2). The remaining 30 bits are reserved.
-/// - External means local customer-facing delivery within the same VNI
-/// - Underlay means Geneve-encapsulated forwarding to underlay infrastructure
-///   members using the fleet multicast VNI.
-/// - All combines both behaviors.
+/// Tells the switch which port groups to replicate outbound multicast packets
+/// to. It is a transmit-only setting - on RX, OPTE ignores the replication
+/// field and performs local same-sled delivery based purely on subscriptions.
+/// The replication mode is not an access control mechanism.
+///
+/// Routing vs replication: OPTE routes to the [`NextHopV6::addr`] (switch's
+/// unicast address) for all modes to determine reachability and which underlay
+/// port/MAC to use.
+///
+/// The packet destination (outer IPv6) is the multicast address from M2P. This
+/// [`Replication`] value tells the switch which port groups to replicate to.
+///
+/// - `External`: Switch decaps and replicates to external-facing ports only
+/// - `Underlay`: Switch replicates to underlay ports (other sleds) only
+/// - `Both`: Switch replicates to both external and underlay ports (bifurcated)
+///
+/// Encoding: The Geneve Oxide multicast option encodes the replication strategy in the
+/// top 2 bits of the option body's first byte (u2). The remaining 30 bits are reserved.
 ///
 /// Current implementation uses a single fleet VNI (DEFAULT_MULTICAST_VNI = 77)
 /// for all multicast traffic rack-wide (RFD 488 "Multicast across VPCs").
@@ -37,46 +48,23 @@ use uuid::Uuid;
 )]
 #[repr(u8)]
 pub enum Replication {
-    /// Replicate packets to external/customer-facing members (guest instances).
+    /// Replicate packets to ports set for external multicast traffic.
     ///
-    /// Local delivery within the same VNI. Packets are decapsulated at the
-    /// switch before delivery to guests.
+    /// Switch decaps and replicates to front panel ports (egress to external
+    /// networks, leaving the underlay).
     #[default]
     External = 0x00,
-    /// Replicate packets to underlay/infrastructure members.
+    /// Replicate packets to ports set for underlay multicast traffic.
     ///
-    /// Forwards Geneve-encapsulated packets to underlay destinations for
-    /// infrastructure delivery (not directly to guest instances). Uses
-    /// DEFAULT_MULTICAST_VNI (77) for encapsulation.
+    /// Switch replicates to sleds (using the underlay).
     Underlay = 0x01,
-    /// Replicate packets to both external and underlay members (bifurcated).
+    /// Replicate packets to ports set for underlay and external multicast traffic (bifurcated).
     ///
-    /// Combines both customer-facing (decapsulated to guests) and infrastructure
-    /// (encapsulated) delivery modes for comprehensive multicast distribution.
-    All = 0x02,
+    /// Switch replicates to both front panel ports (egress to external networks) and sleds.
+    Both = 0x02,
     /// Reserved for future use. This value exists to account for all possible
     /// values in the 2-bit Geneve option field.
     Reserved = 0x03,
-}
-
-impl Replication {
-    /// Merge two replication strategies, preferring the most permissive.
-    ///
-    /// Merging rules:
-    /// - Any `All` -> `All`
-    /// - `External` + `Underlay` -> `All`
-    /// - Same values -> keep the value
-    /// - Default to `All` for unexpected combinations
-    pub const fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::All, _) | (_, Self::All) => Self::All,
-            (Self::External, Self::Underlay)
-            | (Self::Underlay, Self::External) => Self::All,
-            (a, b) if a as u8 == b as u8 => a,
-            // Prefer `All` for unexpected combinations
-            _ => Self::All,
-        }
-    }
 }
 
 #[cfg(any(feature = "std", test))]
@@ -87,9 +75,9 @@ impl FromStr for Replication {
         match s.to_ascii_lowercase().as_str() {
             "external" => Ok(Self::External),
             "underlay" => Ok(Self::Underlay),
-            "all" => Ok(Self::All),
+            "both" => Ok(Self::Both),
             lower => Err(format!(
-                "unexpected replication type {lower} -- expected 'external', 'underlay', or 'all'"
+                "unexpected replication {lower} -- expected 'external', 'underlay', or 'both'"
             )),
         }
     }
@@ -109,10 +97,10 @@ pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
 /// All multicast groups (M2P mappings and forwarding entries) must use this VNI.
 /// OPTE validates that multicast operations specify this VNI and rejects others.
 ///
-/// **Security model:** While M2P (Multicast-to-Physical) mappings are stored
+/// While M2P (Multicast-to-Physical) mappings are stored
 /// per-VNI in the code, the enforcement of DEFAULT_MULTICAST_VNI means all
 /// multicast traffic shares a single namespace across the rack, with no
-/// VPC-level isolation (as multicast groups are fleet-wide).
+/// VPC-level isolation (as multicast groups are fleet-wide) *as of now*.
 pub const DEFAULT_MULTICAST_VNI: u32 = 77u32;
 
 /// Description of Boundary Services, the endpoint used to route traffic
@@ -392,40 +380,30 @@ pub struct PhysNet {
 }
 
 /// Represents an IPv6 next hop for multicast forwarding.
+///
+/// OPTE routes to [`NextHopV6::addr`] (the switch's unicast address) for all
+/// replication modes to determine reachability and which underlay port/MAC to
+/// use. The packet destination (outer IPv6) is always the multicast address
+/// from M2P. The associated [`Replication`] mode is a TX-only instruction
+/// telling the switch which port groups to replicate to on transmission.
+/// Routing is always to the unicast next hop.
 #[derive(
     Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord,
 )]
 pub struct NextHopV6 {
-    /// The IPv6 address of the next hop
+    /// The unicast IPv6 address of the switch endpoint (for routing).
+    /// This determines which underlay port and source MAC to use.
+    /// The actual packet destination (outer IPv6) is the multicast address.
     pub addr: Ipv6Addr,
-    /// The VNI to use for this next hop
+    /// The VNI to use for Geneve encapsulation.
+    /// Currently must be DEFAULT_MULTICAST_VNI (77).
+    /// Future: could support per-VPC VNIs for multicast isolation.
     pub vni: Vni,
 }
 
 impl NextHopV6 {
     pub fn new(addr: Ipv6Addr, vni: Vni) -> Self {
         Self { addr, vni }
-    }
-}
-
-/// A next hop for multicast forwarding (supports both IPv4 and IPv6).
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct NextHop {
-    /// The IP address of the next hop
-    pub addr: IpAddr,
-    /// The VNI to use for this next hop
-    pub vni: Vni,
-}
-
-impl NextHop {
-    pub fn new(addr: IpAddr, vni: Vni) -> Self {
-        Self { addr, vni }
-    }
-}
-
-impl From<NextHopV6> for NextHop {
-    fn from(v6: NextHopV6) -> Self {
-        Self { addr: v6.addr.into(), vni: v6.vni }
     }
 }
 
@@ -492,18 +470,12 @@ impl From<PhysNet> for GuestPhysAddr {
 ///   abstraction, it's simply allowing one subnet to talk to another.
 ///   There is no separate VPC router process, the real routing is done
 ///   by the underlay.
-///
-/// * Multicast: Packets matching this entry are multicast traffic.
-///   Uses the M2P (Multicast-to-Physical) mapping to determine underlay
-///   destinations. Does not apply SNAT; the outer IPv6 underlay source
-///   is the physical IP.
 #[derive(Clone, Debug, Copy, Deserialize, Serialize)]
 pub enum RouterTarget {
     Drop,
     InternetGateway(Option<Uuid>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
-    Multicast(IpCidr),
 }
 
 #[cfg(any(feature = "std", test))]
@@ -535,15 +507,6 @@ impl FromStr for RouterTarget {
                     cidr6s.parse().map(|x| Self::VpcSubnet(IpCidr::Ip6(x)))
                 }
 
-                Some(("mcast4", cidr4s)) => {
-                    let cidr4 = cidr4s.parse()?;
-                    Ok(Self::Multicast(IpCidr::Ip4(cidr4)))
-                }
-
-                Some(("mcast6", cidr6s)) => {
-                    cidr6s.parse().map(|x| Self::Multicast(IpCidr::Ip6(x)))
-                }
-
                 Some(("ig", uuid)) => Ok(Self::InternetGateway(Some(
                     uuid.parse::<Uuid>().map_err(|e| e.to_string())?,
                 ))),
@@ -564,12 +527,6 @@ impl Display for RouterTarget {
             Self::Ip(IpAddr::Ip6(ip6)) => write!(f, "ip6={ip6}"),
             Self::VpcSubnet(IpCidr::Ip4(sub4)) => write!(f, "sub4={sub4}"),
             Self::VpcSubnet(IpCidr::Ip6(sub6)) => write!(f, "sub6={sub6}"),
-            Self::Multicast(IpCidr::Ip4(mcast4)) => {
-                write!(f, "mcast4={mcast4}")
-            }
-            Self::Multicast(IpCidr::Ip6(mcast6)) => {
-                write!(f, "mcast6={mcast6}")
-            }
         }
     }
 }
@@ -676,8 +633,6 @@ pub struct VpcMapResp {
     pub vni: Vni,
     pub ip4: Vec<(Ipv4Addr, GuestPhysAddr)>,
     pub ip6: Vec<(Ipv6Addr, GuestPhysAddr)>,
-    pub mcast_ip4: Vec<(Ipv4Addr, Ipv6Addr)>,
-    pub mcast_ip6: Vec<(Ipv6Addr, Ipv6Addr)>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -714,26 +669,36 @@ pub struct ClearVirt2PhysReq {
     pub phys: PhysNet,
 }
 
-/// Set mapping from multicast group to underlay multicast address.
+/// Set mapping from (overlay) multicast group to underlay multicast address.
+///
+/// Creates a multicast group fleet-wide by mapping an overlay multicast address
+/// to an underlay IPv6 multicast address. Ports can then join via `subscribe()`.
+/// The M2P mapping is the source of truth - if it exists, the group exists.
+///
+/// Ports join and leave with `subscribe()` and `unsubscribe()`, which look up
+/// the underlay address via this M2P mapping. Without the mapping, `subscribe()`
+/// fails (can't look up underlay), but `unsubscribe()` succeeds
+/// (group gone => not subscribed).
+///
+/// This handles cleanup races where the control plane deletes the group before
+/// sleds finish unsubscribing ports.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetMcast2PhysReq {
     /// Overlay multicast group address
     pub group: IpAddr,
     /// Underlay IPv6 multicast address
     pub underlay: Ipv6Addr,
-    /// VNI for this mapping
-    pub vni: Vni,
 }
 
 /// Clear a mapping from multicast group to underlay multicast address.
+///
+/// All multicast groups use DEFAULT_MULTICAST_VNI (77) for fleet-wide multicast.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearMcast2PhysReq {
     /// Overlay multicast group address
     pub group: IpAddr,
     /// Underlay IPv6 multicast address
     pub underlay: Ipv6Addr,
-    /// VNI for this mapping
-    pub vni: Vni,
 }
 
 /// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
@@ -776,20 +741,36 @@ pub enum DelRouterEntryResp {
     NotFound,
 }
 
-/// Set multicast forwarding entries for a multicast group.
+/// Set multicast forwarding entries for an underlay multicast group.
+///
+/// Configures how OPTE forwards multicast packets for a specific underlay group.
+/// The forwarding table maps underlay multicast addresses to switch endpoints
+/// and TX-only replication instructions.
+///
+/// Routing vs destination: OPTE routes to [`NextHopV6::addr`] (switch's unicast
+/// address) to determine reachability and which underlay port/MAC to use. The
+/// packet is sent to the multicast address (`underlay`) with multicast MAC. The
+/// switch uses the multicast destination and Geneve [`Replication`] tag
+/// to determine which port groups to replicate to on transmission.
+///
+/// Fleet-wide multicast: All multicast uses DEFAULT_MULTICAST_VNI (77)
+/// currently. The VNI in NextHopV6 must be 77 - other values are rejected.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetMcastForwardingReq {
-    /// The multicast group address (overlay)
-    pub group: IpAddr,
-    /// The next hops (underlay IPv6 addresses) with replication information
+    /// The underlay IPv6 multicast address (outer IPv6 dst in transmitted packets)
+    pub underlay: Ipv6Addr,
+    /// Switch endpoints and TX-only replication instructions.
+    /// Each NextHopV6.addr is the unicast IPv6 of a switch (for routing).
+    /// The Replication is a TX-only instruction indicating which port groups
+    /// the switch should use.
     pub next_hops: Vec<(NextHopV6, Replication)>,
 }
 
-/// Clear multicast forwarding entries for a multicast group.
+/// Clear multicast forwarding entries for an underlay multicast group.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearMcastForwardingReq {
-    /// The multicast group address
-    pub group: IpAddr,
+    /// The underlay IPv6 multicast address
+    pub underlay: Ipv6Addr,
 }
 
 /// Response for dumping the multicast forwarding table.
@@ -804,13 +785,30 @@ impl CmdOk for DumpMcastForwardingResp {}
 /// A single multicast forwarding table entry.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct McastForwardingEntry {
-    /// The multicast group address (overlay)
-    pub group: IpAddr,
-    /// The next hops (underlay IPv6 addresses) with replication information
+    /// The underlay IPv6 multicast address
+    pub underlay: Ipv6Addr,
+    /// The next hops (underlay IPv6 addresses) with TX-only replication instructions
     pub next_hops: Vec<(NextHopV6, Replication)>,
 }
 
 impl opte::api::cmd::CmdOk for DelRouterEntryResp {}
+
+/// Response for dumping the multicast subscription table (group -> ports).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpMcastSubscriptionsResp {
+    pub entries: Vec<McastSubscriptionEntry>,
+}
+
+impl CmdOk for DumpMcastSubscriptionsResp {}
+
+/// A single multicast subscription entry.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastSubscriptionEntry {
+    /// The underlay IPv6 multicast address (subscription key)
+    pub underlay: Ipv6Addr,
+    /// Port names subscribed to this group on this sled
+    pub ports: Vec<String>,
+}
 
 /// Subscribe a port to a multicast group.
 #[derive(Clone, Debug, Deserialize, Serialize)]

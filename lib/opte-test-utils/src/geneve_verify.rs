@@ -9,6 +9,9 @@
 //! This uses the existing OPTE/ingot Geneve types to parse raw packet bytes
 //! and extract key multicast-related fields for test assertions.
 
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::bail;
 use opte::engine::geneve::Vni;
 use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::parse::ValidGeneveOverV6;
@@ -30,9 +33,9 @@ pub struct GeneveInfo {
 ///
 /// Returns VNI, outer IPv6 destination, and replication mode from Geneve
 /// options.
-pub fn parse_geneve_packet(bytes: &[u8]) -> Result<GeneveInfo, String> {
+pub fn parse_geneve_packet(bytes: &[u8]) -> Result<GeneveInfo> {
     let (pkt, _, _) = ValidGeneveOverV6::parse(bytes)
-        .map_err(|e| format!("Failed to parse Geneve/IPv6 packet: {e:?}"))?;
+        .context("Failed to parse Geneve/IPv6 packet")?;
 
     let vni = pkt.outer_encap.vni();
     let outer_ipv6_dst = pkt.outer_v6.destination();
@@ -45,15 +48,14 @@ pub fn parse_geneve_packet(bytes: &[u8]) -> Result<GeneveInfo, String> {
 ///
 /// Snoop output with `-x0` flag is hex digits without separators:
 /// "ffffffffffff001122334455..."
-pub fn parse_snoop_hex(hex_str: &str) -> Result<Vec<u8>, String> {
+pub fn parse_snoop_hex(hex_str: &str) -> Result<Vec<u8>> {
     hex_str
         .as_bytes()
         .chunks(2)
         .map(|chunk| {
-            let hex_byte = std::str::from_utf8(chunk)
-                .map_err(|e| format!("Invalid UTF-8: {e}"))?;
-            u8::from_str_radix(hex_byte, 16)
-                .map_err(|e| format!("Invalid hex: {e}"))
+            let hex_byte =
+                std::str::from_utf8(chunk).context("Invalid UTF-8")?;
+            u8::from_str_radix(hex_byte, 16).context("Invalid hex")
         })
         .collect()
 }
@@ -68,7 +70,7 @@ pub fn parse_snoop_hex(hex_str: &str) -> Result<Vec<u8>, String> {
 /// To avoid false positives from summary lines (e.g., "UDP port 6081"), the
 /// tokenized fallback triggers only for lines that look like offset-prefixed
 /// hex dumps.
-pub fn extract_snoop_hex(snoop_output: &str) -> Result<String, String> {
+pub fn extract_snoop_hex(snoop_output: &str) -> Result<String> {
     let mut hex_bytes = String::new();
 
     for line in snoop_output.lines() {
@@ -123,7 +125,7 @@ pub fn extract_snoop_hex(snoop_output: &str) -> Result<String, String> {
     }
 
     if hex_bytes.is_empty() {
-        return Err("No hex data found in snoop output".to_string());
+        bail!("No hex data found in snoop output");
     }
 
     // Ensure even number of nibbles to form complete bytes.

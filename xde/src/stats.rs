@@ -55,27 +55,31 @@ pub struct XdeStats {
     out_drop_misc: KStatU64,
     // NOTE: tun_opt is not relevant to outbound packets -- no encapsulation
     // is in use.
-    /// The number of multicast packets delivered to external/customer
-    /// members (decapsulated packets to local guest instances).
-    mcast_tx_external: KStatU64,
-    /// The number of multicast packets forwarded to underlay/infrastructure
-    /// members (encapsulated Geneve packets to infrastructure destinations).
+    /// The number of multicast packets delivered to local guest instances
+    /// on this sled (cloned packets to same-sled OPTE ports via guest_loopback).
+    mcast_tx_local: KStatU64,
+    /// The number of multicast packets forwarded to underlay multicast group
+    /// (encapsulated Geneve packets to other sleds).
     mcast_tx_underlay: KStatU64,
+    /// The number of multicast packets forwarded for external replication
+    /// (unicast to boundary service for front panel egress).
+    mcast_tx_external: KStatU64,
     /// The number of times a stale multicast listener was encountered
-    /// during external delivery.
-    mcast_tx_stale_external: KStatU64,
+    /// during local same-sled delivery (TX path).
+    mcast_tx_stale_local: KStatU64,
+    /// The number of multicast packets sent with no forwarding entry
+    /// in the mcast_fwd table (TX path).
+    mcast_tx_no_fwd_entry: KStatU64,
 
-    /// The number of multicast packets received and delivered to external/customer
-    /// members (decapsulated packets to local guest instances).
-    mcast_rx_external: KStatU64,
-    /// The number of multicast packets received and forwarded to underlay/infrastructure
-    /// members (re-encapsulated Geneve packets to infrastructure destinations).
-    mcast_rx_underlay: KStatU64,
+    /// The number of multicast packets received and delivered to local guest
+    /// instances on this sled (decapsulated packets to same-sled OPTE ports).
+    mcast_rx_local: KStatU64,
     /// The number of times a stale multicast listener was encountered
-    /// during Rx external delivery.
-    mcast_rx_stale_external: KStatU64,
-    /// The number of multicast packets received with no forwarding entry.
-    mcast_rx_no_fwd_entry: KStatU64,
+    /// during local same-sled delivery (RX path).
+    mcast_rx_stale_local: KStatU64,
+    /// The number of multicast packets received with no local subscribers
+    /// (no matching same-sled listeners for the multicast group).
+    mcast_rx_no_subscribers: KStatU64,
     /// The number of times a pullup operation failed during multicast TX
     /// (packet replication), causing a packet to be dropped.
     mcast_tx_pullup_fail: KStatU64,
@@ -85,32 +89,36 @@ pub struct XdeStats {
 }
 
 impl XdeStats {
-    pub fn mcast_tx_external(&self) -> &KStatU64 {
-        &self.mcast_tx_external
+    pub fn mcast_tx_local(&self) -> &KStatU64 {
+        &self.mcast_tx_local
     }
 
     pub fn mcast_tx_underlay(&self) -> &KStatU64 {
         &self.mcast_tx_underlay
     }
 
-    pub fn mcast_tx_stale_external(&self) -> &KStatU64 {
-        &self.mcast_tx_stale_external
+    pub fn mcast_tx_external(&self) -> &KStatU64 {
+        &self.mcast_tx_external
     }
 
-    pub fn mcast_rx_external(&self) -> &KStatU64 {
-        &self.mcast_rx_external
+    pub fn mcast_tx_stale_local(&self) -> &KStatU64 {
+        &self.mcast_tx_stale_local
     }
 
-    pub fn mcast_rx_underlay(&self) -> &KStatU64 {
-        &self.mcast_rx_underlay
+    pub fn mcast_tx_no_fwd_entry(&self) -> &KStatU64 {
+        &self.mcast_tx_no_fwd_entry
     }
 
-    pub fn mcast_rx_stale_external(&self) -> &KStatU64 {
-        &self.mcast_rx_stale_external
+    pub fn mcast_rx_local(&self) -> &KStatU64 {
+        &self.mcast_rx_local
     }
 
-    pub fn mcast_rx_no_fwd_entry(&self) -> &KStatU64 {
-        &self.mcast_rx_no_fwd_entry
+    pub fn mcast_rx_stale_local(&self) -> &KStatU64 {
+        &self.mcast_rx_stale_local
+    }
+
+    pub fn mcast_rx_no_subscribers(&self) -> &KStatU64 {
+        &self.mcast_rx_no_subscribers
     }
 
     pub fn mcast_tx_pullup_fail(&self) -> &KStatU64 {

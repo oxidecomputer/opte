@@ -47,6 +47,7 @@ use opte::engine::parse::ValidUlp;
 use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
+use opte::engine::rule::MappingResource;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::GeneveRef;
@@ -498,7 +499,7 @@ fn guest_to_guest_no_route() {
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
-    // Make sure the router is configured to drop all packets.
+    // Make sure the router is configured to drop all packets except multicast.
     router::del_entry(
         &g1.port,
         IpCidr::Ip4(g1_cfg.ipv4().vpc_subnet),
@@ -506,7 +507,7 @@ fn guest_to_guest_no_route() {
         RouterClass::System,
     )
     .unwrap();
-    update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
+    update!(g1, ["incr:epoch", "set:router.rules.out=2"]);
     let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt1);
@@ -2543,8 +2544,8 @@ fn test_gateway_neighbor_advert_reply() {
                         .unwrap_or_else(|| String::from("Drop"));
                 panic!(
                     "Generated unexpected packet from NS: {}\n\
-                    Result: {:?}\nExpected: {}",
-                    d.ns, res, na,
+                    Result: {res:?}\nExpected: {na}",
+                    d.ns
                 );
             }
         };
@@ -4837,24 +4838,19 @@ fn test_ipv6_multicast_encapsulation() {
     ]);
 
     // Add multicast forwarding entry BEFORE starting the port
-    let mcast_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap();
-    g1.vpc_map.add_mcast(mcast_dst.into(), mcast_underlay, mcast_vni).unwrap();
+    g1.m2p.set(
+        mcast_dst.into(),
+        oxide_vpc::engine::overlay::MulticastUnderlay(mcast_underlay),
+    );
 
     g1.port.start();
     set!(g1, "port_state=running");
 
-    // Add router entry for IPv6 multicast traffic (ff00::/8) via Multicast target
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip6("ff00::/8".parse().unwrap()),
-        RouterTarget::Multicast(IpCidr::Ip6("ff00::/8".parse().unwrap())),
-        RouterClass::System,
-    )
-    .unwrap();
-    incr!(g1, ["epoch", "router.rules.out"]);
+    // Multicast traffic is now detected automatically by checking if the destination
+    // IP is a multicast address. No router entries are needed for multicast since it
+    // operates at the fleet level (cross-VPC) rather than within VPC routing.
 
     // Build a UDP packet to the multicast address
-    // (TCP + multicast is incompatible and would be denied)
     let eth = Ethernet {
         destination: MacAddr::from([0x33, 0x33, 0x00, 0x01, 0x00, 0x03]),
         source: g1_cfg.guest_mac,
@@ -4877,10 +4873,10 @@ fn test_ipv6_multicast_encapsulation() {
     let mut pkt_m = ulp_pkt(eth, ip, udp, &[]);
 
     let pkt = parse_outbound(&mut pkt_m, GenericUlp {}).unwrap();
-    let res = g1.port.process(Out, pkt);
+    let res = g1.port.process(Out, pkt).expect("process should succeed");
 
     // Verify packet was encapsulated
-    let Ok(Modified(spec)) = res else {
+    let Modified(spec) = res else {
         panic!("Expected Modified result, got {res:?}");
     };
     let mut pkt_m = spec.apply(pkt_m);
@@ -4904,7 +4900,8 @@ fn test_ipv6_multicast_encapsulation() {
     );
 
     // Verify the outer Ethernet destination MAC is the IPv6 multicast MAC
-    // For IPv6 multicast, MAC is 33:33:xx:xx:xx:xx where xx:xx:xx:xx are the last 4 bytes of the IPv6 address
+    // For IPv6 multicast, MAC is 33:33:xx:xx:xx:xx where xx:xx:xx:xx are the
+    // last 4 bytes of the IPv6 address
     let expected_outer_mac = mcast_underlay.multicast_mac().unwrap();
     assert_eq!(
         meta.outer_eth.destination(),
@@ -4915,7 +4912,7 @@ fn test_ipv6_multicast_encapsulation() {
     // Verify we have Geneve encapsulation with the correct VNI (fleet multicast VNI)
     assert_eq!(
         meta.outer_encap.vni(),
-        mcast_vni,
+        Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap(),
         "Geneve VNI should match DEFAULT_MULTICAST_VNI"
     );
 
@@ -4946,20 +4943,13 @@ fn test_tcp_multicast_denied() {
         0x00, 0x01, 0xff, 0xff,
     ]);
 
-    let mcast_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap();
-    g1.vpc_map.add_mcast(mcast_dst.into(), mcast_underlay, mcast_vni).unwrap();
+    g1.m2p.set(
+        mcast_dst.into(),
+        oxide_vpc::engine::overlay::MulticastUnderlay(mcast_underlay),
+    );
 
     g1.port.start();
     set!(g1, "port_state=running");
-
-    router::add_entry(
-        &g1.port,
-        IpCidr::Ip6("ff00::/8".parse().unwrap()),
-        RouterTarget::Multicast(IpCidr::Ip6("ff00::/8".parse().unwrap())),
-        RouterClass::System,
-    )
-    .unwrap();
-    incr!(g1, ["epoch", "router.rules.out"]);
 
     // Build a TCP packet to the multicast address (should be denied)
     let mut pkt_m = http_syn3(
@@ -4975,14 +4965,13 @@ fn test_tcp_multicast_denied() {
     let res = g1.port.process(Out, pkt);
 
     // Verify packet was denied (TCP + multicast is incompatible)
-    match res {
-        Ok(Hairpin(_)) => panic!("Expected packet to be denied, got Hairpin"),
-        Ok(Modified(_)) => panic!("Expected packet to be denied, got Modified"),
-        Ok(ProcessResult::Drop { reason: DropReason::Layer { .. } }) => {
-            // Expected - TCP + multicast is denied by overlay layer
-        }
-        other => panic!("Expected Drop with Layer reason, got: {:?}", other),
-    }
+    assert!(
+        matches!(
+            res,
+            Ok(ProcessResult::Drop { reason: DropReason::Layer { .. } })
+        ),
+        "Expected Drop with Layer reason, got: {res:?}"
+    );
 }
 
 // Ensure packets with unknown critical Geneve options are rejected during

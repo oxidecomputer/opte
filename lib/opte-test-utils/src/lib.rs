@@ -85,7 +85,7 @@ pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
-pub use oxide_vpc::engine::overlay::PerVniMaps;
+pub use oxide_vpc::engine::overlay::Mcast2Phys;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
@@ -255,7 +255,8 @@ fn oxide_net_builder(
     name: &str,
     cfg: &oxide_vpc::cfg::VpcCfg,
     vpc_map: Arc<VpcMappings>,
-    vni_state: Arc<PerVniMaps>,
+    v2p: Arc<Virt2Phys>,
+    m2p: Arc<Mcast2Phys>,
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
@@ -270,11 +271,11 @@ fn oxide_net_builder(
     let dhcp = base_dhcp_config();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map.clone(), fw_limit, &dhcp)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, vni_state, vpc_map.clone(), v2b, one_limit)
+    overlay::setup(&pb, cfg, v2p, m2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -283,6 +284,7 @@ pub struct PortAndVps {
     pub port: Port<VpcNetwork>,
     pub vps: VpcPortState,
     pub vpc_map: Arc<VpcMappings>,
+    pub m2p: Arc<Mcast2Phys>,
     pub cfg: oxide_vpc::cfg::VpcCfg,
 }
 
@@ -348,6 +350,7 @@ pub fn oxide_net_setup2(
     let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
+    let m2p = Arc::new(Mcast2Phys::new());
     let v2b = Arc::new(Virt2Boundary::new());
     v2b.set(
         "0.0.0.0/0".parse().unwrap(),
@@ -364,10 +367,16 @@ pub fn oxide_net_setup2(
         }],
     );
 
-    let port =
-        oxide_net_builder(name, &converted_cfg, vpc_map.clone(), port_v2p, v2b)
-            .create(vpc_net, uft_limit, tcp_limit)
-            .unwrap();
+    let port = oxide_net_builder(
+        name,
+        &converted_cfg,
+        vpc_map.clone(),
+        port_v2p,
+        m2p.clone(),
+        v2b,
+    )
+    .create(vpc_net, uft_limit, tcp_limit)
+    .unwrap();
 
     // Add router entry that allows the guest to send to other guests
     // on same subnet.
@@ -380,7 +389,7 @@ pub fn oxide_net_setup2(
     .unwrap();
 
     let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps, vpc_map, cfg: converted_cfg };
+    let mut pav = PortAndVps { port, vps, vpc_map, m2p, cfg: converted_cfg };
 
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
@@ -435,11 +444,14 @@ pub fn oxide_net_setup2(
     });
 
     updates.extend_from_slice(&[
+        // * IPv4 multicast passthrough
+        // * IPv6 multicast passthrough
         // * Allow guest to route to own subnet
-        "set:router.rules.out=1",
+        "set:router.rules.out=3",
         // * Outbound encap
         // * Inbound decap
-        "set:overlay.rules.in=1, overlay.rules.out=1",
+        // * Inbound mcast-vni-validator
+        "set:overlay.rules.in=2, overlay.rules.out=1",
     ]);
 
     if let Some(val) = custom_updates {

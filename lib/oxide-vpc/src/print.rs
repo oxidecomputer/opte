@@ -10,6 +10,7 @@
 //! can be used by both opteadm and integration tests.
 
 use crate::api::DumpMcastForwardingResp;
+use crate::api::DumpMcastSubscriptionsResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
@@ -164,9 +165,41 @@ pub fn print_mcast_fwd_into(
             writeln!(
                 t,
                 "{}\t{}\t{}\t{replication:?}",
-                entry.group, next_hop.addr, next_hop.vni
+                entry.underlay, next_hop.addr, next_hop.vni
             )?;
         }
+    }
+    writeln!(t)?;
+    t.flush()
+}
+
+/// Print the header for the [`print_mcast_subs()`] output.
+fn print_mcast_subs_header(t: &mut impl Write) -> std::io::Result<()> {
+    writeln!(t, "UNDERLAY GROUP\tSUBSCRIBED PORTS")
+}
+
+/// Print a [`DumpMcastSubscriptionsResp`].
+pub fn print_mcast_subs(
+    resp: &DumpMcastSubscriptionsResp,
+) -> std::io::Result<()> {
+    print_mcast_subs_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpMcastSubscriptionsResp`] into a given writer.
+pub fn print_mcast_subs_into(
+    writer: &mut impl Write,
+    resp: &DumpMcastSubscriptionsResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Multicast Subscriptions")?;
+    write_hrb(&mut t)?;
+    writeln!(t)?;
+    print_mcast_subs_header(&mut t)?;
+    write_hr(&mut t)?;
+
+    for entry in &resp.entries {
+        let ports = entry.ports.join(", ");
+        writeln!(t, "{}\t{ports}", entry.underlay)?;
     }
     writeln!(t)?;
     t.flush()

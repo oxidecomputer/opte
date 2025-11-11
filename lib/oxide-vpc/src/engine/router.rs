@@ -65,7 +65,6 @@ pub enum RouterTargetInternal {
     InternetGateway(Option<Uuid>),
     Ip(IpAddr),
     VpcSubnet(IpCidr),
-    Multicast(IpCidr),
 }
 
 impl RouterTargetInternal {
@@ -87,7 +86,6 @@ impl RouterTargetInternal {
             }
             RouterTargetInternal::Ip(_) => RouterTargetClass::Ip,
             RouterTargetInternal::VpcSubnet(_) => RouterTargetClass::VpcSubnet,
-            RouterTargetInternal::Multicast(_) => RouterTargetClass::Multicast,
         }
     }
 }
@@ -119,16 +117,6 @@ impl ActionMetaValue for RouterTargetInternal {
                     Ok(Self::VpcSubnet(IpCidr::Ip6(cidr6)))
                 }
 
-                Some(("mcast4", cidr4_s)) => {
-                    let cidr4 = cidr4_s.parse::<Ipv4Cidr>()?;
-                    Ok(Self::Multicast(IpCidr::Ip4(cidr4)))
-                }
-
-                Some(("mcast6", cidr6_s)) => {
-                    let cidr6 = cidr6_s.parse::<Ipv6Cidr>()?;
-                    Ok(Self::Multicast(IpCidr::Ip6(cidr6)))
-                }
-
                 Some(("ig", ig)) => {
                     let ig = ig.parse::<Uuid>().map_err(|e| e.to_string())?;
                     Ok(Self::InternetGateway(Some(ig)))
@@ -153,12 +141,6 @@ impl ActionMetaValue for RouterTargetInternal {
             Self::VpcSubnet(IpCidr::Ip6(cidr6)) => {
                 format!("sub6={cidr6}").into()
             }
-            Self::Multicast(IpCidr::Ip4(mcast4)) => {
-                format!("mcast4={mcast4}").into()
-            }
-            Self::Multicast(IpCidr::Ip6(mcast6)) => {
-                format!("mcast6={mcast6}").into()
-            }
         }
     }
 }
@@ -169,7 +151,6 @@ impl fmt::Display for RouterTargetInternal {
             Self::InternetGateway(addr) => format!("IG({addr:?})"),
             Self::Ip(addr) => format!("IP: {addr}"),
             Self::VpcSubnet(sub) => format!("Subnet: {sub}"),
-            Self::Multicast(mcast) => format!("Multicast: {mcast}"),
         };
         write!(f, "{s}")
     }
@@ -180,7 +161,6 @@ pub enum RouterTargetClass {
     InternetGateway,
     Ip,
     VpcSubnet,
-    Multicast,
 }
 
 impl ActionMetaValue for RouterTargetClass {
@@ -191,7 +171,6 @@ impl ActionMetaValue for RouterTargetClass {
             "ig" => Ok(Self::InternetGateway),
             "ip" => Ok(Self::Ip),
             "subnet" => Ok(Self::VpcSubnet),
-            "mcast" => Ok(Self::Multicast),
             _ => Err(format!("bad router target class: {s}")),
         }
     }
@@ -201,7 +180,6 @@ impl ActionMetaValue for RouterTargetClass {
             Self::InternetGateway => "ig".into(),
             Self::Ip => "ip".into(),
             Self::VpcSubnet => "subnet".into(),
-            Self::Multicast => "mcast".into(),
         }
     }
 }
@@ -212,7 +190,6 @@ impl fmt::Display for RouterTargetClass {
             Self::InternetGateway => write!(f, "IG"),
             Self::Ip => write!(f, "IP"),
             Self::VpcSubnet => write!(f, "Subnet"),
-            Self::Multicast => write!(f, "Multicast"),
         }
     }
 }
@@ -290,7 +267,27 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+
+    // Allow IPv6 multicast (ff00::/8) to bypass route lookup.
+    // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
+    // The overlay addresses use any valid multicast prefix; underlay restriction
+    // to ff04::/16 is enforced by M2P mapping validation.
+    let mut mcast_out =
+        Rule::new(0, Action::Meta(Arc::new(MulticastPassthrough)));
+    mcast_out.add_predicate(Predicate::InnerDstIp6(vec![
+        Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
+    // Allow IPv4 multicast (224.0.0.0/4) to bypass route lookup.
+    let mut mcast_out_v4 =
+        Rule::new(0, Action::Meta(Arc::new(MulticastPassthrough)));
+    mcast_out_v4.add_predicate(Predicate::InnerDstIp4(vec![
+        Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out_v4.finalize());
+
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
@@ -301,8 +298,6 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
         (_, RouterTarget::Drop) |
         // Internet gateways are valid for any IP family.
         (_, RouterTarget::InternetGateway(_)) |
-        // Multicast targets are valid for any IP family
-        (_, RouterTarget::Multicast(_)) |
         // IPv4 destination, IPv4 address
         (IpCidr::Ip4(_), RouterTarget::Ip(IpAddr::Ip4(_))) |
         // IPv4 destination, IPv4 subnet
@@ -319,6 +314,22 @@ fn make_rule(
     target: RouterTarget,
     class: RouterClass,
 ) -> Result<Rule<Finalized>, OpteError> {
+    // Reject router entries with multicast destination CIDRs.
+    // Multicast operates fleet-wide via M2P mappings and subscriptions,
+    // not through VPC routing. Router layer allows multicast through
+    // unconditionally without route lookup.
+    let is_mcast_dst = match dest {
+        IpCidr::Ip4(cidr) => cidr.ip().is_multicast(),
+        IpCidr::Ip6(cidr) => cidr.ip().is_multicast(),
+    };
+    if is_mcast_dst {
+        return Err(OpteError::InvalidRouterEntry {
+            dest,
+            target: "multicast destinations not allowed in router entries"
+                .to_string(),
+        });
+    }
+
     if !valid_router_dest_target_pair(&dest, &target) {
         return Err(OpteError::InvalidRouterEntry {
             dest,
@@ -387,22 +398,6 @@ fn make_rule(
             )));
             (predicate, action)
         }
-
-        RouterTarget::Multicast(mcast) => {
-            let predicate = match dest {
-                IpCidr::Ip4(ip4) => {
-                    Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(ip4)])
-                }
-
-                IpCidr::Ip6(ip6) => {
-                    Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(ip6)])
-                }
-            };
-            let action = Action::Meta(Arc::new(RouterAction::new(
-                RouterTargetInternal::Multicast(mcast),
-            )));
-            (predicate, action)
-        }
     };
 
     let priority = compute_rule_priority(&dest, class);
@@ -460,6 +455,29 @@ pub fn replace(
 
     port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules)?;
     Ok(NoResp::default())
+}
+
+/// Passthrough action for multicast traffic that bypasses route lookup.
+struct MulticastPassthrough;
+
+impl fmt::Display for MulticastPassthrough {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "multicast-passthrough")
+    }
+}
+
+impl MetaAction for MulticastPassthrough {
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
+
+    fn mod_meta(
+        &self,
+        _flow_id: &InnerFlowId,
+        _meta: &mut ActionMeta,
+    ) -> ModMetaResult {
+        Ok(AllowOrDeny::Allow(()))
+    }
 }
 
 // TODO I may want to have different types of rule/flow tables a layer

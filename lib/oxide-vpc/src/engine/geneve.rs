@@ -16,7 +16,6 @@
 //!
 //! - **External** (0x00): Indicates a packet originated from outside the rack
 //!   and was encapsulated by the switch NAT ingress path with Geneve wrapping.
-//!   OPTE decapsulates before delivering to the guest.
 //! - **Multicast** (0x01): Carries multicast replication strategy as a 2-bit
 //!   field for coordinating delivery between OPTE and sidecar switch logic.
 //! - **Mss** (0x02): Carries original TCP MSS for MSS clamping/boosting to
@@ -35,28 +34,35 @@
 //! └──────────┴────────────────────────────┘
 //!    │
 //!    └─> Replication mode:
-//!        00 = External (local guest delivery)
-//!        01 = Underlay (infrastructure forwarding)
-//!        10 = All (both External and Underlay)
+//!        00 = External (front panel/customer ports, traffic leaving rack)
+//!        01 = Underlay (infrastructure forwarding to other sleds)
+//!        10 = Both (both External and Underlay)
 //!        11 = Reserved
 //! ```
 //!
-//! ### Replication Semantics
+//! ### Replication Semantics (TX-only instruction)
 //!
-//! - **External**: Packet should be decapsulated and delivered to local guest
-//!   instances subscribed to this multicast group. Switch sets `nat_egress_hit`
-//!   to trigger decapsulation before delivery.
-//! - **Underlay**: Packet should remain encapsulated and forwarded to underlay
-//!   infrastructure destinations.
-//! - **All**: Bifurcated delivery to both local guests (decapsulated) and
-//!   underlay destinations (encapsulated).
+//! The [`Replication`] type is a TX-only instruction telling the switch which port groups
+//! to replicate outbound multicast packets to. On RX, OPTE ignores the replication field
+//! and performs local same-sled delivery based purely on subscriptions.
+//!
+//! OPTE routes to next hop unicast address (for ALL modes) to determine reachability
+//! and underlay port/MAC. Packet destination is multicast ff04::/16 with multicast MAC.
+//!
+//! - **External**: Switch decaps and replicates to external-facing ports (front panel)
+//! - **Underlay**: Switch replicates to underlay ports (other sleds)
+//! - **Both**: Switch replicates to both external and underlay port groups (bifurcated)
+//! - **Local same-sled delivery**: Always happens regardless of the TX-only replication setting.
+//!   Not an access control mechanism - local delivery is independent of replication mode.
 //!
 //! All multicast packets are encapsulated with fleet VNI 77 (`DEFAULT_MULTICAST_VNI`)
 //! regardless of replication mode. The replication mode determines delivery behavior,
 //! not VNI selection.
 //!
-//! The 2-bit encoding allows efficient extraction in P4 programs without complex
-//! parsing, aligning with the sidecar pipeline's tag-based routing decisions.
+//! The 2-bit encoding allows extraction in P4 programs and aligns with the
+//! sidecar pipeline's tag-based routing decisions.
+//!
+//! [`Replication`]: crate::api::Replication
 //!
 //! ## Option Length Encoding
 //!
@@ -149,21 +155,12 @@ impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
     }
 }
 
-/// Geneve multicast option body carrying replication strategy information.
-///
-/// This option encodes the replication scope as a 2-bit field in the top two
-/// bits of the first byte of the option body. The remaining 30 bits are
-/// reserved for future use. The replication strategy determines whether the
-/// packet is delivered to local guest instances (External), underlay
-/// infrastructure destinations (Underlay), or both (All).
+/// Geneve multicast option body carrying replication information.
 #[derive(Debug, Clone, Ingot, Eq, PartialEq)]
 #[ingot(impl_default)]
 pub struct MulticastInfo {
-    /// Replication scope encoded as a u2 (top 2 bits of the first byte).
-    /// Values map to `Replication::{External, Underlay, All, Reserved}`.
     #[ingot(is = "u2")]
     pub version: Replication,
-    /// Reserved bits (remaining 30 bits of the body).
     rsvd: u30be,
 }
 
@@ -177,7 +174,7 @@ impl NetworkRepr<u2> for Replication {
         match val {
             0 => Replication::External,
             1 => Replication::Underlay,
-            2 => Replication::All,
+            2 => Replication::Both,
             3 => Replication::Reserved,
             _ => unreachable!("u2 value out of range: {val}"),
         }
@@ -219,17 +216,24 @@ pub fn validate_options<V: ByteSlice>(
 }
 
 /// Extract multicast replication info from Geneve options.
-/// Returns None if no multicast option is present, or Some(Replication) if found.
 ///
-/// Treats Reserved (value 3) as invalid and returns None, implementing fail-closed
-/// behavior without crashing the parser.
+/// Treats Reserved (value 3) as invalid and returns None, implementing
+/// fail-closed behavior.
 ///
-/// Note: This function silently skips options with parse errors (e.g., TooSmall).
-/// Call `validate_options()` first if you want parse errors surfaced instead of
-/// being silently ignored.
+/// This function silently skips options with parse errors (e.g., `TooSmall`).
+/// Call `validate_options()` first if you want parse errors surfaced and
+/// RFC 8926 critical option semantics enforced. This function assumes
+/// validation has already been performed.
 pub fn extract_multicast_replication<V: ByteSlice>(
     pkt: &ValidGeneve<V>,
 ) -> Option<Replication> {
+    // In debug builds, verify validate_options() was called first if critical options present
+    debug_assert!(
+        !pkt.flags().contains(GeneveFlags::CRITICAL_OPTS)
+            || validate_options(pkt).is_ok(),
+        "extract_multicast_replication() called without prior validation when critical options present"
+    );
+
     for opt in OxideOptions::from_raw(pkt) {
         let Ok(opt) = opt else { continue };
         if let Some(ValidOxideOption::Multicast(mc_info)) = opt.option.known() {
@@ -268,6 +272,10 @@ mod test {
     use alloc::vec::Vec;
     use ingot::types::HeaderParse;
     use ingot::udp::ValidUdp;
+
+    /// Critical bit mask for Geneve option type field (bit 7).
+    /// Per RFC 8926, unknown options with this bit set must cause packet drop.
+    const GENEVE_OPT_TYPE_CRITICAL: u8 = 0x80;
 
     #[test]
     fn parse_single_opt() {
@@ -346,7 +354,7 @@ mod test {
         for (rep, expect) in [
             (Replication::External, Replication::External),
             (Replication::Underlay, Replication::Underlay),
-            (Replication::All, Replication::All),
+            (Replication::Both, Replication::Both),
         ] {
             let buf = build_buf(rep);
             let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
@@ -384,7 +392,7 @@ mod test {
             // experimenter option class
             0xff, 0xff,
             // crt + type
-            0x80,
+            GENEVE_OPT_TYPE_CRITICAL,
             // rsvd + len
             0x00,
         ];
@@ -422,7 +430,7 @@ mod test {
             // experimenter option class
             0x01, 0x29,
             // crt + type
-            0x80,
+            GENEVE_OPT_TYPE_CRITICAL,
             // rsvd + len
             0x00,
         ];

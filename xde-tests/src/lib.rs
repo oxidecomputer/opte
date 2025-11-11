@@ -53,6 +53,47 @@ use std::time::Instant;
 use zone::Zlogin;
 pub use ztest::*;
 
+/// Ensure a zone with the given name is not present.
+///
+/// Best-effort: attempt halt and uninstall, then poll until the zone
+/// disappears from `zoneadm list -cv` (bounded timeout).
+fn ensure_zone_absent(name: &str) -> Result<()> {
+    // Try to halt if running; ignore failures and suppress stderr
+    let _ = Command::new("pfexec")
+        .arg("zoneadm")
+        .args(["-z", name, "halt"])
+        .stderr(Stdio::null())
+        .status();
+
+    // Try to uninstall; ignore failures and suppress stderr
+    let _ = Command::new("pfexec")
+        .arg("zoneadm")
+        .args(["-z", name, "uninstall", "-F"])
+        .stderr(Stdio::null())
+        .status();
+
+    // Poll for disappearance up to 10 seconds
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let out = Command::new("pfexec")
+            .arg("zoneadm")
+            .args(["list", "-cv"])
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        if !stdout.contains(name) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "zone '{name}' still present after uninstall attempts; stdout: {stdout}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Ok(())
+}
+
 /// The IPv4 overlay network used in all tests.
 pub const OVERLAY_NET: &str = "10.0.0.0/24";
 /// The IPv4 overlay OPTE gateway used in all tests.
@@ -73,6 +114,9 @@ impl OpteZone {
     /// of interfaces. In illumos parlance, the interfaces are data link
     /// devices.
     fn new(name: &str, zfs: &Zfs, ifx: &[&str], brand: &str) -> Result<Self> {
+        // Ensure any prior zone with this name is fully removed before creating
+        // a new one, to avoid flakes from leftover state.
+        let _ = ensure_zone_absent(name);
         let zone = Zone::new(name, brand, zfs, ifx, &[])?;
         Ok(Self { zone })
     }
@@ -80,11 +124,15 @@ impl OpteZone {
     /// Wait for the network to come up, then set up the IPv4 overlay network.
     fn setup(&self, devname: &str, addr: String) -> Result<()> {
         self.zone.wait_for_network()?;
-        // Configure IPv4 via DHCP
-        self.zone
-            .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/test"))?;
+        // Configure IPv4 with static address (immediate, no DHCP wait)
+        self.zone.zexec(&format!(
+            "ipadm create-addr -t -T static -a {addr}/24 {devname}/test"
+        ))?;
+
         self.zone.zexec(&format!("route add -iface {OVERLAY_GW} {addr}"))?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
+        // Add multicast route so multicast traffic goes through the OPTE gateway
+        self.zone.zexec(&format!("route add 224.0.0.0/4 {OVERLAY_GW}"))?;
         Ok(())
     }
 
@@ -96,9 +144,10 @@ impl OpteZone {
         ipv6_addr: String,
     ) -> Result<()> {
         self.zone.wait_for_network()?;
-        // Configure IPv4 via DHCP
-        self.zone
-            .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/testv4"))?;
+        // Configure IPv4 with static address (immediate, no DHCP wait)
+        self.zone.zexec(&format!(
+            "ipadm create-addr -t -T static -a {ipv4_addr}/24 {devname}/testv4"
+        ))?;
         self.zone
             .zexec(&format!("route add -iface {OVERLAY_GW} {ipv4_addr}"))?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
@@ -119,6 +168,41 @@ impl OpteZone {
         self.zone.zexec(&format!(
             "route add -inet6 {OVERLAY_NET_V6} {OVERLAY_GW_V6}"
         ))?;
+        // Add multicast routes so multicast traffic goes through the OPTE gateway
+        self.zone.zexec(&format!("route add 224.0.0.0/4 {OVERLAY_GW}"))?;
+        self.zone
+            .zexec(&format!("route add -inet6 ff04::/16 {OVERLAY_GW_V6}"))?;
+        Ok(())
+    }
+
+    /// Send a single UDP packet (IPv4) from this zone using netcat.
+    /// Pins the source address with `-s` for deterministic egress selection.
+    pub fn send_udp_v4(
+        &self,
+        src_ip: &str,
+        dst_ip: &str,
+        port: u16,
+        payload: &str,
+    ) -> Result<()> {
+        let cmd =
+            format!("echo '{payload}' | nc -u -s {src_ip} -w1 {dst_ip} {port}");
+        self.zone.zexec(&cmd)?;
+        Ok(())
+    }
+
+    /// Send a single UDP packet (IPv6) from this zone using netcat.
+    /// Uses `-s` with the IPv6 source for deterministic egress.
+    /// Avoids `-6` for illumos netcat compatibility (destination selects family).
+    pub fn send_udp_v6(
+        &self,
+        src_ip: &str,
+        dst_ip: &str,
+        port: u16,
+        payload: &str,
+    ) -> Result<()> {
+        let cmd =
+            format!("echo '{payload}' | nc -u -s {src_ip} -w1 {dst_ip} {port}");
+        self.zone.zexec(&cmd)?;
         Ok(())
     }
 }
@@ -227,7 +311,7 @@ impl OptePort {
         let adm = OpteHdl::open()?;
         adm.add_router_entry(&AddRouterEntryReq {
             port_name: self.name.clone(),
-            dest: IpCidr::Ip4(format!("{}/32", dest).parse().unwrap()),
+            dest: IpCidr::Ip4(format!("{dest}/32").parse().unwrap()),
             target: RouterTarget::Ip(dest.parse().unwrap()),
             class: RouterClass::System,
         })?;
@@ -308,15 +392,14 @@ impl OptePort {
         Ok(())
     }
 
-    /// Add a multicast router entry for this port.
+    /// Allow multicast CIDR traffic for this port.
+    ///
+    /// Multicast is handled automatically by the gateway layer, so we just
+    /// need to allow the CIDR through the firewall in both directions.
     pub fn add_multicast_router_entry(&self, cidr: IpCidr) -> Result<()> {
-        let adm = OpteHdl::open()?;
-        adm.add_router_entry(&AddRouterEntryReq {
-            port_name: self.name.clone(),
-            dest: cidr,
-            target: RouterTarget::Multicast(cidr),
-            class: RouterClass::System,
-        })?;
+        // Allow multicast traffic in both directions
+        self.allow_cidr(cidr, Direction::In)?;
+        self.allow_cidr(cidr, Direction::Out)?;
         Ok(())
     }
 
@@ -334,12 +417,14 @@ impl Drop for OptePort {
         let adm = match OpteHdl::open() {
             Ok(adm) => adm,
             Err(e) => {
-                eprintln!("failed to open xde device on drop: {}", e);
+                eprintln!("failed to open xde device on drop: {e}");
                 return;
             }
         };
 
         // Clean up multicast subscriptions
+        // Note: unsubscribe is now idempotent with respect to M2P mappings,
+        // so we only need to handle actual errors (e.g., port doesn't exist)
         let subscriptions = self.mcast_subscriptions.borrow().clone();
         for group in subscriptions {
             if let Err(e) = adm.mcast_unsubscribe(&McastUnsubscribeReq {
@@ -391,8 +476,33 @@ impl Drop for Xde {
     fn drop(&mut self) {
         // Clear underlay to release references to simnet/vnic devices,
         // allowing their cleanup to proceed. Driver remains loaded.
+        //
+        // Retry with backoff if EBUSY (in-flight TX may briefly hold refs).
+        // After cache clearing + siphon quiesce, refs should drain quickly.
         if let Ok(adm) = OpteHdl::open() {
-            let _ = adm.clear_xde_underlay();
+            for attempt in 1..=10 {
+                match adm.clear_xde_underlay() {
+                    Ok(_) => {
+                        if attempt > 1 {
+                            eprintln!(
+                                "clear_xde_underlay succeeded on attempt {attempt}"
+                            );
+                        }
+                        return;
+                    }
+                    Err(e) if e.to_string().contains("EBUSY") => {
+                        eprintln!(
+                            "clear_xde_underlay returned EBUSY on attempt {attempt}/10; retrying after 10ms"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => {
+                        eprintln!("failed to clear xde underlay: {e}");
+                        return;
+                    }
+                }
+            }
+            eprintln!("failed to clear xde underlay after 10 retries (EBUSY)");
         }
     }
 }
@@ -406,12 +516,13 @@ pub struct SnoopGuard {
 }
 
 impl SnoopGuard {
-    /// Start a `snoop` capture on `dev_name` with the provided BPF-like `filter`.
+    /// Start a `snoop` capture on `dev_name` with the provided packet `filter`.
+    /// Filter syntax matches snoop conventions (e.g., "udp and port 5353").
     /// Captures a single packet (`-c 1`) and dumps hex output (`-x0`).
     /// Uses `-r` to disable name resolution for deterministic numeric output.
     pub fn start(dev_name: &str, filter: &str) -> anyhow::Result<Self> {
         let child = Command::new("pfexec")
-            .args(&[
+            .args([
                 "snoop", "-r", "-d", dev_name, "-c", "1", "-P", "-x0", filter,
             ])
             .stdout(Stdio::piped())
@@ -451,32 +562,56 @@ impl SnoopGuard {
 
 impl Drop for SnoopGuard {
     fn drop(&mut self) {
-        if let Some(child) = &mut self.child {
-            if let Ok(None) = child.try_wait() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+        if let Some(child) = &mut self.child
+            && let Ok(None) = child.try_wait()
+        {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
 
+/// Ensure the host has an IPv6 multicast route for admin-local scope
+/// (ff04::/16) pointing to the provided interface. This helps the underlay
+/// forwarding tests route multicast packets deterministically.
+///
+/// Returns Ok even if the route already exists or if the command fails at
+/// runtime; logs a warning on non-successful route add attempts.
+pub fn ensure_underlay_admin_scoped_route_v6(interface: &str) -> Result<()> {
+    let out = std::process::Command::new("pfexec")
+        .args(["route", "add", "-inet6", "ff04::/16", "-iface", interface])
+        .output()?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Treat "File exists" as benign; otherwise, just warn and continue.
+        if !stderr.to_lowercase().contains("file exists") {
+            eprintln!(
+                "Warning: failed to add IPv6 multicast route ff04::/16 on {interface}: {stderr}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Global multicast group state that cleans up M2P mappings and forwarding
 /// entries on drop. Port-specific subscriptions are handled automatically by
-/// OptePort::drop().
+/// [`OptePort::drop()`].
 ///
 /// Use this to set up multicast groups in tests. Port subscriptions should use
 /// `port.subscribe_multicast(group)` which tracks cleanup automatically.
+///
+/// All multicast groups use DEFAULT_MULTICAST_VNI (77) for fleet-wide multicast.
 pub struct MulticastGroup {
     pub group: IpAddr,
     pub underlay: Ipv6Addr,
-    pub vni: Vni,
 }
 
 impl MulticastGroup {
-    pub fn new(group: IpAddr, underlay: Ipv6Addr, vni: Vni) -> Result<Self> {
+    pub fn new(group: IpAddr, underlay: Ipv6Addr) -> Result<Self> {
         let hdl = OpteHdl::open()?;
-        hdl.set_m2p(&SetMcast2PhysReq { group, underlay, vni })?;
-        Ok(Self { group, underlay, vni })
+        hdl.set_m2p(&SetMcast2PhysReq { group, underlay })?;
+        Ok(Self { group, underlay })
     }
 
     /// Set multicast forwarding entries for this group.
@@ -489,7 +624,7 @@ impl MulticastGroup {
     ) -> Result<()> {
         let hdl = OpteHdl::open()?;
         hdl.set_mcast_fwd(&SetMcastForwardingReq {
-            group: self.group,
+            underlay: self.underlay,
             next_hops,
         })?;
         Ok(())
@@ -504,18 +639,20 @@ impl Drop for MulticastGroup {
         };
 
         // Clear forwarding entry
-        let group = self.group;
-        if let Err(e) =
-            hdl.clear_mcast_fwd(&ClearMcastForwardingReq { group: self.group })
-        {
-            eprintln!("failed to clear multicast forwarding for {group}: {e}");
+        let underlay = self.underlay;
+        if let Err(e) = hdl.clear_mcast_fwd(&ClearMcastForwardingReq {
+            underlay: self.underlay,
+        }) {
+            eprintln!(
+                "failed to clear multicast forwarding for {underlay}: {e}"
+            );
         }
 
         // Clear M2P mapping
+        let group = self.group;
         if let Err(e) = hdl.clear_m2p(&ClearMcast2PhysReq {
             group: self.group,
             underlay: self.underlay,
-            vni: self.vni,
         }) {
             eprintln!("failed to clear M2P mapping for {group}: {e}");
         }
@@ -886,7 +1023,7 @@ pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
     let text = std::str::from_utf8(&out.stdout)?;
 
     if !out.status.success() || text.lines().count() == 1 {
-        bail!("could not find address {target_addr}");
+        anyhow::bail!("could not find address {target_addr}");
     }
 
     let mut maybe_addr = text
@@ -919,7 +1056,7 @@ pub fn single_node_over_real_nic(
 
     let max_macs = (1 << 20) - peers.len() - 1;
     if null_port_count > max_macs as u32 {
-        bail!(
+        anyhow::bail!(
             "Cannot allocate {null_port_count} ports: \
             Oxide MAC space admits {max_macs} accounting for peers"
         );
@@ -930,7 +1067,7 @@ pub fn single_node_over_real_nic(
     // This is an absurd preallocation (~6MiB?) -- but it is deterministic,
     // and if we want to test A Lot of ports then we can.
     let forbidden_macs: HashSet<_> =
-        (&[my_info]).iter().chain(peers).map(|v| v.mac).collect();
+        [my_info].iter().chain(peers).map(|v| v.mac).collect();
     let mut usable_macs: Vec<MacAddr> = (0..(1 << 20))
         .filter_map(|n: u32| {
             let raw = n.to_be_bytes();
@@ -958,7 +1095,7 @@ pub fn single_node_over_real_nic(
         // VIP reuse is not an issue, we aren't using these ports for communication.
         null_ports.push(OptePort::new(
             &format!("opte{}", null_ports.len()),
-            &"172.20.0.1",
+            "172.20.0.1",
             &taken_mac,
             &underlay_addr,
         )?);

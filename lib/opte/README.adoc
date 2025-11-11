@@ -214,41 +214,68 @@ all data needed to restart the port without rebuilding the entire flow
 state. This is achieved by restoring the port based on some payload of
 save data.
 
-=== Multicast Model
+=== Multicast
 
 OPTE implements multicast consistent with the rack networking
 architecture described in [RFD 63](https://rfd.shared.oxide.computer/rfd/0063)
-and [RFD 488](https://rfd.shared.oxide.computer/rfd/488). Key points:
+and [RFD 488](https://rfd.shared.oxide.computer/rfd/488).
 
-Fleet VNI:: All multicast traffic uses a single fleet‑level Geneve VNI
+==== Fleet VNI
+
+All multicast traffic uses a single fleet‑level Geneve VNI
 (`DEFAULT_MULTICAST_VNI`, currently `77`) rather than per‑tenant VNIs.
 Mappings from overlay multicast groups to underlay multicast addresses
 are stored and validated under this VNI. (See `RFD 488` for the rationale behind
 fleet-level VNI.)
 
-Delivery Modes (Replication):: The Oxide Geneve multicast option carries
-the delivery mode as a 2‑bit field in the top two bits of the option
-body's first byte:
+==== Delivery Modes and Replication
 
-* External — local guest delivery within the same VNI: OPTE decapsulates
-  and delivers to all local subscribers (guests) on the port map.
-* Underlay — infrastructure delivery: OPTE sends Geneve‑encapsulated
-  packets towards the configured underlay multicast address in fleet
-  VNI 77. The underlay performs any further replication.
-* All — both behaviors above.
+The `Replication` type is a TX‑only instruction to switches encoded in the Oxide Geneve
+multicast option as a 2‑bit field in the top two bits of the option body's first byte.
+It tells the switch which ports to replicate the frame to on transmission. On RX, OPTE
+ignores the replication field and performs local same‑sled delivery based purely on
+subscriptions. The replication mode is not an access control mechanism.
 
-Encapsulation Path:: The overlay layer sets `External` in the multicast
-option on initial encapsulation. XDE uses its multicast forwarding table
-to decide whether to additionally forward to underlay next hops, and, if
-so, marks those forwarded copies as `Underlay` or `All` to prevent
-re‑relay at downstream receivers.
+OPTE always performs local same‑sled delivery for all replication modes and acts as a leaf:
+
+* _External_ replicates to ports set for external multicast traffic. Switch decaps
+  and replicates to front panel ports (egress to external networks, leaving the underlay).
+  OPTE does not create additional multicast copies for other sleds.
+* _Underlay_ replicates to ports set for underlay multicast traffic. Switch replicates
+  to other sleds (using the underlay). The underlay network performs further replication
+  within the rack.
+* _Both_ replicates to both port groups (bifurcated). Combines `External` and `Underlay`:
+  switch replicates to both front panel and underlay ports.
+
+For all replication modes, OPTE routes to the next hop's unicast address to determine
+reachability and underlay port/MAC. The packet destination (outer IPv6) is the multicast
+address from M2P with multicast MAC (RFC 2464). All multicast uses fleet VNI 77.
+
+==== Encapsulation Path
+
+On TX, the overlay layer encapsulates packets destined for multicast groups
+with a Geneve multicast option initially set to `External` replication mode.
+XDE's multicast TX path (`xde_mc_tx`) first delivers the packet locally to
+all other ports on the same sled that have subscribed to the multicast group
+(within the same VNI), then consults the multicast forwarding table.
+
+For each next hop in the forwarding table, XDE creates a packet copy and updates its
+Geneve multicast option to match that next hop's configured replication mode.
+XDE routes to the next hop's unicast address (for all replication modes) to determine
+reachability and which underlay port/MAC to use. The packet destination (outer IPv6)
+is the multicast address from M2P with multicast MAC (RFC 2464). The Geneve replication
+option serves as a TX-only instruction telling switches which port groups to replicate to.
+
+==== RX Behavior
+
+OPTE acts as a leaf node and does not relay multicast traffic received from the underlay.
 
 Constraints & Validation::
 
 * M2P (multicast‑to‑physical) mappings must use `DEFAULT_MULTICAST_VNI`.
 * Any next hop that causes underlay forwarding must specify VNI 77.
-* Underlay multicast addresses must be IPv6 admin‑scoped (e.g.,
-  `ff04::/16`, `ff05::/16`, `ff08::/16`).
+* Underlay multicast addresses must be IPv6 admin-local multicast (`ff04::/16`)
+  as defined in https://www.rfc-editor.org/rfc/rfc7346.html[RFC 7346].
 
 === Layers
 

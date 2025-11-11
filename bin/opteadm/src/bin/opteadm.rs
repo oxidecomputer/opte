@@ -61,6 +61,7 @@ use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::print::print_mcast_fwd;
+use oxide_vpc::print::print_mcast_subs;
 use oxide_vpc::print::print_v2b;
 use oxide_vpc::print::print_v2p;
 use std::io;
@@ -232,29 +233,46 @@ enum Command {
     ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
 
     /// Set a multicast forwarding entry
+    ///
+    /// Adds or updates a next-hop for the specified underlay multicast address.
+    /// Multiple next-hops can be configured for the same underlay address by
+    /// running this command multiple times (like `swadm route add`). If the
+    /// same next-hop is specified again, its replication mode is updated.
+    ///
+    /// OPTE routes to `next_hop` (unicast switch address) to determine which
+    /// underlay port to use, then sends the packet to underlay (multicast) with
+    /// multicast MAC. The switch matches the on outer dst IP (multicast) and
+    /// Geneve replication tag.
     SetMcastFwd {
-        /// The multicast group address (IPv4 or IPv6)
-        group: IpAddr,
-        /// Next hop IPv6 address
-        next_hop_addr: Ipv6Addr,
-        /// Next hop VNI (defaults to fleet-level DEFAULT_MULTICAST_VNI)
-        #[arg(default_value_t = Vni::new(DEFAULT_MULTICAST_VNI).unwrap())]
-        next_hop_vni: Vni,
-        /// Delivery mode (replication):
-        /// - external: local guests in same VNI
-        /// - underlay: infrastructure via underlay multicast
-        /// - all: both local and underlay
+        /// The underlay multicast IPv6 address (admin-local scope ff04::/16).
+        /// This is the outer IPv6 destination in transmitted packets.
+        underlay: Ipv6Addr,
+        /// The unicast IPv6 address of the switch for routing (e.g., fd00::1).
+        /// OPTE uses this to determine which underlay port to use via the
+        /// illumos routing table. Multiple next-hops can be added by
+        /// running this command multiple times with the same underlay address.
+        next_hop: Ipv6Addr,
+        /// TX-only replication instruction (tells the switch which port groups to use):
+        /// - External: front panel ports (decapped, egress to external networks)
+        /// - Underlay: sled-to-sled ports (underlay multicast replication)
+        /// - Both: both external and underlay (bifurcated)
+        ///
+        /// Local same-sled delivery always happens via subscriptions regardless
+        /// of this setting.
         replication: Replication,
     },
 
     /// Clear a multicast forwarding entry
     ClearMcastFwd {
-        /// The multicast group address (IPv4 or IPv6)
-        group: IpAddr,
+        /// The underlay multicast IPv6 address (admin-local scope ff04::/16)
+        underlay: Ipv6Addr,
     },
 
     /// Dump the multicast forwarding table
     DumpMcastFwd,
+
+    /// Dump multicast subscriptions (group -> ports on this sled)
+    DumpMcastSubs,
 
     /// Add a new router entry, either IPv4 or IPv6.
     AddRouterEntry {
@@ -795,27 +813,47 @@ fn main() -> anyhow::Result<()> {
             hdl.clear_v2b(&req)?;
         }
 
-        Command::SetMcastFwd {
-            group,
-            next_hop_addr,
-            next_hop_vni,
-            replication,
-        } => {
-            let next_hop = NextHopV6::new(next_hop_addr, next_hop_vni);
+        Command::SetMcastFwd { underlay, next_hop, replication } => {
+            // OPTE routes to the next-hop's unicast address to determine which
+            // underlay port to use via the illumos routing table and DDM.
+            //
+            // The packet is then sent to the multicast address with a multicast
+            // MAC.
+            //
+            // The switch matches on the outer dst IP (multicast) and Geneve
+            // `Replication` tag to determine which port groups to replicate to:
+            // - External: front panel ports (which get decapped on egress)
+            // - Underlay: underlay ports (sleds)
+            // - Both: both (bifurcated)
+            //
+            // The Replication type is TX-only, RX ignores it and delivers
+            // locally based on subscriptions.
+            //
+            // Like `swadm route add`, this command can be run multiple times
+            // with the same underlay address to add multiple next-hops. If the
+            // same next-hop is specified again, its replication mode is updated.
+
+            // Always use fleet-wide DEFAULT_MULTICAST_VNI
+            let next_hop_vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
+            let next_hop_addr = NextHopV6::new(next_hop, next_hop_vni);
             let req = SetMcastForwardingReq {
-                group,
-                next_hops: vec![(next_hop, replication)],
+                underlay,
+                next_hops: vec![(next_hop_addr, replication)],
             };
             hdl.set_mcast_fwd(&req)?;
         }
 
-        Command::ClearMcastFwd { group } => {
-            let req = ClearMcastForwardingReq { group };
+        Command::ClearMcastFwd { underlay } => {
+            let req = ClearMcastForwardingReq { underlay };
             hdl.clear_mcast_fwd(&req)?;
         }
 
         Command::DumpMcastFwd => {
             print_mcast_fwd(&hdl.dump_mcast_fwd()?)?;
+        }
+
+        Command::DumpMcastSubs => {
+            print_mcast_subs(&hdl.dump_mcast_subs()?)?;
         }
 
         Command::AddRouterEntry {

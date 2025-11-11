@@ -653,22 +653,24 @@ impl Ipv6Addr {
         self.inner[0] == 0xFF
     }
 
-    /// Return `true` if this is a multicast IPv6 address with administrative scope
-    /// (admin-local, site-local, or organization-local) as defined in RFC 4291 and RFC 7346.
+    /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix
+    /// (admin-local scope with flags=0) as used by Omicron for underlay multicast.
     ///
-    /// The three administrative scopes are:
-    /// - `0x4`: admin-local scope
-    /// - `0x5`: site-local scope
-    /// - `0x8`: organization-local scope
+    /// This specifically checks for the ff04::/16 prefix where:
+    /// - First byte: 0xFF (all multicast addresses)
+    /// - Second byte: 0x04 (flags=0, scope=4 admin-local)
+    ///
+    /// See [RFC 7346] for details on IPv6 multicast address scopes and
+    /// how Omicron uses this specific address scope.
+    ///
+    /// [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346.html
     pub const fn is_admin_scoped_multicast(&self) -> bool {
         if !self.is_multicast() {
             return false;
         }
 
-        // Extract the scope field from the lower 4 bits of the second byte
-        // (first byte is 0xFF for all multicast, second byte contains flags and scope)
-        let scope = self.inner[1] & 0x0F;
-        matches!(scope, 0x4 | 0x5 | 0x8)
+        // Check for ff04::/16 prefix only
+        self.inner[1] == 0x04
     }
 
     /// Return the bytes of the address.
@@ -1183,21 +1185,15 @@ impl Ipv6Cidr {
         prefix_len: Ipv6PrefixLen(64),
     };
 
+    /// IPv6 multicast address range, `ff00::/8`.
+    pub const MCAST: Self = Self {
+        ip: Ipv6Addr::from_const([0xff00, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(8),
+    };
+
     /// IPv6 admin-local multicast scope prefix, `ff04::/16`.
     pub const MCAST_ADMIN_LOCAL: Self = Self {
         ip: Ipv6Addr::from_const([0xff04, 0, 0, 0, 0, 0, 0, 0]),
-        prefix_len: Ipv6PrefixLen(16),
-    };
-
-    /// IPv6 site-local multicast scope prefix, `ff05::/16`.
-    pub const MCAST_SITE_LOCAL: Self = Self {
-        ip: Ipv6Addr::from_const([0xff05, 0, 0, 0, 0, 0, 0, 0]),
-        prefix_len: Ipv6PrefixLen(16),
-    };
-
-    /// IPv6 organization-local multicast scope prefix, `ff08::/16`.
-    pub const MCAST_ORG_LOCAL: Self = Self {
-        ip: Ipv6Addr::from_const([0xff08, 0, 0, 0, 0, 0, 0, 0]),
         prefix_len: Ipv6PrefixLen(16),
     };
 
@@ -1525,10 +1521,13 @@ mod test {
 
     #[test]
     fn test_ipv6_admin_scoped_multicast() {
-        // Test the three valid administrative scopes
-        assert!(to_ipv6("ff04::1").is_admin_scoped_multicast()); // admin-local (0x4)
-        assert!(to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local (0x5)
-        assert!(to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local (0x8)
+        // Test ff04::/16 prefix (admin-local scope used by Omicron)
+        assert!(to_ipv6("ff04::1").is_admin_scoped_multicast());
+        assert!(to_ipv6("ff04:1234:5678:9abc::1").is_admin_scoped_multicast());
+
+        // Test other administrative scopes (NOT accepted)
+        assert!(!to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local
+        assert!(!to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local
 
         // Test non-admin scoped multicast addresses
         assert!(!to_ipv6("ff01::1").is_admin_scoped_multicast()); // interface-local
