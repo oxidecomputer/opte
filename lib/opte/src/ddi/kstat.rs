@@ -306,3 +306,26 @@ impl From<alloc::ffi::NulError> for Error {
         Self::NulChar
     }
 }
+
+// SAFETY: KStatNamed<T> is safe for Send + Sync under the following conditions:
+//
+// 1. Read-only sharing: After creation, the `ksp` pointer is never mutated - only
+//    passed to kstat_delete() in Drop. Multiple threads can safely read the same
+//    immutable pointer value.
+//
+// 2. Kernel manages concurrency: The kstat framework handles concurrent access to 
+//    the underlying kernel structures via its own internal mechanisms.
+//
+// 3. Atomic statistics: Individual stats in `vals` use AtomicU64, ensuring each
+//    counter update is atomic and thread-safe.
+//
+// 4. Intentional design trade-off: We explicitly do NOT set ks_lock (see struct
+//    comment), accepting that different threads may see inconsistent snapshots
+//    of the stats as a group, while individual values remain uncorrupted.
+//
+// 5. No shared mutable state: The raw pointer represents a kernel resource with
+//    a clear lifecycle (create -> install -> delete) with no Rust-side mutation.
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: KStatProvider> Send for KStatNamed<T> {}
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: KStatProvider> Sync for KStatNamed<T> {}

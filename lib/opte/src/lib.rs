@@ -200,7 +200,7 @@ mod opte_provider {
 ///
 /// Logging levels are provided by [`LogLevel`]. These levels will map
 /// to the underlying provider with varying degrees of success.
-pub trait LogProvider {
+pub trait LogProvider: Send + Sync {
     /// Log a message at the specified level.
     fn log(&self, level: LogLevel, msg: &str);
 }

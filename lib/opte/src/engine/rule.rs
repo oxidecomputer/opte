@@ -173,7 +173,7 @@ where
 /// An Action Descriptor holds the information needed to create the
 /// [`HdrTransform`] which implements the desired action. An
 /// ActionDesc is created by a [`StatefulAction`] implementation.
-pub trait ActionDesc {
+pub trait ActionDesc: Send + Sync {
     /// Generate the [`HdrTransform`] which implements this descriptor.
     fn gen_ht(&self, dir: Direction) -> HdrTransform;
 
@@ -742,7 +742,7 @@ pub enum GenDescError {
 
 pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
-pub trait StatefulAction: Display {
+pub trait StatefulAction: Display + Send + Sync {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`ActionMeta`]. This action may also add, remove, or modify
     /// metadata to communicate data to downstream actions.
@@ -772,7 +772,7 @@ pub enum GenHtError {
 
 pub type GenHtResult = ActionResult<HdrTransform, GenHtError>;
 
-pub trait StaticAction: Display {
+pub trait StaticAction: Display + Send + Sync {
     fn gen_ht(
         &self,
         dir: Direction,
@@ -795,7 +795,7 @@ pub type ModMetaResult = ActionResult<(), String>;
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
-pub trait MetaAction: Display {
+pub trait MetaAction: Display + Send + Sync {
     /// Return the predicates implicit to this action.
     ///
     /// Return both the header [`Predicate`] list and
@@ -843,7 +843,7 @@ impl From<smoltcp::wire::Error> for GenBtError {
 ///
 /// For example, you could use this to hairpin an ARP Reply in response
 /// to a guest's ARP request.
-pub trait HairpinAction: Display {
+pub trait HairpinAction: Display + Send + Sync {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, including any
     /// modifications made by previous layers up to this point.

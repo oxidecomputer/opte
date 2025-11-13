@@ -64,7 +64,7 @@ impl Ttl {
 }
 
 /// A policy for expiring flow table entries over time.
-pub trait ExpiryPolicy<S: Dump>: fmt::Debug {
+pub trait ExpiryPolicy<S: Dump>: fmt::Debug + Send + Sync {
     /// Returns whether the given flow should be removed, given current flow
     /// state, the time a packet was last received, and the current time.
     fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool;
