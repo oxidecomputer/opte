@@ -56,66 +56,104 @@
 //! `TokenLock` to control write access.
 //!
 //! Once we have a port, things become fairly simple. Today, each port has a
-//! central RWLock -- reads/writes are only held for the duration of packet
+//! central RWLock, as reads/writes are only held for the duration of packet
 //! processing, or as long as is required to insert new rules.
 //!
-//! ### `DevMap` views
+//! ### [`DevMap`] views
 //! Ideally, we want the above interactions to have minimal impact on one another
 //! (e.g., insertion of a port should not lock out all use of the datapath).
 //! For this reason, we provide the datapath entrypoints with read-only shared
-//! copies of the central `DevMap`.
+//! copies of the central [`DevMap`].
 //!  * For Rx entrypoints, we allocate a `Vec<KMutex<Arc<DevMap>>>`. Each CPU
 //!    on the system has its own slot within this `Vec`, such that there should
 //!    never be lock contention unless a port is being added/removed. The CPU ID
-//!    is then used as an index into this table, and the lock is held until all
-//!    packets are delivered (as all packet deliveries require a live `XdeDev`).
-//!  * For Tx entrypoints, each `XdeDev` holds an RWLock around its copy of the
-//!    `DevMap`. When needed for delivery, the Rx pathway acquires the read lock.
-//!    We prefer an RwLock here over a Mutex[] given that we can be called from
-//!    multiple threads, and our callers are not expected to bound to a given CPU.
-//!    Most packet deliveries should go via the underlay.
+//!    is then used as an index into this table, the Arc is cloned, and the lock
+//!    is dropped immediately. This makes readers lock-free and avoids blocking
+//!    management refreshes.
+//!    - Safety: The cloned `Arc<DevMap>` keeps all [`XdeDev`]s in that snapshot
+//!      alive ([`DevMap`] contains `Arc<XdeDev>` entries), ensuring that delivery
+//!      via [`deliver_all()`](DevMap::deliver_all) always operates on live ports.
+//!      Physical mutex is held only during Arc clone (single atomic increment),
+//!      then dropped.
+//!  * For Tx entrypoints, each `XdeDev` holds a per-port `KRwLock<Arc<DevMap>>`.
+//!    We prefer an RwLock here over a Mutex given that we can be called from
+//!    multiple threads, and our callers are not expected to be bound to a given
+//!    CPU.
+//!    - Unicast to remote host: No `DevMap` needed, packets go directly to
+//!      underlay.
+//!    - Hairpin (same-host unicast): Lazily clone per-port `DevMap` Arc for
+//!      local delivery.
+//!    - Multicast: Clone per-CPU `mcast_fwd` Arc once at start. Lazily clone
+//!      per-port `DevMap` Arc only if local subscribers exist.
 //!
-//! Holding the lock in both cases (rather than cloning out the `Arc`) has an
-//! inherent risk associated, but this is necessary to ensure that no Rx/Tx
-//! contexts will attempt to send a packet to a port which has been (or is being!)
-//! removed. Holding a read/lock on the `DevMap` in use ensures that any found
-//! port remains alive until any in-progress packet processing is complete.
+//! Cloning the Arc (rather than holding read/lock guards) eliminates re-entrant
+//! read deadlock risk and avoids blocking management operations for the duration
+//! of packet chains. The cloned Arc ensures that no Rx/Tx contexts will attempt
+//! to send a packet to a port which has been (or is being) removed -- holding
+//! the Arc keeps the [`DevMap`] snapshot alive until packet processing is complete.
+//! Since [`DevMap`] contains `Arc<XdeDev>` entries, the Arc reference chain
+//! guarantees all ports in the snapshot remain live throughout delivery (e.g.,
+//! [`deliver_all()`](DevMap::deliver_all)), preventing use-after-free even if
+//! ports are concurrently removed from the canonical mapping.
 //!
 //! In the Rx case, loopback delivery or MAC->CPU oversubscription present some
 //! risk of contention. These are not expected paths in the product, but using
 //! them does not impact correctness.
 //!
-//! The remaining locking risks are double-locking a given Rx Mutex by the same
-//! thread, and re-entrant reads on a Tx RwLock without readers-starve-writers
-//! configured. The first such case results in a panic, but can only happen if
-//! we transit the NIC's Rx path twice in the same stack (i.e. Rx on NIC ->
-//! mac_rx on the OPTE port -> ... -> loopback delivery to underlay device).
-//! This should be impossible, given that any packet sent upstack by XDE must
-//! have a MAC address belonging to the OPTE port.
+//! The remaining locking risk is double-locking a given Rx Mutex by the same
+//! thread during the brief Arc clone operation. This results in a panic, but can
+//! only happen if we transit the NIC's Rx path twice in the same stack (i.e.
+//! Rx on NIC -> mac_rx on the OPTE port -> ... -> loopback delivery to underlay
+//! device). This should be impossible, given that any packet sent upstack by XDE
+//! must have a MAC address belonging to the OPTE port.
 //!
-//! The second exposes us to a deadlock if the ordering `read[xde_mc_tx] ->
-//! write[ioctl] -> read[xde_mc_tx]` occurs on one lock -- the latter read
-//! acquisition will block indefinitely. This is a possibility we need to
-//! consciously work around. Hairpin exchanges (e.g., ARP -> ICMP ping, DHCP)
-//! can lead to fairly deep stacks of the form `(ip) -> xde_mc_tx -> (ip) ->
-//! xde_mc_tx -> ...` when used with zones (this is not an issue with viona,
-//! which returns once packets are communicated to the guest). Thus, we *must*
-//! drop the read before delivering any hairpin packets.
+//! The previous re-entrant read deadlock risk (`read[xde_mc_tx] -> write[ioctl]
+//! -> read[xde_mc_tx]`) has been eliminated by using Arc clones instead of held
+//! read guards. Once the Arc is cloned and the lock is dropped, subsequent
+//! re-entries will acquire a fresh lock without conflict. Hairpin exchanges
+//! (e.g., ARP -> ICMP ping, DHCP) can safely create deep stacks of the form
+//! `(ip) -> xde_mc_tx -> (ip) -> xde_mc_tx -> ...` when used with zones.
 //!
-//! ### `TokenLock` and `DevMap` updates
+//! Note:
+//!  - We cannot afford to take the management lock (`TokenLock`) during any
+//!    dataplane operation. If a dataplane path ever needs to consult the
+//!    central source of truth directly, the minimally acceptable pattern is a
+//!    read of `state.devs.read()` (never the management token itself). In
+//!    practice, to further reduce contention on readers counters we avoid even
+//!    this by using per-CPU cached `Arc<DevMap>` snapshots for both RX and TX.
+//!  - Multicast forwarding state (`mcast_fwd`) follows the same model: a copy
+//!    is kept in each [`PerEntryState`] (per-CPU) and updated by `refresh_maps()`
+//!    whenever the canonical forwarding table changes. This ensures RX/TX always
+//!    observe a coherent snapshot without taking the management lock. We do not
+//!    maintain per-port copies (those were removed to avoid per-port RwLock
+//!    contention issues).
+//!
+//! ### `TokenLock` and [`DevMap`] updates
 //! The `TokenLock` primitive provides us with logical mutual exclusion around
-//! the underlay and the ability to modify the canonical `DevMap` -- without
+//! the underlay and the ability to modify the canonical [`DevMap`] -- without
 //! holding a `KMutex`. Management operations made by OPTE *will* upcall -- we
 //! must resolve link names to IDs, and add/remove link information from DLS.
 //! Doing so makes an ioctl thread vulnerable to receiving signals, so other
 //! threads trying to take the management lock must be able to take, e.g.,
 //! a SIGSTOP.
 //!
-//! Whenever the central `DevMap` is modified, we iterate through each reachable
-//! `XdeDev` and underlay port, and for every instance of the cloned `DevMap` we
-//! write()/lock() that entry, replace it with the new contents, and drop the
-//! lock. This ensures that port removal cannot fully proceed until the port is
-//! no longer usable from any Tx/Rx context.
+//! Whenever the central [`DevMap`] is modified, we iterate through each reachable
+//! [`XdeDev`] and underlay port, and for every instance of the cloned [`DevMap`]
+//! and `mcast_fwd` we write()/lock() that entry, replace it with the new
+//! contents, and drop the lock. This ensures that port removal cannot fully
+//! proceed until the port is no longer usable from any Tx/Rx context and that
+//! multicast delivery and forwarding use the matching snapshot.
+//!
+//! ### Teardown and reference cycles
+//! The Arc-cloning strategy creates a reference cycle during normal operation:
+//! underlay port → stream → ports_map (per-CPU) → [`DevMap`] → [`XdeDev`] → underlay port.
+//! This is benign during operation but must be broken during teardown.
+//!
+//! When `clear_xde_underlay()` is called (after all ports have been removed),
+//! we explicitly clear per-CPU cached `DevMap`s by replacing them with empty
+//! snapshots. This breaks the cycle and allows underlay port Arcs to be unwrapped.
+//! If brief in-flight TX chains still hold `DevMap` references, the unwrap returns
+//! EBUSY and the caller can retry. Refs drain quickly once caches are cleared.
 
 use crate::dev_map::DevMap;
 use crate::dev_map::ReadOnlyDevMap;
@@ -153,6 +191,7 @@ use crate::sys::ncpus;
 use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -160,13 +199,17 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
+use core::num::NonZeroUsize;
 use core::ptr;
 use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
 use core::time::Duration;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::*;
 use ingot::geneve::Geneve;
 use ingot::geneve::GeneveOpt;
@@ -185,6 +228,7 @@ use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
+use opte::api::MacAddr;
 use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
@@ -199,19 +243,24 @@ use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KRwLock;
-use opte::ddi::sync::KRwLockReadGuard;
 use opte::ddi::sync::KRwLockWriteGuard;
 use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
+use opte::ddi::sync::clone_from_mutex;
+use opte::ddi::sync::clone_from_rwlock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::NetworkImpl;
+use opte::engine::ether::EtherAddr;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
+use opte::engine::ip::ValidL3;
+use opte::engine::ip::v4::Ipv4Ref;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
@@ -219,23 +268,37 @@ use opte::engine::parse::ValidUlp;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
+use opte::engine::rule::MappingResource;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
+use oxide_vpc::api::ClearMcast2PhysReq;
+use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
+use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpMcastForwardingResp;
+use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::McastForwardingEntry;
+use oxide_vpc::api::McastSubscribeReq;
+use oxide_vpc::api::McastSubscriptionEntry;
+use oxide_vpc::api::McastUnsubscribeReq;
+use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
+use oxide_vpc::api::Replication;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetMcast2PhysReq;
+use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::cfg::IpCfg;
@@ -251,6 +314,11 @@ use oxide_vpc::engine::overlay;
 use oxide_vpc::engine::router;
 
 const ETHERNET_MTU: u16 = 1500;
+
+// Type alias for multicast forwarding table:
+// Maps IPv6 destination addresses to their next-hop replication entries.
+type McastForwardingTable =
+    BTreeMap<Ipv6Addr, BTreeMap<NextHopV6, Replication>>;
 
 // Entry limits for the various flow tables.
 const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
@@ -285,6 +353,77 @@ unsafe extern "C" {
         dst_port: uintptr_t,
     );
     pub safe fn __dtrace_probe_hdlr__resp(resp_str: uintptr_t);
+    pub safe fn __dtrace_probe_mcast__tx(
+        af: uintptr_t,        // AF_INET or AF_INET6
+        inner_dst: uintptr_t, // *const Ipv4Addr or *const Ipv6Addr
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__rx(
+        af: uintptr_t,
+        inner_dst: uintptr_t,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__local__delivery(
+        af: uintptr_t,
+        inner_dst: uintptr_t,
+        vni: uintptr_t,
+        port: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__underlay__fwd(
+        af: uintptr_t,
+        inner_dst: uintptr_t,
+        vni: uintptr_t,
+        next_hop: *const oxide_vpc::api::Ipv6Addr,
+    );
+    pub safe fn __dtrace_probe_mcast__external__fwd(
+        af: uintptr_t,
+        inner_dst: uintptr_t,
+        vni: uintptr_t,
+        next_hop: *const oxide_vpc::api::Ipv6Addr,
+    );
+
+    // Multicast control-plane probes
+    pub safe fn __dtrace_probe_mcast__map__set(
+        af: uintptr_t,
+        group: uintptr_t,
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__map__clear(
+        af: uintptr_t,
+        group: uintptr_t,
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__fwd__set(
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        count: uintptr_t,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__fwd__clear(
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__subscribe(
+        port: uintptr_t,
+        af: uintptr_t,
+        group: uintptr_t,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_mcast__unsubscribe(
+        port: uintptr_t,
+        af: uintptr_t,
+        group: uintptr_t,
+        vni: uintptr_t,
+    );
+
+    // Multicast dataplane problem probes
+    pub safe fn __dtrace_probe_mcast__tx__pullup__fail(len: uintptr_t);
+    pub safe fn __dtrace_probe_mcast__rx__pullup__fail(len: uintptr_t);
+    pub safe fn __dtrace_probe_mcast__no__fwd__entry(
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+    );
 }
 
 fn bad_packet_parse_probe(
@@ -361,6 +500,7 @@ struct XdeState {
     management_lock: TokenLock<XdeMgmt>,
     ectx: Arc<ExecCtx>,
     vpc_map: Arc<overlay::VpcMappings>,
+    m2p: Arc<overlay::Mcast2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
     devs: ReadOnlyDevMap,
     stats: KStatNamed<XdeStats>,
@@ -377,6 +517,10 @@ struct XdeState {
 struct XdeMgmt {
     devs: Arc<KRwLock<DevMap>>,
     underlay: Option<UnderlayState>,
+    /// XDE-wide multicast forwarding table mapping underlay multicast addresses
+    /// to their physical next hops with replication information.
+    /// Maps: Ipv6Addr (underlay multicast address) -> BTreeMap<NextHopV6 (next hops), Replication>
+    mcast_fwd: Arc<KRwLock<McastForwardingTable>>,
 }
 
 #[derive(Clone)]
@@ -408,10 +552,12 @@ impl XdeState {
             management_lock: TokenLock::new(XdeMgmt {
                 devs: dev_map,
                 underlay: None,
+                mcast_fwd: Arc::new(KRwLock::new(BTreeMap::new())),
             }),
             devs,
             ectx,
             vpc_map: Arc::new(overlay::VpcMappings::new()),
+            m2p: Arc::new(overlay::Mcast2Phys::new()),
             v2b: Arc::new(overlay::Virt2Boundary::new()),
             stats: KStatNamed::new("xde", "xde", XdeStats::new())
                 .expect("Name is well-constructed (len, no NUL bytes)"),
@@ -501,7 +647,12 @@ pub enum UnderlayIndex {
 #[repr(C)]
 struct PerEntryState {
     devs: KMutex<Arc<DevMap>>,
-    _pad: [u8; 48],
+    mcast_fwd: KRwLock<Arc<McastForwardingTable>>,
+    /// Fast-path check: `true` if any multicast subscribers exist on this sled.
+    /// Allows skipping DevMap lock entirely for multicast when no local listeners.
+    /// Updated by refresh_maps() on port add/remove.
+    has_mcast_subscribers: AtomicBool,
+    _pad: [u8; 31],
 }
 
 const _: () = assert!(
@@ -511,7 +662,12 @@ const _: () = assert!(
 
 impl Default for PerEntryState {
     fn default() -> Self {
-        Self { devs: KMutex::new(Arc::new(DevMap::new())), _pad: [0u8; 48] }
+        Self {
+            devs: KMutex::new(Arc::new(DevMap::new())),
+            mcast_fwd: KRwLock::new(Arc::new(BTreeMap::new())),
+            has_mcast_subscribers: AtomicBool::new(false),
+            _pad: [0u8; 31],
+        }
     }
 }
 
@@ -868,6 +1024,46 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             let resp = remove_cidr_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
+
+        OpteCmd::SetMcastForwarding => {
+            let resp = set_mcast_forwarding_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearMcastForwarding => {
+            let resp = clear_mcast_forwarding_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpMcastForwarding => {
+            let resp = dump_mcast_forwarding_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpMcastSubscriptions => {
+            let resp = dump_mcast_subscriptions_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::McastSubscribe => {
+            let resp = mcast_subscribe_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::McastUnsubscribe => {
+            let resp = mcast_unsubscribe_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetMcast2Phys => {
+            let resp = set_m2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ClearMcast2Phys => {
+            let resp = clear_m2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
     }
 }
 
@@ -956,6 +1152,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             req.xde_devname.clone(),
             &cfg,
             state.vpc_map.clone(),
+            state.m2p.clone(),
             port_v2p.clone(),
             state.v2b.clone(),
             state.ectx.clone(),
@@ -1051,6 +1248,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             token.underlay.as_ref().expect(
                 "bailed out above if no underlay, and protected by token",
             ),
+            &token.mcast_fwd,
         );
     }
 
@@ -1077,15 +1275,20 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
                 .underlay
                 .as_ref()
                 .expect("underlay must exist while ports exist"),
+            &token.mcast_fwd,
         );
 
         xde
     };
 
-    // Clear the port's devmap to break any cycles.
+    // Break potential self-reference cycles before dropping this `XdeDev` by
+    // resetting its per-port `DevMap` snapshot to an empty map. Otherwise, the
+    // `Arc<DevMap>` inside `port_map` may still contain an Arc back to this
+    // same XdeDev, keeping it (and its underlay Arc clones) alive beyond
+    // deletion.
     {
-        let mut pmap = xde.port_map.write();
-        *pmap = Default::default();
+        let mut port_map = xde.port_map.write();
+        *port_map = Arc::new(DevMap::new());
     }
 
     let return_port = |token: &TokenGuard<'_, XdeMgmt>, port| {
@@ -1097,6 +1300,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
                 .underlay
                 .as_ref()
                 .expect("underlay must exist while ports exist"),
+            &token.mcast_fwd,
         );
     };
 
@@ -1159,23 +1363,45 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
-/// Rebuild each entrypoint's view of the central `DevMap`.
-fn refresh_maps(devs: KRwLockWriteGuard<DevMap>, underlay: &UnderlayState) {
+/// Rebuild each entrypoint's view of the central [`DevMap`] and multicast
+/// forwarding table `McastForwardingTable`.
+fn refresh_maps(
+    devs: KRwLockWriteGuard<DevMap>,
+    underlay: &UnderlayState,
+    mcast_fwd: &Arc<KRwLock<McastForwardingTable>>,
+) {
     let new_map = Arc::new(devs.clone());
+    let new_mcast_fwd = Arc::new(mcast_fwd.read().clone());
+    let has_subscribers = new_map.has_mcast_subscribers();
 
-    // Update all ports' maps.
-    for port in devs.iter() {
-        let mut map = port.port_map.write();
-        *map = Arc::clone(&new_map);
+    // Update both underlay ports' per-CPU caches (u1 and u2).
+    // Each underlay port has a Vec<PerEntryState> with one entry per CPU.
+    let underlay_ports =
+        [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
+    for per_cpu_map in underlay_ports {
+        for entry in per_cpu_map {
+            {
+                let mut map = entry.devs.lock();
+                *map = Arc::clone(&new_map);
+            }
+            {
+                let mut mcast = entry.mcast_fwd.write();
+                *mcast = Arc::clone(&new_mcast_fwd);
+            }
+            // Update fast-path flag for multicast optimization.
+            // Relaxed ordering is fine: stale reads are safe. If a CPU sees
+            // stale `false`, it skips obtaining DevMap entirely (no subscribers).
+            // If it sees stale `true`, it clones DevMap Arc and checks.
+            entry
+                .has_mcast_subscribers
+                .store(has_subscribers, Ordering::Relaxed);
+        }
     }
 
-    // Update all underlays' maps.
-    let ports = [&underlay.u1.stream.ports_map, &underlay.u2.stream.ports_map];
-    for port in ports {
-        for map in port {
-            let mut map = map.devs.lock();
-            *map = Arc::clone(&new_map);
-        }
+    // Update all ports' per-port maps.
+    for port in new_map.iter() {
+        let mut map = port.port_map.write();
+        *map = Arc::clone(&new_map);
     }
 }
 
@@ -1236,50 +1462,110 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
         });
     }
 
-    if let Some(underlay) = token.underlay.take() {
-        // If the underlay references have leaked/spread beyond `XdeDev`s and not
-        // been cleaned up, we committed have a fatal programming error.
-        // We aren't using `Weak` references to these types either, so no strong
-        // references could be created.
-        //
-        // We know these must succeed given that the only holders of an
-        // `Arc<XdeUnderlayPort>` are `XdeState` (whose ref we have exclusively locked)
-        // and `XdeDev` (of which none remain).
-        let name = underlay.u1.name.clone();
-        let u1 = Arc::into_inner(underlay.u1).unwrap_or_else(|| {
-            panic!("underlay u1 ({name}) must have one ref during teardown",)
-        });
+    // Clear multicast forwarding table to release any references
+    token.mcast_fwd.write().clear();
 
-        let name = underlay.u2.name.clone();
-        let u2 = Arc::into_inner(underlay.u2).unwrap_or_else(|| {
-            panic!("underlay u2 ({name}) must have one ref during teardown",)
-        });
+    // Before taking ownership of the underlay Arcs, clear per-CPU cached
+    // `DevMap`s and multicast forwarding tables (in underlay ports' `PerEntryState`).
+    // This breaks snapshot cycles: underlay → per-CPU cache → `DevMap` →
+    // `XdeDev` → underlay.
+    //
+    // Note: Per-port `DevMap` caches (`XdeDev.port_map`) were already cleared
+    // when ports were deleted. This function only runs after all ports are
+    // removed.
+    if let Some(ul_ref) = token.underlay.as_ref() {
+        let empty_map = Arc::new(DevMap::new());
+        let empty_mcast: Arc<McastForwardingTable> = Arc::new(BTreeMap::new());
+        let underlay_ports =
+            [&ul_ref.u1.stream.ports_map, &ul_ref.u2.stream.ports_map];
+        for per_cpu_map in underlay_ports {
+            for entry in per_cpu_map {
+                {
+                    let mut map = entry.devs.lock();
+                    *map = Arc::clone(&empty_map);
+                }
+                {
+                    let mut mcast = entry.mcast_fwd.write();
+                    *mcast = Arc::clone(&empty_mcast);
+                }
+                entry.has_mcast_subscribers.store(false, Ordering::Relaxed);
+            }
+        }
+    }
 
-        for u in [u1, u2] {
-            // We have a chain of refs here: `MacSiphon` holds a ref to
-            // `DlsStream`. We explicitly drop them in order here to ensure
-            // there are no outstanding refs.
+    // Early-check: ensure the underlay port Arcs are uniquely owned by
+    // XDE before we move them out. In-flight dataplane work may still hold
+    // references to these Arcs briefly after cache clearing. If so, return
+    // `EBUSY` so the caller can retry.
+    if let Some(ul_ref) = token.underlay.as_ref() {
+        if Arc::strong_count(&ul_ref.u1) != 1
+            || Arc::strong_count(&ul_ref.u2) != 1
+        {
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: "underlay ports still have active references; retry teardown".into(),
+            });
+        }
+    }
 
-            // 1. Remove packet rx callback.
-            drop(u.siphon);
+    // Take ownership of the underlay state now that caches are cleared and
+    // the Arcs appear uniquely owned.
+    let underlay = token.underlay.take().ok_or_else(|| OpteError::System {
+        errno: ENOENT,
+        msg: "underlay not initialized (already checked above)".into(),
+    })?;
 
-            // Although `xde_rx` can be called into without any running ports
-            // via the siphon handle, illumos guarantees that this callback won't
-            // be running here. `mac_siphon_clear` performs the moral equivalent of
-            // `mac_rx_barrier` -- the client's SRS is quiesced, and then restarted
-            // after the callback is removed.
-            // Because there are no ports and we hold the write/management lock, no
-            // one else will have or try to clone the Stream handle.
+    // Unwrap underlay port Arcs; if any references remain (e.g., in-flight
+    // dataplane), return EBUSY so caller can retry.
+    let XdeUnderlayPort {
+        name: u1_name,
+        siphon: u1_siphon,
+        stream: u1_stream,
+        ..
+    } = Arc::into_inner(underlay.u1).ok_or_else(|| {
+        warn!(
+            "clear_xde_underlay: u1 Arc has outstanding refs after cache clear"
+        );
+        OpteError::System {
+            errno: EBUSY,
+            msg: "underlay u1 still has active references during teardown"
+                .into(),
+        }
+    })?;
 
-            // 2. Close the open stream handle.
-            // The only other hold on this `DlsStream` is via `u.siphon`, which
-            // we just dropped. The `expect` asserts that we have consumed them
-            // in the correct order.
-            Arc::into_inner(u.stream).unwrap_or_else(|| {
-                panic!(
-                    "underlay ({}) must have no external refs to its DlsStream",
-                    u.name
-                )
+    let XdeUnderlayPort {
+        name: u2_name,
+        siphon: u2_siphon,
+        stream: u2_stream,
+        ..
+    } = Arc::into_inner(underlay.u2).ok_or_else(|| {
+        warn!(
+            "clear_xde_underlay: u2 Arc has outstanding refs after cache clear"
+        );
+        OpteError::System {
+            errno: EBUSY,
+            msg: "underlay u2 still has active references during teardown"
+                .into(),
+        }
+    })?;
+
+    // Quiesce RX by dropping siphons; this removes the MAC callbacks and
+    // releases the siphon's Arc reference to the streams' parent.
+    drop(u1_siphon);
+    drop(u2_siphon);
+
+    // Verify and close the DLS stream handles. After dropping siphons, the
+    // only remaining strong reference should be `u*_stream` itself.
+    for (name, stream) in [(u1_name, u1_stream), (u2_name, u2_stream)] {
+        if Arc::into_inner(stream).is_none() {
+            warn!(
+                "clear_xde_underlay: {name} DlsStream Arc has outstanding refs after siphon drop"
+            );
+            return Err(OpteError::System {
+                errno: EBUSY,
+                msg: format!(
+                    "underlay ({name}) DlsStream still has active references; retry teardown"
+                ),
             });
         }
     }
@@ -1772,20 +2058,18 @@ fn guest_loopback_probe(
 
 fn guest_loopback(
     src_dev: &XdeDev,
-    entry_state: &DevMap,
+    dst_dev: &XdeDev,
+    port_key: VniMac,
     mut pkt: MsgBlk,
-    vni: Vni,
     postbox: &mut TxPostbox,
 ) {
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
 
-    // Loopback now requires a reparse on loopback to account for UFT fastpath.
-    // When viona serves us larger packets, we needn't worry about allocing
-    // the encap on.
-    // We might be able to do better in the interim, but that costs us time.
-
+    // Loopback requires a reparse to account for UFT fastpath.
+    // We might be able to do better, but the logistics in passing around
+    // the emitspec in lieu of "full" metadata might be a little troublesome.
     let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), VpcParser {}) {
         Ok(pkt) => pkt,
         Err(e) => {
@@ -1810,78 +2094,567 @@ fn guest_loopback(
 
     let flow = parsed_pkt.flow();
 
-    let ether_dst = parsed_pkt.meta().inner_eth.destination();
-    let port_key = VniMac::new(vni, ether_dst);
-    let maybe_dest_dev = entry_state.get_by_key(port_key);
+    guest_loopback_probe(mblk_addr, &flow, src_dev, dst_dev);
 
-    match maybe_dest_dev {
-        Some(dest_dev) => {
-            guest_loopback_probe(mblk_addr, &flow, src_dev, dest_dev);
+    match dst_dev.port.process(In, parsed_pkt) {
+        Ok(ProcessResult::Modified(emit_spec)) => {
+            let mut pkt = emit_spec.apply(pkt);
+            if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
+                opte::engine::err!("failed to set offload info: {}", e);
+            }
 
-            // We have found a matching Port on this host; "loop back"
-            // the packet into the inbound processing path of the
-            // destination Port.
-            match dest_dev.port.process(In, parsed_pkt) {
-                Ok(ProcessResult::Modified(emit_spec)) => {
-                    let mut pkt = emit_spec.apply(pkt);
-                    if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
-                        opte::engine::err!("failed to set offload info: {}", e);
-                    }
+            // Having advertised offloads to our guest, looped back
+            // packets are liable to have zero-checksums. Fill these
+            // if necessary.
+            let pkt = if pkt
+                .offload_flags()
+                .flags
+                .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
+            {
+                // We have only asked for cksum emulation, so we
+                // will either have:
+                //  * 0 pkts (checksum could not be emulated,
+                //            packet dropped)
+                //  * 1 pkt.
+                mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
+                    .and_then(|mut v| v.pop_front())
+            } else {
+                Some(pkt)
+            };
 
-                    // Having advertised offloads to our guest, looped back
-                    // packets are liable to have zero-checksums. Fill these
-                    // if necessary.
-                    let pkt = if pkt
-                        .offload_flags()
-                        .flags
-                        .intersects(MblkOffloadFlags::HCK_TX_FLAGS)
-                    {
-                        // We have only asked for cksum emulation, so we
-                        // will either have:
-                        //  * 0 pkts (checksum could not be emulated,
-                        //            packet dropped)
-                        //  * 1 pkt.
-                        mac_hw_emul(pkt, MacEmul::HWCKSUM_EMUL)
-                            .and_then(|mut v| v.pop_front())
-                    } else {
-                        Some(pkt)
-                    };
-
-                    if let Some(pkt) = pkt {
-                        postbox.post_local(port_key, pkt);
-                    }
-                }
-
-                Ok(ProcessResult::Drop { reason }) => {
-                    opte::engine::dbg!("loopback rx drop: {:?}", reason);
-                }
-
-                Ok(ProcessResult::Hairpin(_hppkt)) => {
-                    // There should be no reason for an loopback
-                    // inbound packet to generate a hairpin response
-                    // from the destination port.
-                    opte::engine::dbg!("unexpected loopback rx hairpin");
-                }
-
-                Err(e) => {
-                    opte::engine::dbg!(
-                        "loopback port process error: {} -> {} {:?}",
-                        src_dev.port.name(),
-                        dest_dev.port.name(),
-                        e
-                    );
-                }
+            if let Some(pkt) = pkt {
+                postbox.post_local(port_key, pkt);
             }
         }
 
-        None => {
+        Ok(ProcessResult::Drop { reason }) => {
+            opte::engine::dbg!("loopback rx drop: {:?}", reason);
+        }
+
+        Ok(ProcessResult::Hairpin(_hppkt)) => {
+            // There should be no reason for an loopback
+            // inbound packet to generate a hairpin response
+            // from the destination port.
+            opte::engine::dbg!("unexpected loopback rx hairpin");
+        }
+
+        Err(e) => {
             opte::engine::dbg!(
-                "underlay dest is same as src but the Port was not found \
-                 vni = {}, mac = {}",
-                vni.as_u32(),
-                ether_dst
+                "loopback port process error: {} -> {} {:?}",
+                src_dev.port.name(),
+                dst_dev.port.name(),
+                e
             );
         }
+    }
+}
+
+/// Locate the Oxide Multicast Geneve option and return the offset to its body.
+///
+/// Walks through Geneve options starting at `geneve_offset + 8` to find the
+/// Oxide Multicast option (class=0x0129, type=0x01). Returns the offset to the
+/// option body (after the 4-byte option header) if found.
+///
+/// Safety: This function validates option headers as it walks to avoid reading
+/// beyond packet boundaries. Returns `None` if the option is not found or if
+/// validation fails.
+///
+/// # Geneve Option Format
+/// Each option consists of:
+/// - 2 bytes: Option class
+/// - 1 byte: Flags (bit 7=critical) + Type (bits 0-6)
+/// - 1 byte: Reserved (3 bits) + Length in 4-byte words (5 bits)
+/// - N bytes: Option data (N = length field * 4)
+fn find_mcast_option_offset(
+    pkt: &MsgBlk,
+    geneve_offset: usize,
+) -> Option<usize> {
+    const GENEVE_HDR_LEN: usize = 8;
+    const OPT_HDR_LEN: usize = 4;
+    const OXIDE_OPT_CLASS: u16 = 0x0129;
+    const MULTICAST_OPT_TYPE: u8 = 0x01;
+
+    // Read Geneve header to get option length
+    let geneve_hdr = pkt.get(geneve_offset..geneve_offset + GENEVE_HDR_LEN)?;
+    let opt_len_words = (geneve_hdr[0] & 0x3F) as usize; // Bottom 6 bits of first byte
+
+    if opt_len_words == 0 {
+        return None; // No options present
+    }
+
+    let opts_start = geneve_offset + GENEVE_HDR_LEN;
+    let opts_end = opts_start + (opt_len_words * 4);
+
+    // Belt-and-braces: ensure options area doesn't exceed packet length
+    if opts_end > pkt.len() {
+        return None;
+    }
+
+    let mut offset = opts_start;
+
+    while offset + OPT_HDR_LEN <= opts_end {
+        let opt_hdr = pkt.get(offset..offset + OPT_HDR_LEN)?;
+
+        let class = u16::from_be_bytes([opt_hdr[0], opt_hdr[1]]);
+        let opt_type = opt_hdr[2] & 0x7F; // Mask out critical bit
+        let opt_data_words = (opt_hdr[3] & 0x1F) as usize; // Bottom 5 bits
+        let opt_data_len = opt_data_words * 4;
+
+        if class == OXIDE_OPT_CLASS && opt_type == MULTICAST_OPT_TYPE {
+            // Found it! Return offset to option body
+            return Some(offset + OPT_HDR_LEN);
+        }
+
+        // Move to next option
+        offset += OPT_HDR_LEN + opt_data_len;
+    }
+
+    None
+}
+
+/// Update the Oxide Multicast Geneve option's TX-only replication field.
+///
+/// Locates the multicast option and rewrites the TX-only replication instruction in the
+/// first byte of the option body (top 2 bits encode the replication mode).
+///
+/// Returns `true` if the option was found and updated, `false` otherwise.
+///
+/// # Replication Encoding (TX-only)
+/// The replication field uses the top 2 bits of the first byte:
+/// - `External` (0): 0x00
+/// - `Underlay` (1): 0x40
+/// - `All` (2): 0x80
+/// - `Reserved` (3): 0xC0
+#[inline]
+fn update_mcast_replication(
+    pkt: &mut MsgBlk,
+    geneve_offset: usize,
+    replication: Replication,
+) -> bool {
+    let Some(mcast_body_off) = find_mcast_option_offset(pkt, geneve_offset)
+    else {
+        return false;
+    };
+
+    let Some(rep_byte) = pkt.get_mut(mcast_body_off..mcast_body_off + 1) else {
+        return false;
+    };
+
+    // Encode replication in top 2 bits, preserve bottom 6 bits
+    let repl_bits = (replication as u8) << 6;
+    rep_byte[0] = (rep_byte[0] & 0x3F) | repl_bits;
+    true
+}
+
+struct MulticastTxContext<'a> {
+    inner_dst: oxide_vpc::api::IpAddr, // Inner/overlay destination IP (for subscriptions)
+    underlay_dst: Ipv6Addr, // Outer/underlay destination IP (for forwarding lookup)
+    vni: Vni,
+    out_pkt: &'a MsgBlk,
+    encap_len: u32,
+    inner_eth_len: usize,
+    non_eth_payl_bytes: u32,
+    tun_meoi: &'a mac_ether_offload_info_t,
+    l4_hash: u32,
+}
+
+struct MulticastRxContext<'a> {
+    inner_dst: oxide_vpc::api::IpAddr, // Inner/overlay destination IP (for subscriptions)
+    underlay_dst: Ipv6Addr, // Outer/underlay destination IP (for forwarding lookup)
+    vni: Vni,
+    pkt: &'a MsgBlk,
+    pullup_len: usize,
+    // Reserved for future use: may be needed for relay detection or debugging
+    _geneve_offset: usize,
+    _incoming_delivery_mode: Option<oxide_vpc::api::Replication>,
+}
+
+/// Handle multicast packet forwarding for same-sled delivery and underlay
+/// replication based on the XDE-wide multicast forwarding table.
+///
+/// Always delivers to local same-sled subscribers regardless of replication mode.
+/// Routes to next hop unicast addresses for ALL replication modes to determine
+/// reachability and underlay port/MAC. Packet destination is always the multicast
+/// address with multicast MAC. The [`Replication`] type is a TX-only instruction
+/// telling the switch which port groups to replicate to: External (front panel),
+/// Underlay (other sleds), or Both.
+///
+/// `cpu_devs` may be None if the fast-path check indicated no local subscribers exist.
+///
+/// [`Replication`]: oxide_vpc::api::Replication
+fn handle_mcast_tx<'a>(
+    ctx: MulticastTxContext,
+    src_dev: &'a XdeDev,
+    postbox: &mut TxPostbox,
+    cpu_devs: Option<&'a DevMap>,
+    cpu_mcast_fwd: &'a Arc<McastForwardingTable>,
+) {
+    // DTrace probe: multicast TX entry
+    let (af, addr_ptr) = match &ctx.inner_dst {
+        oxide_vpc::api::IpAddr::Ip4(v4) => {
+            (2usize, AsRef::<[u8]>::as_ref(v4).as_ptr() as uintptr_t)
+        }
+        oxide_vpc::api::IpAddr::Ip6(v6) => {
+            (26usize, AsRef::<[u8]>::as_ref(v6).as_ptr() as uintptr_t)
+        }
+    };
+    __dtrace_probe_mcast__tx(af, addr_ptr, ctx.vni.as_u32() as uintptr_t);
+
+    // Compute packet offsets once (used for both local delivery and next hop forwarding)
+    let pullup_len = (ctx.encap_len as usize)
+        + (ctx.non_eth_payl_bytes as usize)
+        + ctx.inner_eth_len;
+    let geneve_offset = usize::from(ctx.tun_meoi.meoi_l2hlen)
+        + usize::from(ctx.tun_meoi.meoi_l3hlen)
+        + usize::from(ctx.tun_meoi.meoi_l4hlen);
+
+    // Local same-sled delivery: always deliver to subscribers on this sled,
+    // independent of the TX-only Replication instruction (not an access control mechanism).
+    // The Replication type only affects how switches handle the packet on TX.
+    // Subscription is keyed by underlay (outer) IPv6 multicast address.
+    // If cpu_devs is None, we know from the fast-path check that no subscribers exist.
+    if let Some(devs) = cpu_devs {
+        let group_key = {
+            let ip6 = oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
+            oxide_vpc::api::IpAddr::from(ip6)
+        };
+        if let Some(others) = devs.mcast_listeners(&group_key) {
+            let my_key = VniMac::new(ctx.vni, src_dev.port.mac_addr());
+            for el in others {
+                // Skip delivering to self
+                if my_key == *el {
+                    continue;
+                }
+                let Ok(my_pkt) =
+                    ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
+                else {
+                    opte::engine::dbg!(
+                        "mcast TX external pullup failed: requested {} bytes",
+                        pullup_len
+                    );
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_tx_pullup_fail().incr(1);
+                    __dtrace_probe_mcast__tx__pullup__fail(
+                        pullup_len as uintptr_t,
+                    );
+                    continue;
+                };
+                match devs.get_by_key(*el) {
+                    Some(dev) => {
+                        // DTrace probe: local delivery
+                        let (af, addr_ptr) = match &ctx.inner_dst {
+                            oxide_vpc::api::IpAddr::Ip4(v4) => (
+                                2usize,
+                                AsRef::<[u8]>::as_ref(v4).as_ptr() as uintptr_t,
+                            ),
+                            oxide_vpc::api::IpAddr::Ip6(v6) => (
+                                26usize,
+                                AsRef::<[u8]>::as_ref(v6).as_ptr() as uintptr_t,
+                            ),
+                        };
+                        __dtrace_probe_mcast__local__delivery(
+                            af,
+                            addr_ptr,
+                            ctx.vni.as_u32() as uintptr_t,
+                            dev.port.name_cstr().as_ptr() as uintptr_t,
+                        );
+                        guest_loopback(src_dev, dev, *el, my_pkt, postbox);
+                        let xde = get_xde_state();
+                        xde.stats.vals.mcast_tx_local().incr(1);
+                    }
+                    None => {
+                        let xde = get_xde_state();
+                        xde.stats.vals.mcast_tx_stale_local().incr(1);
+                    }
+                }
+            }
+        }
+    }
+
+    // Next hop forwarding: send packets to configured next hops.
+    //
+    // At the leaf level, we process all next hops in the forwarding table.
+    // Each next hop's `Replication` is a TX-only instruction telling the switch
+    // which ports to replicate to:
+    // - External: ports set for external multicast traffic (egress to external networks)
+    // - Underlay: replicate to other sleds (using multicast outer dst)
+    // - Both: both external and underlay replication
+    //
+    // We already have the Arc from the per-CPU cache, no need to clone.
+    if cpu_mcast_fwd.get(&ctx.underlay_dst).is_none() {
+        __dtrace_probe_mcast__no__fwd__entry(
+            &ctx.underlay_dst,
+            ctx.vni.as_u32() as uintptr_t,
+        );
+        let xde = get_xde_state();
+        xde.stats.vals.mcast_tx_no_fwd_entry().incr(1);
+    }
+
+    if let Some(next_hops) = cpu_mcast_fwd.get(&ctx.underlay_dst) {
+        // We found forwarding entries, replicate to each next hop
+        for (next_hop, replication) in next_hops.iter() {
+            // Clone packet with headers using pullup
+            let Ok(mut fwd_pkt) =
+                ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
+            else {
+                opte::engine::dbg!(
+                    "mcast TX next hop pullup failed: requested {} bytes",
+                    pullup_len
+                );
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_tx_pullup_fail().incr(1);
+                __dtrace_probe_mcast__tx__pullup__fail(pullup_len as uintptr_t);
+                continue; // Skip this destination on allocation failure
+            };
+
+            // Route to next hop unicast address to determine which underlay
+            // port/MAC to use. Packet destination is the multicast address with
+            // multicast MAC (RFC 2464).
+            //
+            // NextHopV6.addr = unicast switch address (for routing)
+            // Outer dst IP = ctx.underlay_dst (multicast address from M2P)
+            // Geneve Replication is a TX-only instruction telling the switch
+            // which port groups to use.
+            let routing_dst = next_hop.addr;
+            let actual_outer_dst = ctx.underlay_dst;
+
+            // VNI is at offset 4 in Geneve header (3 bytes)
+            if let Some(vni_bytes) =
+                fwd_pkt.get_mut(geneve_offset + 4..geneve_offset + 7)
+            {
+                let vni_be = next_hop.vni.as_u32().to_be_bytes();
+                vni_bytes.copy_from_slice(&vni_be[1..4]); // VNI is 24 bits
+            }
+            // Update Geneve multicast option to reflect underlay replication to
+            // prevent re-relay loops.
+            update_mcast_replication(&mut fwd_pkt, geneve_offset, *replication);
+
+            // Route to switch unicast address to determine which underlay
+            // port/MAC to use. Packet destination is multicast address with
+            // multicast MAC.
+            let route_key =
+                RouteKey { dst: routing_dst, l4_hash: Some(ctx.l4_hash) };
+            let Route { src: mac_src, dst: _mac_dst, underlay_idx } =
+                src_dev.routes.next_hop(route_key, src_dev);
+
+            // Derive destination MAC from IPv6 multicast address per RFC 2464:
+            // IPv6 multicast MAC = 33:33 + last 4 bytes of IPv6 address
+            let ipv6_bytes = actual_outer_dst.bytes();
+            let dst_mac = EtherAddr::from([
+                0x33,
+                0x33,
+                ipv6_bytes[12],
+                ipv6_bytes[13],
+                ipv6_bytes[14],
+                ipv6_bytes[15],
+            ]);
+
+            // Fill in outer MAC addresses
+            let final_pkt = unsafe {
+                let mblk = fwd_pkt.unwrap_mblk().as_ptr();
+                let rptr = (*mblk).b_rptr;
+                ptr::copy(dst_mac.as_ptr(), rptr, 6);
+                ptr::copy(mac_src.as_ptr(), rptr.add(6), 6);
+
+                MsgBlk::wrap_mblk(mblk).unwrap()
+            };
+
+            // Replication is a TX-only instruction telling the switch which
+            // port groups to replicate to:
+            //
+            // Local same-sled delivery always occurs regardless of this
+            // TX-only setting.
+            //
+            // Note: Packet is sent once to the underlay. The switch reads the
+            // Geneve Replication field and performs the actual bifurcation.
+            match replication {
+                oxide_vpc::api::Replication::Underlay => {
+                    // DTrace probe: underlay forwarding
+                    // Report on-wire multicast group as GROUP (underlay),
+                    // and configured next-hop leaf address as NEXTHOP.
+                    let outer_ip6 = oxide_vpc::api::Ipv6Addr::from(
+                        actual_outer_dst.bytes(),
+                    );
+                    let (af, addr_ptr) =
+                        (26usize, &outer_ip6 as *const _ as uintptr_t);
+                    __dtrace_probe_mcast__underlay__fwd(
+                        af,
+                        addr_ptr,
+                        ctx.vni.as_u32() as uintptr_t,
+                        &next_hop.addr,
+                    );
+
+                    // Send to underlay
+                    postbox.post_underlay(
+                        underlay_idx,
+                        TxHint::from_crc32(ctx.l4_hash),
+                        final_pkt,
+                    );
+
+                    // Increment underlay forwarding stat
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_tx_underlay().incr(1);
+                }
+                oxide_vpc::api::Replication::Both => {
+                    // Both mode: packet is sent to switch with "Both"
+                    // replication flag.
+                    // Switch will bifurcate to both underlay and external port
+                    // groups. Fire both DTrace probes and increment both stats
+                    // for observability.
+                    let outer_ip6 = oxide_vpc::api::Ipv6Addr::from(
+                        actual_outer_dst.bytes(),
+                    );
+                    let (af, addr_ptr) =
+                        (26usize, &outer_ip6 as *const _ as uintptr_t);
+
+                    __dtrace_probe_mcast__underlay__fwd(
+                        af,
+                        addr_ptr,
+                        ctx.vni.as_u32() as uintptr_t,
+                        &next_hop.addr,
+                    );
+                    __dtrace_probe_mcast__external__fwd(
+                        af,
+                        addr_ptr,
+                        ctx.vni.as_u32() as uintptr_t,
+                        &next_hop.addr,
+                    );
+
+                    // Send to underlay (switch does bifurcation)
+                    postbox.post_underlay(
+                        underlay_idx,
+                        TxHint::from_crc32(ctx.l4_hash),
+                        final_pkt,
+                    );
+
+                    // Increment both stats since both replication paths are active
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_tx_underlay().incr(1);
+                    xde.stats.vals.mcast_tx_external().incr(1);
+                }
+                oxide_vpc::api::Replication::External => {
+                    // DTrace probe: external forwarding
+                    // Report on-wire multicast group as GROUP (underlay),
+                    // and configured next-hop leaf address as NEXTHOP.
+                    let outer_ip6 = oxide_vpc::api::Ipv6Addr::from(
+                        actual_outer_dst.bytes(),
+                    );
+                    let (af, addr_ptr) =
+                        (26usize, &outer_ip6 as *const _ as uintptr_t);
+                    __dtrace_probe_mcast__external__fwd(
+                        af,
+                        addr_ptr,
+                        ctx.vni.as_u32() as uintptr_t,
+                        &next_hop.addr,
+                    );
+
+                    // Increment external forwarding stat
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_tx_external().incr(1);
+
+                    // External mode: Unicast Geneve to switch (boundary service) via underlay.
+                    // Switch decaps and replicates to ports set for external multicast traffic
+                    // (egress to external networks, leaving the underlay).
+                    postbox.post_underlay(
+                        underlay_idx,
+                        TxHint::from_crc32(ctx.l4_hash),
+                        final_pkt,
+                    );
+                }
+                _ => {
+                    // Reserved: should not reach here
+                }
+            }
+        }
+    }
+}
+
+/// Handle multicast packet reception from the underlay.
+///
+/// OPTE is always a leaf node in the multicast replication tree.
+/// This function only delivers packets to local subscribers.
+///
+/// The Replication type is TX-only (instructions to the switch), so the
+/// replication field is ignored on RX. Local delivery is based purely on
+/// subscriptions.
+fn handle_mcast_rx(
+    ctx: MulticastRxContext,
+    stream: &DlsStream,
+    devs: &DevMap,
+    postbox: &mut Postbox,
+) {
+    // DTrace probe: multicast RX entry
+    let (af, addr_ptr) = match &ctx.inner_dst {
+        oxide_vpc::api::IpAddr::Ip4(v4) => {
+            (2usize, v4 as *const _ as uintptr_t)
+        }
+        oxide_vpc::api::IpAddr::Ip6(v6) => {
+            (26usize, v6 as *const _ as uintptr_t)
+        }
+    };
+    __dtrace_probe_mcast__rx(af, addr_ptr, ctx.vni.as_u32() as uintptr_t);
+
+    // Subscription is keyed by underlay (outer) IPv6 multicast address.
+    // This uniquely identifies the multicast group across the fleet.
+    let group_key = {
+        let ip6 = oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
+        oxide_vpc::api::IpAddr::from(ip6)
+    };
+
+    // Deliver to all local subscribers. VNI validation and VPC isolation
+    // are handled by OPTE's inbound overlay layer.
+    if let Some(ports) = devs.mcast_listeners(&group_key) {
+        for el in ports {
+            let Ok(my_pkt) = ctx.pkt.pullup(NonZeroUsize::new(ctx.pullup_len))
+            else {
+                opte::engine::dbg!(
+                    "mcast RX pullup failed: requested {} bytes",
+                    ctx.pullup_len
+                );
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_rx_pullup_fail().incr(1);
+                __dtrace_probe_mcast__rx__pullup__fail(
+                    ctx.pullup_len as uintptr_t,
+                );
+                continue;
+            };
+            match devs.get_by_key(*el) {
+                Some(dev) => {
+                    // DTrace probe: RX local delivery
+                    let (af, addr_ptr) = match &ctx.inner_dst {
+                        oxide_vpc::api::IpAddr::Ip4(v4) => {
+                            (2usize, v4 as *const _ as uintptr_t)
+                        }
+                        oxide_vpc::api::IpAddr::Ip6(v6) => {
+                            (26usize, v6 as *const _ as uintptr_t)
+                        }
+                    };
+                    __dtrace_probe_mcast__local__delivery(
+                        af,
+                        addr_ptr,
+                        ctx.vni.as_u32() as uintptr_t,
+                        dev.port.name_cstr().as_ptr() as uintptr_t,
+                    );
+                    xde_rx_one_direct(stream, dev, *el, my_pkt, postbox);
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_rx_local().incr(1);
+                }
+                None => {
+                    let xde = get_xde_state();
+                    xde.stats.vals.mcast_rx_stale_local().incr(1);
+                }
+            }
+        }
+    } else {
+        // No subscription entry found for this multicast group
+        let underlay_ip6 =
+            oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
+        __dtrace_probe_mcast__no__fwd__entry(
+            &underlay_ip6,
+            ctx.vni.as_u32() as uintptr_t,
+        );
+        let xde = get_xde_state();
+        xde.stats.vals.mcast_rx_no_subscribers().incr(1);
     }
 }
 
@@ -1921,34 +2694,39 @@ unsafe extern "C" fn xde_mc_tx(
     let mut hairpin_chain = MsgBlkChain::empty();
     let mut tx_postbox = TxPostbox::new();
 
-    // We don't need to read-lock the port map unless we have local
-    // delivery to perform.
-    //
-    // TODO: really think this one through. This might expose us to the
-    // risk of double read-locking at the same time as the tokenlock
-    // wants to make some globally mutable operation happen.
-    //
-    // Maybe we should clone out the `DevMap` at this instant.
-    let mut entry_state = None;
+    // Clone per-CPU mcast forwarding table Arc and drop lock immediately.
+    // This makes the reader lock-free and avoids blocking management refreshes.
+    let cpu_index = current_cpu().seq_id;
+    let cpu_entry = &src_dev.u1.stream.ports_map[cpu_index];
+    let mcast_fwd = clone_from_rwlock(&cpu_entry.mcast_fwd);
+
+    // Lazily clone per-port DevMap Arc for hairpin/local delivery.
+    // Cloning the Arc (not holding a read guard) eliminates re-entrant
+    // read deadlock risk and avoids blocking management operations.
+    let mut cached_devmap: Option<Arc<DevMap>> = None;
 
     while let Some(pkt) = chain.pop_front() {
         xde_mc_tx_one(
             src_dev,
             pkt,
             &mut tx_postbox,
-            &mut entry_state,
+            cpu_entry,
+            &mut cached_devmap,
+            &mcast_fwd,
             &mut hairpin_chain,
         );
     }
 
     let (local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
 
-    if let Some(entry_state) = entry_state {
-        entry_state.deliver_all(local_pkts);
+    // Local same-sled delivery (via mac_rx to guest ports) is safe.
+    // Lazily clone DevMap if we have anything to deliver.
+    if !local_pkts.is_empty() {
+        let devs = cached_devmap
+            .get_or_insert_with(|| clone_from_rwlock(&src_dev.port_map));
+        devs.deliver_all(local_pkts);
     }
 
-    // `entry_state` has been moved, making it safe to deliver hairpin
-    // packets (which may cause us to re-enter XDE in the same stack).
     // All deliver/tx calls will NO-OP if the sent chain is empty.
     src_dev.deliver(hairpin_chain);
 
@@ -1972,7 +2750,9 @@ fn xde_mc_tx_one<'a>(
     src_dev: &'a XdeDev,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
-    entry_state: &mut Option<KRwLockReadGuard<'a, Arc<DevMap>>>,
+    cpu_entry: &'a PerEntryState,
+    cached_devmap: &mut Option<Arc<DevMap>>,
+    mcast_fwd: &'a Arc<McastForwardingTable>,
     hairpin_chain: &mut MsgBlkChain,
 ) {
     let parser = src_dev.port.network().parser();
@@ -1999,12 +2779,26 @@ fn xde_mc_tx_one<'a>(
     let old_len = parsed_pkt.len();
 
     let meta = parsed_pkt.meta();
+
+    // Extract inner destination IP for potential multicast processing
+    let inner_dst_ip = match &meta.inner_l3 {
+        Some(ValidL3::Ipv4(v4)) => {
+            Some(oxide_vpc::api::IpAddr::from(v4.destination()))
+        }
+        Some(ValidL3::Ipv6(v6)) => {
+            Some(oxide_vpc::api::IpAddr::from(v6.destination()))
+        }
+        None => None,
+    };
+
     let Ok(non_eth_payl_bytes) =
         u32::try_from((&meta.inner_l3, &meta.inner_ulp).packet_length())
     else {
         opte::engine::dbg!("sum of packet L3/L4 exceeds u32::MAX");
         return;
     };
+
+    let inner_eth_len = meta.inner_eth.packet_length();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -2030,8 +2824,7 @@ fn xde_mc_tx_one<'a>(
     let port = &src_dev.port;
 
     // The port processing code will fire a probe that describes what
-    // action was taken -- there should be no need to add probes or
-    // prints here.
+    // action was taken.
     let res = port.process(Direction::Out, parsed_pkt);
 
     match res {
@@ -2039,24 +2832,34 @@ fn xde_mc_tx_one<'a>(
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
-            let (ip6_src, ip6_dst) = match emit_spec.outer_ip6_addrs() {
-                Some(v) => v,
-                None => {
-                    // XXX add SDT probe
-                    // XXX add stat
-                    opte::engine::dbg!("no outer IPv6 header, dropping");
-                    return;
-                }
+            let Some((ip6_src, ip6_dst)) = emit_spec.outer_ip6_addrs() else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("no outer IPv6 header, dropping");
+                return;
             };
 
-            let vni = match emit_spec.outer_encap_vni() {
-                Some(vni) => vni,
-                None => {
-                    // XXX add SDT probe
-                    // XXX add stat
-                    opte::engine::dbg!("no geneve header, dropping");
-                    return;
-                }
+            // EmitSpec applies pushes/pops, but modifications will have occurred
+            // by this point. Pull destination MAC to allow us to reuse code
+            // between unicast & multicast loopback.
+            //
+            // Ingot will have asserted that Ethernet came first, and that it was
+            // contiguous.
+            let Some(ether_dst) = pkt
+                .get(..size_of::<MacAddr>())
+                .map(|v| MacAddr::from_const(v.try_into().unwrap()))
+            else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("couldn't re-read inner MAC, dropping");
+                return;
+            };
+
+            let Some(vni) = emit_spec.outer_encap_vni() else {
+                // XXX add SDT probe
+                // XXX add stat
+                opte::engine::dbg!("no geneve header, dropping");
+                return;
             };
 
             let Some(tun_meoi) = emit_spec.encap_meoi() else {
@@ -2072,9 +2875,24 @@ fn xde_mc_tx_one<'a>(
             let new_len = out_pkt.byte_len();
 
             if ip6_src == ip6_dst {
-                let entry_state =
-                    entry_state.get_or_insert_with(|| src_dev.port_map.read());
-                guest_loopback(src_dev, entry_state, out_pkt, vni, postbox);
+                // Hairpin loopback: same-host delivery
+                let key = VniMac::new(vni, ether_dst);
+                let devs = cached_devmap.get_or_insert_with(|| {
+                    clone_from_rwlock(&src_dev.port_map)
+                });
+                if let Some(dst_dev) = devs.get_by_key(key) {
+                    // We have found a matching Port on this host; "loop back"
+                    // the packet into the inbound processing path of the
+                    // destination Port.
+                    guest_loopback(src_dev, dst_dev, key, out_pkt, postbox);
+                } else {
+                    opte::engine::dbg!(
+                        "underlay dest is same as src but the Port was not found \
+                         vni = {}, mac = {}",
+                        vni.as_u32(),
+                        ether_dst
+                    );
+                }
                 return;
             }
 
@@ -2085,6 +2903,73 @@ fn xde_mc_tx_one<'a>(
                 );
                 return;
             };
+
+            // Multicast interception: All packets (unicast and multicast) go
+            // through normal `port.process()` which applies router/firewall
+            // rules and uses M2P for multicast encapsulation. Here, we
+            // intercept multicast packets for replication to multiple next-hops
+            // and local delivery to subscribers.
+            //
+            // Check if this is a multicast packet by examining the outer IPv6
+            // destination. For multicast, OPTE should have set it to an
+            // ff0x:: address (via M2P table).
+            let is_mcast_packet = ip6_dst.is_multicast();
+
+            if is_mcast_packet {
+                // This is a multicast packet, so we determine the inner
+                // destination from the packet contents or use a fallback
+                let inner_dst = inner_dst_ip.unwrap_or_else(|| {
+                    // Fallback: derive from outer IPv6 multicast address
+                    // For IPv4 multicast mapped to IPv6, the last 4 bytes
+                    // contain the IPv4 address
+                    if ip6_dst.bytes()[0] == 0xff && ip6_dst.bytes()[1] == 0x04
+                    {
+                        // Admin-scoped IPv6 multicast, likely mapped from IPv4
+                        let bytes = ip6_dst.bytes();
+                        oxide_vpc::api::IpAddr::Ip4(
+                            oxide_vpc::api::Ipv4Addr::from([
+                                bytes[12], bytes[13], bytes[14], bytes[15],
+                            ]),
+                        )
+                    } else {
+                        // Use the IPv6 multicast address directly
+                        oxide_vpc::api::IpAddr::Ip6(ip6_dst)
+                    }
+                });
+
+                // Lazily obtain per-port DevMap for local delivery.
+                // Use fast-path check to avoid locking when no local subscribers exist.
+                let devs = if cached_devmap.is_none()
+                    && !cpu_entry.has_mcast_subscribers.load(Ordering::Relaxed)
+                {
+                    // Fast path: no subscribers, skip `DevMap` entirely
+                    None
+                } else {
+                    // Either we already have `DevMap`, or we need to get it
+                    Some(cached_devmap.get_or_insert_with(|| {
+                        clone_from_rwlock(&src_dev.port_map)
+                    }))
+                };
+
+                handle_mcast_tx(
+                    MulticastTxContext {
+                        inner_dst,
+                        underlay_dst: ip6_dst,
+                        vni,
+                        out_pkt: &out_pkt,
+                        encap_len,
+                        inner_eth_len,
+                        non_eth_payl_bytes,
+                        tun_meoi: &tun_meoi,
+                        l4_hash,
+                    },
+                    src_dev,
+                    postbox,
+                    devs.as_deref().map(|v| &**v),
+                    mcast_fwd,
+                );
+                return;
+            }
 
             // 'MSS boosting' is performed here -- we set a 9k (minus overheads)
             // MSS for compatible TCP traffic. This is a kind of 'pseudo-GRO',
@@ -2185,10 +3070,10 @@ fn xde_mc_tx_one<'a>(
         Ok(ProcessResult::Drop { .. }) => {}
 
         Ok(ProcessResult::Hairpin(hpkt)) => {
-            // From the theory statement, if we have a packet chain
-            // from above which contains a mixture of hairpin and local
-            // deliveries (`guest_loopback`) we can only deliver hairpin
-            // packets once `entry_state` is explicitly dropped.
+            // Hairpin packets are queued for later delivery. If we have a
+            // packet chain containing both hairpin and local deliveries
+            // (via `guest_loopback`), we defer hairpin delivery until after
+            // local delivery completes to avoid potential re-entrancy issues.
             hairpin_chain.append(hpkt);
         }
 
@@ -2333,6 +3218,7 @@ fn new_port(
     name: String,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
+    m2p: Arc<overlay::Mcast2Phys>,
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
@@ -2353,10 +3239,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE, dhcp_cfg)?;
+    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE, dhcp_cfg)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -2368,7 +3254,8 @@ fn new_port(
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork { cfg };
-    Ok(Arc::new(pb.create(net, limit, limit)?))
+    let port = Arc::new(pb.create(net, limit, limit)?);
+    Ok(port)
 }
 
 #[unsafe(no_mangle)]
@@ -2408,17 +3295,20 @@ unsafe extern "C" fn xde_rx(
     let mut count = 0;
     let mut len = 0;
 
-    // Acquire our own dev map -- this gives us access to prebuilt postboxes
-    // for all active ports. We don't worry about this changing for rx -- caller
-    // threads here (interrupt contexts, poll threads, fanout, worker threads)
-    // are all bound to a given CPU each by MAC.
+    // Clone per-CPU DevMap Arc and drop lock immediately.
+    // This makes RX readers lock-free and avoids blocking management refreshes.
+    //
+    // Safety: `devmap` holds `Arc<DevMap>`, which contains `Arc<XdeDev>` entries.
+    // This reference chain keeps all ports in this snapshot alive throughout
+    // packet processing, ensuring `deliver_all()` operates on live `XdeDev`
+    // instances even if ports are concurrently removed from the canonical map.
     let cpu_index = current_cpu().seq_id;
-    let cpu_state = stream.ports_map[cpu_index].devs.lock();
+    let devmap = clone_from_mutex(&stream.ports_map[cpu_index].devs);
     let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
         if let Some(pkt) =
-            xde_rx_one(&stream.stream, pkt, &cpu_state, &mut postbox)
+            xde_rx_one(&stream.stream, pkt, &devmap, &mut postbox)
         {
             count += 1;
             len += pkt.byte_len();
@@ -2426,7 +3316,7 @@ unsafe extern "C" fn xde_rx(
         }
     }
 
-    cpu_state.deliver_all(postbox);
+    devmap.deliver_all(postbox);
 
     let (head, tail) = out_chain
         .unwrap_head_and_tail()
@@ -2454,10 +3344,17 @@ unsafe extern "C" fn xde_rx(
     head
 }
 
-/// Processes an individual packet receiver on the underlay device `stream`.
+/// Processes an individual packet received on the underlay device `stream`.
 ///
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
+///
+/// `xde_rx_one_direct` largely replicates this function due to lifetime issues
+/// around parsing, so changes here may need to be made there too. We could do this
+/// with a single function using an `enum` control parameter (e.g.,
+/// `DoMcastCheck(&DevMap)`, `DeliverDirect(&XdeDev, VniMac)`) but we'd be
+/// really reliant on rustc interpreting these as static choices and inlining
+/// accordingly.
 #[inline]
 fn xde_rx_one(
     stream: &DlsStream,
@@ -2489,6 +3386,82 @@ fn xde_rx_one(
 
     let meta = parsed_pkt.meta();
     let old_len = parsed_pkt.len();
+
+    let ip6_dst = meta.outer_v6.destination();
+    if ip6_dst.is_multicast() {
+        // Fast path: if no multicast subscribers exist, drop immediately
+        if !devs.has_mcast_subscribers() {
+            return None;
+        }
+
+        let pullup_len = (
+            &meta.outer_eth,
+            &meta.outer_v6,
+            &meta.outer_udp,
+            &meta.outer_encap,
+            &meta.inner_eth,
+            &meta.inner_l3,
+            &meta.inner_ulp,
+        )
+            .packet_length();
+        debug_assert!(
+            pullup_len > 0,
+            "pullup_len should be non-zero for valid multicast packet"
+        );
+        let vni = meta.outer_encap.vni();
+
+        // Validate Geneve options per RFC 8926
+        if let Err(e) =
+            oxide_vpc::engine::geneve::validate_options(&meta.outer_encap)
+        {
+            stat_parse_error(Direction::In, &e);
+            opte::engine::dbg!(
+                "Invalid Geneve options in multicast packet: {:?}",
+                e
+            );
+            bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
+            return Some(pkt);
+        }
+
+        // Extract inner destination IP for multicast processing
+        let inner_dst = match &meta.inner_l3 {
+            ValidL3::Ipv4(v4) => oxide_vpc::api::IpAddr::from(v4.destination()),
+            ValidL3::Ipv6(v6) => oxide_vpc::api::IpAddr::from(v6.destination()),
+        };
+
+        // Extract multicast delivery mode from Geneve options
+        // (Safe to be lenient for non-critical parse errors after validation above)
+        let incoming_delivery_mode =
+            oxide_vpc::engine::geneve::extract_multicast_replication(
+                &meta.outer_encap,
+            );
+
+        // Calculate Geneve offset from parsed outer header lengths (robust to VLANs and IPv6 extensions)
+        let geneve_offset = meta.outer_eth.packet_length()
+            + meta.outer_v6.packet_length()
+            + meta.outer_udp.packet_length();
+
+        // Drop the parsed packet before calling handle_mcast_rx
+        drop(parsed_pkt);
+
+        // Handle multicast packets, delivering to local subscribers only
+        // (leaf node)
+        handle_mcast_rx(
+            MulticastRxContext {
+                inner_dst,
+                underlay_dst: ip6_dst,
+                vni,
+                pkt: &pkt,
+                pullup_len,
+                _geneve_offset: geneve_offset,
+                _incoming_delivery_mode: incoming_delivery_mode,
+            },
+            stream,
+            devs,
+            postbox,
+        );
+        return None;
+    }
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
         Ok(ulp_meoi) => ulp_meoi,
@@ -2595,6 +3568,117 @@ fn xde_rx_one(
     None
 }
 
+/// Processes an individual packet after multicast replication has taken place.
+/// This primarily duplicates `xde_rx_one`.
+///
+/// Lifetimes (arond Packet<LiteParsed> etc.) will make this difficult to simplify
+/// the expression of both this and its original implementation. We could insert
+/// the body using macros, but then we really lose a lot (line numbers on crash,
+/// subpar rust-analyzer integration)...
+#[inline]
+fn xde_rx_one_direct(
+    stream: &DlsStream,
+    dev: &XdeDev,
+    port_key: VniMac,
+    mut pkt: MsgBlk,
+    postbox: &mut Postbox,
+) {
+    // TODO: it would be great if we could tell Ingot 'here are all the
+    // layer lengths/types, please believe that they are correct'. And then
+    // to plumb that through `NetworkParser`. I can't say that I *like*
+    // doing this reparse here post-replication.
+    let parser = VpcParser {};
+    let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
+        .expect("this is a reparse of a known-valid packet");
+
+    let meta = parsed_pkt.meta();
+    let old_len = parsed_pkt.len();
+
+    let ulp_meoi = match meta.ulp_meoi(old_len) {
+        Ok(ulp_meoi) => ulp_meoi,
+        Err(e) => {
+            opte::engine::dbg!("{}", e);
+            return;
+        }
+    };
+
+    let non_payl_bytes = u32::from(ulp_meoi.meoi_l2hlen)
+        + u32::from(ulp_meoi.meoi_l3hlen)
+        + u32::from(ulp_meoi.meoi_l4hlen);
+
+    // Large TCP frames include their MSS in-band, as recipients can require
+    // this to correctly process frames which have been given split into
+    // larger chunks.
+    //
+    // This will be set to a nonzero value when TSO has been asked of the
+    // source packet.
+    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
+    let recovered_mss = if is_tcp {
+        let mut out = None;
+        for opt in WalkOptions::from_raw(&meta.outer_encap) {
+            let Ok(opt) = opt else { break };
+            if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
+                out = NonZeroU32::new(el.mss());
+                break;
+            }
+        }
+        out
+    } else {
+        None
+    };
+
+    // We are in passthrough mode, skip OPTE processing.
+    if dev.passthrough {
+        drop(parsed_pkt);
+        postbox.post(port_key, pkt);
+        return;
+    }
+
+    let port = &dev.port;
+
+    let res = port.process(Direction::In, parsed_pkt);
+
+    match res {
+        Ok(ProcessResult::Modified(emit_spec)) => {
+            let mut npkt = emit_spec.apply(pkt);
+            let len = npkt.byte_len();
+            let pay_len = len
+                - usize::try_from(non_payl_bytes)
+                    .expect("usize > 32b on x86_64");
+
+            // Due to possible pseudo-GRO, we need to inform mac/viona on how
+            // it can split up this packet, if the guest cannot receive it
+            // (e.g., no GRO/large frame support).
+            // HW_LSO will cause viona to treat this packet as though it were
+            // a locally delivered segment making use of LSO.
+            if let Some(mss) = recovered_mss
+                // This packet could be the last segment of a split frame at
+                // which point it could be smaller than the original MSS.
+                // Don't re-tag the MSS if so, as guests may be confused and
+                // MAC emulation will reject the packet if the guest does not
+                // support GRO.
+                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+            {
+                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+            }
+
+            if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
+                opte::engine::err!("failed to set offload info: {}", e);
+            }
+
+            postbox.post(port_key, npkt);
+        }
+        Ok(ProcessResult::Hairpin(hppkt)) => {
+            stream.tx_drop_on_no_desc(
+                hppkt,
+                TxHint::NoneOrMixed,
+                MacTxFlags::empty(),
+            );
+        }
+        _ => {}
+    }
+}
+
 #[unsafe(no_mangle)]
 fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: AddRouterEntryReq = env.copy_in_req()?;
@@ -2683,6 +3767,70 @@ fn dump_v2p_hdlr() -> Result<DumpVirt2PhysResp, OpteError> {
 }
 
 #[unsafe(no_mangle)]
+fn set_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetMcast2PhysReq = env.copy_in_req()?;
+
+    // Validate underlay multicast address is admin-local IPv6 (ff04::/16 only)
+    // Per Omicron constraints: underlay must be admin-local for rack-internal routing
+    if !req.underlay.is_admin_scoped_multicast() {
+        return Err(OpteError::InvalidUnderlayMulticast(format!(
+            "underlay multicast address must be admin-local IPv6 (ff04::/16), got: {}",
+            req.underlay
+        )));
+    }
+
+    // All multicast uses fleet-wide DEFAULT_MULTICAST_VNI (77)
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
+    let state = get_xde_state();
+    // Underlay address validated above as admin-local (ff04::/16)
+    state.m2p.set(req.group, overlay::MulticastUnderlay(req.underlay));
+
+    // DTrace: multicast map set
+    let (af, group_ptr): (usize, uintptr_t) = match req.group {
+        oxide_vpc::api::IpAddr::Ip4(v4) => {
+            (2usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
+        }
+        oxide_vpc::api::IpAddr::Ip6(v6) => {
+            (26usize, AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t)
+        }
+    };
+    __dtrace_probe_mcast__map__set(
+        af as uintptr_t,
+        group_ptr,
+        &req.underlay,
+        vni.as_u32() as uintptr_t,
+    );
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: ClearMcast2PhysReq = env.copy_in_req()?;
+
+    // All multicast uses fleet-wide DEFAULT_MULTICAST_VNI (77)
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
+    let state = get_xde_state();
+    state.m2p.remove(&req.group);
+
+    // DTrace: multicast map clear
+    let (af, group_ptr): (usize, uintptr_t) = match req.group {
+        oxide_vpc::api::IpAddr::Ip4(v4) => {
+            (2usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
+        }
+        oxide_vpc::api::IpAddr::Ip6(v6) => {
+            (26usize, AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t)
+        }
+    };
+    __dtrace_probe_mcast__map__clear(
+        af as uintptr_t,
+        group_ptr,
+        &req.underlay,
+        vni.as_u32() as uintptr_t,
+    );
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
 fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
@@ -2702,6 +3850,347 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn dump_v2b_hdlr() -> Result<DumpVirt2BoundaryResp, OpteError> {
     let state = get_xde_state();
     Ok(state.v2b.dump())
+}
+
+#[unsafe(no_mangle)]
+fn set_mcast_forwarding_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<NoResp, OpteError> {
+    let req: SetMcastForwardingReq = env.copy_in_req()?;
+    let state = get_xde_state();
+
+    // Validate underlay address is admin-local IPv6 multicast (ff04::/16 only)
+    if !req.underlay.is_admin_scoped_multicast() {
+        return Err(OpteError::InvalidUnderlayMulticast(format!(
+            "underlay multicast address must be admin-local IPv6 (ff04::/16), got: {}",
+            req.underlay
+        )));
+    }
+
+    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication modes.
+    // NextHopV6.addr must be unicast (switch address for routing).
+    // The packet will be sent to the multicast address (req.underlay).
+    for (nh, _rep) in &req.next_hops {
+        if nh.vni.as_u32() != DEFAULT_MULTICAST_VNI {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "multicast next-hop VNI must be DEFAULT_MULTICAST_VNI ({DEFAULT_MULTICAST_VNI}), got: {}",
+                    nh.vni.as_u32()
+                ),
+            });
+        }
+
+        // NextHopV6.addr must be unicast (the switch endpoint for routing).
+        // The actual packet destination is the multicast address (req.underlay).
+        if nh.addr.is_multicast() {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "NextHopV6.addr must be unicast (switch address), got multicast: {}",
+                    nh.addr
+                ),
+            });
+        }
+    }
+
+    // Record next-hop count and copy underlay before consuming the vector
+    let next_hop_count = req.next_hops.len();
+    let underlay = req.underlay;
+
+    let token = state.management_lock.lock();
+    {
+        let mut mcast_fwd = token.mcast_fwd.write();
+
+        // Get or create the next-hop map for this underlay address
+        let next_hop_map =
+            mcast_fwd.entry(underlay).or_insert_with(BTreeMap::new);
+
+        // Insert/update next-hops: same next-hop addr → replace replication mode,
+        // different next-hop addr → add new entry (like swadm route add)
+        for (nh, rep) in req.next_hops {
+            next_hop_map.insert(nh, rep);
+        }
+
+        drop(mcast_fwd);
+    }
+
+    // Refresh cached copies in all ports and underlay devices
+    {
+        let devs = token.devs.write();
+        if let Some(underlay) = token.underlay.as_ref() {
+            refresh_maps(devs, underlay, &token.mcast_fwd);
+        }
+    }
+
+    // DTrace: forwarding set
+    __dtrace_probe_mcast__fwd__set(
+        &underlay,
+        next_hop_count as uintptr_t,
+        DEFAULT_MULTICAST_VNI as uintptr_t,
+    );
+
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn clear_mcast_forwarding_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<NoResp, OpteError> {
+    let req: ClearMcastForwardingReq = env.copy_in_req()?;
+    let state = get_xde_state();
+
+    let token = state.management_lock.lock();
+    {
+        let mut mcast_fwd = token.mcast_fwd.write();
+        mcast_fwd.remove(&req.underlay);
+        drop(mcast_fwd);
+    }
+
+    // Refresh cached copies in all ports and underlay devices
+    {
+        let devs = token.devs.write();
+        if let Some(underlay) = token.underlay.as_ref() {
+            refresh_maps(devs, underlay, &token.mcast_fwd);
+        }
+    }
+
+    // DTrace: forwarding clear
+    __dtrace_probe_mcast__fwd__clear(
+        &req.underlay,
+        DEFAULT_MULTICAST_VNI as uintptr_t,
+    );
+
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn dump_mcast_forwarding_hdlr() -> Result<DumpMcastForwardingResp, OpteError> {
+    let state = get_xde_state();
+
+    let token = state.management_lock.lock();
+    let mcast_fwd = token.mcast_fwd.read();
+
+    let entries: Vec<McastForwardingEntry> = mcast_fwd
+        .iter()
+        .map(|(underlay, next_hops)| McastForwardingEntry {
+            underlay: *underlay,
+            next_hops: next_hops.iter().map(|(nh, rep)| (*nh, *rep)).collect(),
+        })
+        .collect();
+
+    Ok(DumpMcastForwardingResp { entries })
+}
+
+fn dump_mcast_subscriptions_hdlr()
+-> Result<DumpMcastSubscriptionsResp, OpteError> {
+    let state = get_xde_state();
+    let token = state.management_lock.lock();
+    let devs = token.devs.read();
+
+    let mut entries: alloc::vec::Vec<McastSubscriptionEntry> =
+        alloc::vec::Vec::new();
+    for (group, ports) in devs.dump_mcast_subscriptions().into_iter() {
+        if let opte::api::IpAddr::Ip6(underlay) = group {
+            entries.push(McastSubscriptionEntry { underlay, ports });
+        }
+    }
+
+    Ok(DumpMcastSubscriptionsResp { entries })
+}
+
+#[unsafe(no_mangle)]
+fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: McastSubscribeReq = env.copy_in_req()?;
+    let state = get_xde_state();
+
+    // Update under management lock so we can refresh DevMap views used by TX/RX
+    let token = state.management_lock.lock();
+    {
+        let mut devs = token.devs.write();
+        // Subscriptions are keyed on the underlay (outer) IPv6 multicast address.
+        // If the caller supplied an overlay group, translate it via the M2P table.
+        // First, reject non-multicast inputs to preserve DevMap error semantics.
+        if !req.group.is_multicast() {
+            return Err(OpteError::BadState(format!(
+                "IP address {} is not a multicast address",
+                req.group
+            )));
+        }
+        let group_key = match req.group {
+            oxide_vpc::api::IpAddr::Ip6(ip6) => {
+                // If an overlay->underlay mapping exists, use it; otherwise, if the
+                // provided address is already an admin-scoped multicast (ff04::/16),
+                // accept it as-is. Otherwise, reject.
+                if let Some(mu) =
+                    state.m2p.get(&oxide_vpc::api::IpAddr::Ip6(ip6))
+                {
+                    oxide_vpc::api::IpAddr::Ip6(mu.0)
+                } else if ip6.is_admin_scoped_multicast() {
+                    oxide_vpc::api::IpAddr::Ip6(ip6)
+                } else {
+                    return Err(OpteError::BadState(
+                        "no underlay mapping for IPv6 multicast group".into(),
+                    ));
+                }
+            }
+            oxide_vpc::api::IpAddr::Ip4(_v4) => {
+                // IPv4 overlay groups must have an M2P mapping; the subscription key
+                // is the underlay IPv6 multicast. Without a mapping, reject with
+                // a clear message (callers may rely on this distinction).
+                if let Some(mu) = state.m2p.get(&req.group) {
+                    oxide_vpc::api::IpAddr::Ip6(mu.0)
+                } else {
+                    return Err(OpteError::BadState(
+                        "no underlay mapping for IPv4 multicast group".into(),
+                    ));
+                }
+            }
+        };
+
+        devs.mcast_subscribe(&req.port_name, group_key)?;
+
+        // DTrace: subscribe
+        let (af, group_ptr): (usize, uintptr_t) = match group_key {
+            oxide_vpc::api::IpAddr::Ip4(v4) => {
+                (2usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
+            }
+            oxide_vpc::api::IpAddr::Ip6(v6) => {
+                (26usize, AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t)
+            }
+        };
+        if let Ok(port_cstr) = CString::new(req.port_name.clone()) {
+            __dtrace_probe_mcast__subscribe(
+                port_cstr.as_ptr() as uintptr_t,
+                af as uintptr_t,
+                group_ptr,
+                DEFAULT_MULTICAST_VNI as uintptr_t,
+            );
+        }
+        refresh_maps(
+            devs,
+            token
+                .underlay
+                .as_ref()
+                .expect("underlay must exist while ports exist"),
+            &token.mcast_fwd,
+        );
+    }
+
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn mcast_unsubscribe_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<NoResp, OpteError> {
+    let req: McastUnsubscribeReq = env.copy_in_req()?;
+    let state = get_xde_state();
+
+    // Update under management lock so we can refresh DevMap views used by TX/RX
+    let token = state.management_lock.lock();
+    {
+        let mut devs = token.devs.write();
+
+        // Verify the port exists, maintaining consistency with other operations
+        // and ensures we're not silently accepting operations on non-existent
+        // ports. This check happens before M2P translation to provide clear
+        // error semantics.
+        if devs.get_by_name(&req.port_name).is_none() {
+            return Err(OpteError::PortNotFound(req.port_name.clone()));
+        }
+
+        // Reject non-multicast input to preserve API use and match subscribe
+        // semantics.
+        if !req.group.is_multicast() {
+            return Err(OpteError::BadState(format!(
+                "IP address {} is not a multicast address",
+                req.group
+            )));
+        }
+
+        // Translate overlay group to underlay IPv6 if M2P mapping exists.
+        // For unsubscribe, if no M2P mapping exists, we return success (no-op).
+        // This makes unsubscribe idempotent and handles cleanup race conditions
+        // where M2P mappings may be removed before unsubscribe is called.
+        let group_key =
+            match req.group {
+                oxide_vpc::api::IpAddr::Ip6(ip6) => {
+                    if let Some(mu) =
+                        state.m2p.get(&oxide_vpc::api::IpAddr::Ip6(ip6))
+                    {
+                        oxide_vpc::api::IpAddr::Ip6(mu.0)
+                    } else {
+                        // For IPv6 without M2P mapping, we can't determine the
+                        // exact underlay address due to Omicron's XOR folding.
+                        // `External` IPv6 addresses are mapped to different
+                        // underlay IPv6 addresses (both in ff04::/16 but
+                        // different values). Without the mapping, we return
+                        // success. The subscription was either never created
+                        // (because subscribe would have failed without M2P)
+                        // or was already cleaned up when the M2P was removed.
+                        refresh_maps(
+                            devs,
+                            token.underlay.as_ref().expect(
+                                "underlay must exist while ports exist",
+                            ),
+                            &token.mcast_fwd,
+                        );
+                        return Ok(NoResp::default());
+                    }
+                }
+                oxide_vpc::api::IpAddr::Ip4(_v4) => {
+                    if let Some(mu) = state.m2p.get(&req.group) {
+                        oxide_vpc::api::IpAddr::Ip6(mu.0)
+                    } else {
+                        // For IPv4 without M2P mapping, we can't determine the underlay
+                        // group, but we should still succeed (idempotent cleanup).
+                        // Since subscriptions use underlay IPv6 addresses as keys,
+                        // and we don't know what that would have been, we simply
+                        // return success. The subscription was either never created
+                        // (because subscribe would have failed without M2P) or was
+                        // already cleaned up when the M2P was removed.
+                        refresh_maps(
+                            devs,
+                            token.underlay.as_ref().expect(
+                                "underlay must exist while ports exist",
+                            ),
+                            &token.mcast_fwd,
+                        );
+                        return Ok(NoResp::default());
+                    }
+                }
+            };
+
+        devs.mcast_unsubscribe(&req.port_name, group_key)?;
+        // DTrace: unsubscribe
+        let (af, group_ptr): (usize, uintptr_t) = match group_key {
+            oxide_vpc::api::IpAddr::Ip4(v4) => {
+                (2usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
+            }
+            oxide_vpc::api::IpAddr::Ip6(v6) => {
+                (26usize, AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t)
+            }
+        };
+        if let Ok(port_cstr) = CString::new(req.port_name.clone()) {
+            __dtrace_probe_mcast__unsubscribe(
+                port_cstr.as_ptr() as uintptr_t,
+                af as uintptr_t,
+                group_ptr,
+                DEFAULT_MULTICAST_VNI as uintptr_t,
+            );
+        }
+        refresh_maps(
+            devs,
+            token
+                .underlay
+                .as_ref()
+                .expect("underlay must exist while ports exist"),
+            &token.mcast_fwd,
+        );
+    }
+
+    Ok(NoResp::default())
 }
 
 #[unsafe(no_mangle)]

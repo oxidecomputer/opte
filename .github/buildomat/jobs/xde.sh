@@ -14,6 +14,9 @@
 #:   "=/work/release/xde_link.so",
 #:   "=/work/release/xde_link.so.sha256",
 #:   "=/work/test/loopback",
+#:   "=/work/test/multicast_rx",
+#:   "=/work/test/multicast_multi_sub",
+#:   "=/work/test/multicast_validation",
 #:   "=/work/xde.conf",
 #: ]
 #:
@@ -116,5 +119,23 @@ loopback_test=$(
     cargo build -q --test loopback --message-format=json |\
     jq -r "select(.profile.test == true) | .filenames[]"
 )
+cargo build --test multicast_rx
+multicast_rx_test=$(
+    cargo build -q --test multicast_rx --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+cargo build --test multicast_multi_sub
+multicast_multi_sub_test=$(
+    cargo build -q --test multicast_multi_sub --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+cargo build --test multicast_validation
+multicast_validation_test=$(
+    cargo build -q --test multicast_validation --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
 mkdir -p /work/test
 cp $loopback_test /work/test/loopback
+cp $multicast_rx_test /work/test/multicast_rx
+cp $multicast_multi_sub_test /work/test/multicast_multi_sub
+cp $multicast_validation_test /work/test/multicast_validation

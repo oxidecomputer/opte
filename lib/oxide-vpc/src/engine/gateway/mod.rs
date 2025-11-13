@@ -56,6 +56,8 @@ use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
+use opte::engine::ip::v4::Ipv4Cidr;
+use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -173,7 +175,7 @@ fn setup_ipv4(
 
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
 
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
     ]));
@@ -196,6 +198,39 @@ fn setup_ipv4(
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
 
+    // IPv4 multicast prefixes (224.0.0.0/4)
+    let ipv4_mcast = vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)];
+
+    // Outbound IPv4 multicast - allow from guest's MAC to multicast destinations.
+    //
+    // NOTE: This unconditionally allows any dst IP in 224.0.0.0/4 (all IPv4 multicast).
+    // The overlay layer enforces M2P mappings and underlay address validation.
+    //
+    // Because these gateway rules are unconditional (no destination filtering),
+    // custom firewall routes can target ANY IP range to a multicast group,
+    // enabling intra-VPC use cases.
+    let mut mcast_out_v4 = Rule::new(1001, Action::Meta(vpc_meta.clone()));
+    mcast_out_v4.add_predicate(Predicate::InnerDstIp4(ipv4_mcast.clone()));
+    mcast_out_v4.add_predicate(Predicate::InnerEtherSrc(vec![
+        EtherAddrMatch::Exact(cfg.guest_mac),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out_v4.finalize());
+
+    // Inbound IPv4 multicast - rewrite source MAC to gateway and allow
+    // This mirrors the IPv6 multicast inbound rule to ensure multicast
+    // delivery to guests is permitted by the gateway layer.
+    let mut mcast_in_v4 = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in_v4.add_predicate(Predicate::InnerDstIp4(ipv4_mcast));
+    mcast_in_v4.add_predicate(Predicate::InnerEtherDst(vec![
+        EtherAddrMatch::Multicast,
+    ]));
+    layer.add_rule(Direction::In, mcast_in_v4.finalize());
+
     Ok(())
 }
 
@@ -209,7 +244,7 @@ fn setup_ipv6(
     icmpv6::setup(layer, cfg, ip_cfg)?;
     dhcpv6::setup(layer, cfg, dhcp_cfg)?;
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
     ]));
@@ -231,6 +266,40 @@ fn setup_ipv6(
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
+
+    // IPv6 multicast prefix (ff00::/8)
+    // Allow any overlay multicast address - the underlay (ff04::/16) restriction
+    // is enforced by M2P mappings and multicast forwarding validation, not here.
+    let ipv6_mcast = vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)];
+
+    // Outbound multicast - allow from guest's MAC to multicast destinations.
+    //
+    // NOTE: This unconditionally allows any dst IP in ff00::/8 (all IPv6 multicast).
+    // The overlay layer enforces M2P mappings, and only ff04::/16 underlay addresses
+    // are permitted by the M2P validation.
+    //
+    // Because these gateway rules are unconditional (no destination filtering),
+    // custom firewall routes can target ANY IP range to a multicast group,
+    // enabling intra-VPC use cases.
+    let mut mcast_out = Rule::new(1001, Action::Meta(vpc_meta.clone()));
+    mcast_out.add_predicate(Predicate::InnerDstIp6(ipv6_mcast.clone()));
+    mcast_out.add_predicate(Predicate::InnerEtherSrc(vec![
+        EtherAddrMatch::Exact(cfg.guest_mac),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
+    // Inbound multicast - rewrite source MAC to gateway
+    let mut mcast_in = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in.add_predicate(Predicate::InnerDstIp6(ipv6_mcast));
+    mcast_in.add_predicate(Predicate::InnerEtherDst(vec![
+        EtherAddrMatch::Multicast,
+    ]));
+    layer.add_rule(Direction::In, mcast_in.finalize());
 
     Ok(())
 }
