@@ -163,20 +163,20 @@ impl DevMap {
     /// Return a reference to an `XdeDev` using its address.
     #[inline]
     #[must_use]
-    pub fn get_by_key(&self, key: VniMac) -> Option<&Dev> {
-        self.devs.get(&key)
+    pub fn get_by_key(&self, key: VniMac) -> Option<&XdeDev> {
+        self.devs.get(&key).map(Arc::as_ref)
     }
 
     /// Return a reference to an `XdeDev` using its name.
     #[inline]
     #[must_use]
-    pub fn get_by_name(&self, name: &str) -> Option<&Dev> {
-        self.names.get(name)
+    pub fn get_by_name(&self, name: &str) -> Option<&XdeDev> {
+        self.names.get(name).map(Arc::as_ref)
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
-    pub fn iter(&self) -> impl Iterator<Item = &Dev> {
-        self.devs.values()
+    pub fn iter(&self) -> impl Iterator<Item = &XdeDev> {
+        self.devs.values().map(Arc::as_ref)
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
