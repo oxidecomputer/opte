@@ -313,7 +313,7 @@ impl From<alloc::ffi::NulError> for Error {
 //    passed to kstat_delete() in Drop. Multiple threads can safely read the same
 //    immutable pointer value.
 //
-// 2. Kernel manages concurrency: The kstat framework handles concurrent access to 
+// 2. Kernel manages concurrency: The kstat framework handles concurrent access to
 //    the underlying kernel structures via its own internal mechanisms.
 //
 // 3. Atomic statistics: Individual stats in `vals` use AtomicU64, ensuring each
