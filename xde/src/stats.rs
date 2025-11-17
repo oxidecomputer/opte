@@ -65,25 +65,25 @@ pub struct XdeStats {
     /// (unicast to boundary service for front panel egress).
     mcast_tx_external: KStatU64,
     /// The number of times a stale multicast listener was encountered
-    /// during local same-sled delivery (TX path).
+    /// during local same-sled delivery (Tx path).
     mcast_tx_stale_local: KStatU64,
     /// The number of multicast packets sent with no forwarding entry
-    /// in the mcast_fwd table (TX path).
+    /// in the mcast_fwd table (Tx path).
     mcast_tx_no_fwd_entry: KStatU64,
 
     /// The number of multicast packets received and delivered to local guest
     /// instances on this sled (decapsulated packets to same-sled OPTE ports).
     mcast_rx_local: KStatU64,
     /// The number of times a stale multicast listener was encountered
-    /// during local same-sled delivery (RX path).
+    /// during local same-sled delivery (Rx path).
     mcast_rx_stale_local: KStatU64,
     /// The number of multicast packets received with no local subscribers
     /// (no matching same-sled listeners for the multicast group).
     mcast_rx_no_subscribers: KStatU64,
-    /// The number of times a pullup operation failed during multicast TX
+    /// The number of times a pullup operation failed during multicast Tx
     /// (packet replication), causing a packet to be dropped.
     mcast_tx_pullup_fail: KStatU64,
-    /// The number of times a pullup operation failed during multicast RX
+    /// The number of times a pullup operation failed during multicast Rx
     /// (packet delivery/relay), causing a packet to be dropped.
     mcast_rx_pullup_fail: KStatU64,
 }

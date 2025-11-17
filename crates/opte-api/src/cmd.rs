@@ -58,6 +58,7 @@ pub enum OpteCmd {
     SetMcast2Phys = 105,          // set M2P mapping (group -> underlay mcast)
     ClearMcast2Phys = 106,        // clear M2P mapping
     DumpMcastSubscriptions = 107, // dump multicast subscription table
+    McastUnsubscribeAll = 108, // unsubscribe all ports from a multicast group
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -98,6 +99,7 @@ impl TryFrom<c_int> for OpteCmd {
             105 => Ok(Self::SetMcast2Phys),
             106 => Ok(Self::ClearMcast2Phys),
             107 => Ok(Self::DumpMcastSubscriptions),
+            108 => Ok(Self::McastUnsubscribeAll),
             _ => Err(()),
         }
     }

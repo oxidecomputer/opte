@@ -507,7 +507,7 @@ fn guest_to_guest_no_route() {
         RouterClass::System,
     )
     .unwrap();
-    update!(g1, ["incr:epoch", "set:router.rules.out=2"]);
+    update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
     let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt1);
@@ -4840,7 +4840,8 @@ fn test_ipv6_multicast_encapsulation() {
     // Add multicast forwarding entry BEFORE starting the port
     g1.m2p.set(
         mcast_dst.into(),
-        oxide_vpc::engine::overlay::MulticastUnderlay(mcast_underlay),
+        opte::api::MulticastUnderlay::new(mcast_underlay)
+            .expect("ff04::/16 is admin-scoped multicast"),
     );
 
     g1.port.start();
@@ -4945,7 +4946,8 @@ fn test_tcp_multicast_denied() {
 
     g1.m2p.set(
         mcast_dst.into(),
-        oxide_vpc::engine::overlay::MulticastUnderlay(mcast_underlay),
+        opte::api::MulticastUnderlay::new(mcast_underlay)
+            .expect("ff04::/16 is admin-scoped multicast"),
     );
 
     g1.port.start();

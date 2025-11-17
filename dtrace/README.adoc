@@ -67,7 +67,7 @@ a|`opte-tcp-flow-state.d`
 transition as well as the flow ID.
 
 a|`opte-mcast-delivery.d`
-|Track multicast TX/RX, local same-sled delivery, underlay forwarding, and
+|Track multicast Tx/Rx, local same-sled delivery, underlay forwarding, and
  external forwarding. Also tracks multicast control-plane operations (map
  set/clear, fwd set/clear, subscribe/unsubscribe, and dumps) to help correlate
  config changes with dataplane events. Optional toggles are in the script's

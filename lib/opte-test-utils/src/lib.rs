@@ -405,23 +405,21 @@ pub fn oxide_net_setup2(
         //
         // * ARP Gateway MAC addr
         // * ICMP Echo Reply for Gateway
-        // * DHCP Offer
-        // * DHCP Ack
-        // * Outbound unicast traffic from Guest IP + MAC address
-        // * Outbound multicast traffic from Guest IP + MAC address
+        // * DHCP Discover → Offer hairpin
+        // * DHCP Request → Ack hairpin
+        // * Outbound no-spoof from Guest IP + MAC (allows unicast and multicast)
         //
         // IPv6
         // ----
         //
-        // * NDP NA for Gateway
-        // * NDP RA for Gateway
-        // * Deny all other NDP
-        // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
         // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
+        // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
+        // * NDP RA for Gateway
+        // * NDP NA for Gateway
         // * DHCPv6
-        // * Outbound unicast traffic from Guest IPv6 + MAC Address
-        // * Outbound multicast traffic from Guest IPv6 + MAC Address
-        "set:gateway.rules.out=14",
+        // * Deny all other NDP
+        // * Outbound no-spoof from Guest IPv6 + MAC (allows unicast and multicast)
+        "set:gateway.rules.out=12",
         // * Allow all outbound traffic
         "set:firewall.rules.out=0",
         // * Outbound IPv4 SNAT
@@ -444,13 +442,12 @@ pub fn oxide_net_setup2(
     });
 
     updates.extend_from_slice(&[
-        // * IPv4 multicast passthrough
-        // * IPv6 multicast passthrough
+        // * Multicast passthrough (handles both IPv4 and IPv6)
         // * Allow guest to route to own subnet
-        "set:router.rules.out=3",
+        "set:router.rules.out=2",
         // * Outbound encap
         // * Inbound decap
-        // * Inbound mcast-vni-validator
+        // * Inbound VNI validator (multicast)
         "set:overlay.rules.in=2, overlay.rules.out=1",
     ]);
 

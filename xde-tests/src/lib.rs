@@ -30,6 +30,7 @@ use oxide_vpc::api::Ipv6Cfg;
 use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::McastSubscribeReq;
 use oxide_vpc::api::McastUnsubscribeReq;
+use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::PhysNet;
 use oxide_vpc::api::Ports;
 use oxide_vpc::api::RouterClass;
@@ -476,33 +477,10 @@ impl Drop for Xde {
     fn drop(&mut self) {
         // Clear underlay to release references to simnet/vnic devices,
         // allowing their cleanup to proceed. Driver remains loaded.
-        //
-        // Retry with backoff if EBUSY (in-flight TX may briefly hold refs).
-        // After cache clearing + siphon quiesce, refs should drain quickly.
         if let Ok(adm) = OpteHdl::open() {
-            for attempt in 1..=10 {
-                match adm.clear_xde_underlay() {
-                    Ok(_) => {
-                        if attempt > 1 {
-                            eprintln!(
-                                "clear_xde_underlay succeeded on attempt {attempt}"
-                            );
-                        }
-                        return;
-                    }
-                    Err(e) if e.to_string().contains("EBUSY") => {
-                        eprintln!(
-                            "clear_xde_underlay returned EBUSY on attempt {attempt}/10; retrying after 10ms"
-                        );
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(e) => {
-                        eprintln!("failed to clear xde underlay: {e}");
-                        return;
-                    }
-                }
+            if let Err(e) = adm.clear_xde_underlay() {
+                eprintln!("failed to clear xde underlay: {e}");
             }
-            eprintln!("failed to clear xde underlay after 10 retries (EBUSY)");
         }
     }
 }
@@ -604,11 +582,11 @@ pub fn ensure_underlay_admin_scoped_route_v6(interface: &str) -> Result<()> {
 /// All multicast groups use DEFAULT_MULTICAST_VNI (77) for fleet-wide multicast.
 pub struct MulticastGroup {
     pub group: IpAddr,
-    pub underlay: Ipv6Addr,
+    pub underlay: MulticastUnderlay,
 }
 
 impl MulticastGroup {
-    pub fn new(group: IpAddr, underlay: Ipv6Addr) -> Result<Self> {
+    pub fn new(group: IpAddr, underlay: MulticastUnderlay) -> Result<Self> {
         let hdl = OpteHdl::open()?;
         hdl.set_m2p(&SetMcast2PhysReq { group, underlay })?;
         Ok(Self { group, underlay })
@@ -762,11 +740,11 @@ pub fn two_node_topology_named(
     opte0.fw_allow_all()?;
 
     // Add a host route to the underlay address of opte0, through the link local
-    // address of sim0 as a nexthop through sim1. This is facilitating the flow
+    // address of sim0 as a next hop through sim1. This is facilitating the flow
     // of traffic from opte1 to opte0. When a packet enters opte1 (from vopte1)
     // destined for 10.0.0.1, opte will look up the v2p mapping which points to
     // fd44::1. That is the underlay address of opte0. The route below says:
-    // that address is reachable through the sim1 interface, with a nexthop of
+    // that address is reachable through the sim1 interface, with a next hop of
     // the sim0 interface. In the diagram above, that is the "upward" direction
     // of our simnet underlay loopback. The xde device uses the kernel's routing
     // tables to determine which underlay device to use. With this route in

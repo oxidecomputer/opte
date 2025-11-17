@@ -40,19 +40,21 @@
 //!        11 = Reserved
 //! ```
 //!
-//! ### Replication Semantics (TX-only instruction)
+//! ### Replication Semantics (Tx-only instruction)
 //!
-//! The [`Replication`] type is a TX-only instruction telling the switch which port groups
-//! to replicate outbound multicast packets to. On RX, OPTE ignores the replication field
-//! and performs local same-sled delivery based purely on subscriptions.
+//! The [`Replication`] type is a Tx-only instruction telling the switch which
+//! port groups to replicate outbound multicast packets to. On Rx, OPTE ignores
+//! the replication field and performs local same-sled delivery based purely on
+//! subscriptions.
 //!
-//! OPTE routes to next hop unicast address (for ALL modes) to determine reachability
-//! and underlay port/MAC. Packet destination is multicast ff04::/16 with multicast MAC.
+//! OPTE routes to next hop unicast address (for ALL modes) to determine
+//! reachability and underlay port/MAC. Packet destination is multicast
+//! ff04::/16 with multicast MAC.
 //!
 //! - **External**: Switch decaps and replicates to external-facing ports (front panel)
 //! - **Underlay**: Switch replicates to underlay ports (other sleds)
 //! - **Both**: Switch replicates to both external and underlay port groups (bifurcated)
-//! - **Local same-sled delivery**: Always happens regardless of the TX-only replication setting.
+//! - **Local same-sled delivery**: Always happens regardless of the replication setting.
 //!   Not an access control mechanism - local delivery is independent of replication mode.
 //!
 //! All multicast packets are encapsulated with fleet VNI 77 (`DEFAULT_MULTICAST_VNI`)

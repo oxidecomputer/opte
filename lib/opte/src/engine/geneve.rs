@@ -383,6 +383,15 @@ impl<'a, T: OptionCast<'a>> GeneveOptionParse<'a, T> {
     }
 }
 
+impl<'a, T: OptionCast<'a>> HeaderLen for GeneveOptionParse<'a, T> {
+    const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        // Option header (4 bytes) + body length (already padded to 4-byte boundary)
+        GeneveOpt::MINIMUM_LENGTH + self.body_remainder.len()
+    }
+}
+
 /// Marks whather a Geneve option has been successfuly interpreted as a known
 /// variant.
 pub enum Known<T> {

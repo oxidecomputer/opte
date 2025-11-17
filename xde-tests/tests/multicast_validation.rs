@@ -20,7 +20,9 @@ use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastSubscribeReq;
+use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
+use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::Vni;
@@ -50,12 +52,15 @@ fn test_subscribe_ff04_direct_without_m2p() -> Result<()> {
         xde_tests::two_node_topology_named("omicron1", "ff04a", "ff04b")?;
 
     // IPv6 admin-scoped multicast (ff04::/16) - already an underlay address
-    let underlay_mcast = Ipv6Addr::from([
+    let underlay_mcast = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 99,
-    ]);
+    ]))
+    .unwrap();
 
-    let res = topol.nodes[0].port.subscribe_multicast(underlay_mcast.into());
+    let res = topol.nodes[0]
+        .port
+        .subscribe_multicast(Ipv6Addr::from(underlay_mcast).into());
 
     assert!(
         res.is_ok(),
@@ -125,10 +130,11 @@ fn test_double_subscribe() -> Result<()> {
     const MCAST_PORT: u16 = 9999; // Avoid mDNS port 5353
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
-    let underlay = Ipv6Addr::from([
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 101,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
@@ -222,10 +228,11 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
     const MCAST_PORT: u16 = 9999; // Avoid mDNS port 5353
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
-    let underlay = Ipv6Addr::from([
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 103,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
@@ -291,14 +298,15 @@ fn test_set_mcast_fwd_rejects_non_default_vni() -> Result<()> {
     let hdl = OpteHdl::open()?;
 
     let mcast_group = Ipv4Addr::from([224, 1, 2, 200]);
-    let underlay = Ipv6Addr::from([
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 200,
-    ]);
+    ]))
+    .unwrap();
 
     let _mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
-    // Use a non-default VNI and multicast next-hop address checks separately
+    // Use a non-default VNI and multicast next hop address checks separately
     let bad_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI + 1)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
@@ -321,14 +329,15 @@ fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
     let hdl = OpteHdl::open()?;
 
     let mcast_group = Ipv4Addr::from([224, 1, 2, 201]);
-    let underlay = Ipv6Addr::from([
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 201,
-    ]);
+    ]))
+    .unwrap();
 
     let _mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
-    // Use a multicast address for next-hop (invalid)
+    // Use a multicast address for next hop (invalid)
     let bad_next_hop: Ipv6Addr = "ff04::1".parse().unwrap();
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
@@ -340,7 +349,7 @@ fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
         )],
     });
 
-    assert!(res.is_err(), "set_mcast_fwd should reject multicast next-hop");
+    assert!(res.is_err(), "set_mcast_fwd should reject multicast next hop");
     Ok(())
 }
 
@@ -383,17 +392,18 @@ fn test_unsubscribe_ipv6_non_underlay_scopes() -> Result<()> {
 
 #[test]
 fn test_multiple_nexthops_accumulate() -> Result<()> {
-    // Test that set_forwarding accumulates next-hops like `swadm route add`:
-    // - Same underlay + different next-hop → add
-    // - Same underlay + same next-hop → replace replication mode
+    // Test that set_forwarding accumulates next hops like `swadm route add`:
+    // - Same underlay + different next hop → add
+    // - Same underlay + same next hop → replace replication mode
     let topol = xde_tests::two_node_topology_named("omicron1", "mnha", "mnhb")?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 104]);
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
-    let underlay = Ipv6Addr::from([
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 104,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
@@ -412,7 +422,7 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
         .iter()
         .find(|e| e.underlay == underlay)
         .expect("missing forwarding entry");
-    assert_eq!(entry.next_hops.len(), 1, "Expected 1 next-hop after first set");
+    assert_eq!(entry.next_hops.len(), 1, "Expected 1 next hop after first set");
     assert_eq!(entry.next_hops[0].0.addr, switch_a);
     assert_eq!(entry.next_hops[0].1, Replication::External);
 
@@ -430,7 +440,7 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     assert_eq!(
         entry.next_hops.len(),
         2,
-        "Expected 2 next-hops after second set"
+        "Expected 2 next hops after second set"
     );
 
     let nexthop_a = entry
@@ -469,7 +479,7 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     assert_eq!(
         entry.next_hops.len(),
         2,
-        "Expected 2 next-hops after updating switch_a"
+        "Expected 2 next hops after updating switch_a"
     );
 
     let nexthop_a = entry
@@ -492,6 +502,104 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
         nexthop_b.1,
         Replication::Underlay,
         "switch_b should still have Underlay"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unsubscribe_all() -> Result<()> {
+    let topol =
+        xde_tests::two_node_topology_named("omicron1", "ualla", "uallb")?;
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 105]);
+
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        224, 1, 2, 105,
+    ]))
+    .unwrap();
+
+    let _mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
+
+    // Subscribe both ports
+    topol.nodes[0]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("port 0 subscribe should succeed");
+
+    topol.nodes[1]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("port 1 subscribe should succeed");
+
+    // Verify both ports are subscribed
+    let hdl = OpteHdl::open()?;
+    let subs = hdl.dump_mcast_subs()?;
+    let entry = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == underlay)
+        .expect("missing multicast subscription entry for group");
+
+    let p0 = topol.nodes[0].port.name().to_string();
+    let p1 = topol.nodes[1].port.name().to_string();
+    assert_eq!(
+        entry.ports.len(),
+        2,
+        "Expected 2 ports subscribed before unsubscribe_all"
+    );
+    assert!(
+        entry.ports.contains(&p0),
+        "expected {p0} to be subscribed; got {:?}",
+        entry.ports
+    );
+    assert!(
+        entry.ports.contains(&p1),
+        "expected {p1} to be subscribed; got {:?}",
+        entry.ports
+    );
+
+    // Unsubscribe all ports from the group
+    let res = hdl.mcast_unsubscribe_all(&McastUnsubscribeAllReq {
+        group: mcast_group.into(),
+    });
+    assert!(res.is_ok(), "mcast_unsubscribe_all should succeed, got: {res:?}");
+
+    // Verify no ports are subscribed
+    let subs = hdl.dump_mcast_subs()?;
+    let entry = subs.entries.iter().find(|e| e.underlay == underlay);
+    assert!(
+        entry.is_none(),
+        "Expected no subscription entry after unsubscribe_all, found: {entry:?}"
+    );
+
+    // Verify idempotence: calling again should succeed
+    let res = hdl.mcast_unsubscribe_all(&McastUnsubscribeAllReq {
+        group: mcast_group.into(),
+    });
+    assert!(
+        res.is_ok(),
+        "mcast_unsubscribe_all should be idempotent, got: {res:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_unsubscribe_all_without_m2p() -> Result<()> {
+    let _topol =
+        xde_tests::two_node_topology_named("omicron1", "uanm2pa", "uanm2pb")?;
+    let hdl = OpteHdl::open()?;
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 106]);
+
+    // Without M2P mapping, unsubscribe_all should be idempotent and succeed
+    let res = hdl.mcast_unsubscribe_all(&McastUnsubscribeAllReq {
+        group: mcast_group.into(),
+    });
+
+    assert!(
+        res.is_ok(),
+        "mcast_unsubscribe_all without M2P should succeed (idempotent), got: {res:?}"
     );
 
     Ok(())

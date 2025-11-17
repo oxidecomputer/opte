@@ -12,8 +12,8 @@ use alloc::collections::btree_set::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use opte::api::IpAddr;
 use opte::api::MacAddr;
+use opte::api::MulticastUnderlay;
 use opte::api::OpteError;
 use opte::api::Vni;
 use opte::ddi::sync::KRwLock;
@@ -41,9 +41,10 @@ impl VniMac {
 
 /// Shared ownership of an XDE port.
 ///
-/// Using `Arc<XdeDev>` ensures that ports remain live as long as any
-/// `DevMap` snapshot references them, even if the port is removed from
-/// the canonical map. This prevents use-after-free in concurrent delivery paths.
+/// `Arc<XdeDev>` provides shared ownership within a `DevMap`. Safety during
+/// concurrent operations comes from callers holding read locks on the `DevMap`
+/// for the duration of packet processing, which prevents port removal from
+/// completing while any handler is active.
 type Dev = Arc<XdeDev>;
 
 /// `BTreeMap`-accelerated lookup of XDE ports.
@@ -61,7 +62,14 @@ type Dev = Arc<XdeDev>;
 pub struct DevMap {
     devs: BTreeMap<VniMac, Dev>,
     names: BTreeMap<String, Dev>,
-    mcast_groups: BTreeMap<IpAddr, BTreeSet<VniMac>>,
+    /// Subscriptions keyed by underlay IPv6 multicast group (admin-scoped ff04::/16).
+    /// This table is sled-local and independent of any per-VPC VNI. VNI validation
+    /// and VPC isolation are enforced during inbound overlay decapsulation on the
+    /// destination port, not here.
+    ///
+    /// Rationale: multicast groups are fleet-wide; ports opt-in to receive a given
+    /// underlay group, and the overlay layer subsequently filters by VNI as appropriate.
+    mcast_groups: BTreeMap<MulticastUnderlay, BTreeSet<VniMac>>,
 }
 
 impl Default for DevMap {
@@ -89,10 +97,11 @@ impl DevMap {
     }
 
     /// Remove an `XdeDev` using its name.
+    ///
+    /// This also cleans up all multicast subscriptions for the removed port.
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
         let key = get_key(&self.names.remove(name)?);
 
-        // Clean up all multicast group subscriptions for this port
         self.mcast_groups.retain(|_group, subscribers| {
             subscribers.remove(&key);
             !subscribers.is_empty()
@@ -109,21 +118,15 @@ impl DevMap {
     pub fn mcast_subscribe(
         &mut self,
         name: &str,
-        mcast_ip: IpAddr,
+        mcast_underlay: MulticastUnderlay,
     ) -> Result<(), OpteError> {
-        // Validate that the IP is actually a multicast address
-        if !mcast_ip.is_multicast() {
-            return Err(OpteError::BadState(format!(
-                "IP address {mcast_ip} is not a multicast address"
-            )));
-        }
-
         let port = self
-            .get_by_name(name)
+            .names
+            .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
         let key = get_key(port);
 
-        self.mcast_groups.entry(mcast_ip).or_default().insert(key);
+        self.mcast_groups.entry(mcast_underlay).or_default().insert(key);
 
         Ok(())
     }
@@ -132,26 +135,32 @@ impl DevMap {
     pub fn mcast_unsubscribe(
         &mut self,
         name: &str,
-        mcast_ip: IpAddr,
+        mcast_underlay: MulticastUnderlay,
     ) -> Result<(), OpteError> {
         let port = self
-            .get_by_name(name)
+            .names
+            .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
         let key = get_key(port);
 
-        if let Entry::Occupied(set) = self.mcast_groups.entry(mcast_ip) {
+        if let Entry::Occupied(set) = self.mcast_groups.entry(mcast_underlay) {
             set.into_mut().remove(&key);
         }
 
         Ok(())
     }
 
+    /// Unsubscribe all ports from a given underlay multicast group.
+    pub fn mcast_unsubscribe_all(&mut self, mcast_underlay: MulticastUnderlay) {
+        self.mcast_groups.remove(&mcast_underlay);
+    }
+
     /// Find the keys for all ports who want to receive a given multicast packet.
     pub fn mcast_listeners(
         &self,
-        mcast_ip: &IpAddr,
+        mcast_underlay: &MulticastUnderlay,
     ) -> Option<impl Iterator<Item = &VniMac>> {
-        self.mcast_groups.get(mcast_ip).map(|v| v.iter())
+        self.mcast_groups.get(mcast_underlay).map(|v| v.iter())
     }
 
     /// Returns true if any multicast subscribers exist on this sled.
@@ -194,11 +203,11 @@ impl DevMap {
     ///
     /// Any chains without a matching port are dropped.
     ///
-    /// Safety: This is safe to call even if ports are being concurrently
-    /// removed from the canonical `DevMap`, because callers hold an
-    /// `Arc<DevMap>` which contains `Arc<XdeDev>` entries. The Arc reference
-    /// chain ensures all ports in this snapshot remain live for the duration of
-    /// delivery.
+    /// Safety: Callers must hold a read lock on this `DevMap` for the duration
+    /// of delivery. This prevents port removal from tearing down DLS/MAC
+    /// resources while delivery is in progress—management operations attempting
+    /// to remove a port will block when trying to acquire the write lock to
+    /// update the map.
     #[inline]
     pub fn deliver_all(&self, postbox: Postbox) {
         for (k, v) in postbox.drain() {
@@ -209,7 +218,9 @@ impl DevMap {
     }
 
     /// Dump all multicast subscriptions as a vector of (group, ports) pairs.
-    pub fn dump_mcast_subscriptions(&self) -> Vec<(IpAddr, Vec<String>)> {
+    pub fn dump_mcast_subscriptions(
+        &self,
+    ) -> Vec<(MulticastUnderlay, Vec<String>)> {
         let mut out = Vec::new();
         for (group, subs) in self.mcast_groups.iter() {
             let ports: Vec<String> = subs
@@ -217,7 +228,7 @@ impl DevMap {
                 .filter_map(|vm| self.devs.get(vm))
                 .map(|d| d.devname.clone())
                 .collect();
-            out.push((group.clone(), ports));
+            out.push((*group, ports));
         }
         out
     }

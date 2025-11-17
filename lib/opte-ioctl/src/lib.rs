@@ -43,6 +43,7 @@ use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::McastSubscribeReq;
+use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrReq;
@@ -287,6 +288,15 @@ impl OpteHdl {
         req: &McastUnsubscribeReq,
     ) -> Result<NoResp, Error> {
         let cmd = OpteCmd::McastUnsubscribe;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Unsubscribe all ports from a multicast group.
+    pub fn mcast_unsubscribe_all(
+        &self,
+        req: &McastUnsubscribeAllReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::McastUnsubscribeAll;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 

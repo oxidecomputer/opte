@@ -6,15 +6,15 @@
 
 //! XDE multicast multiple subscriber tests.
 //!
-//! These validate TX fanout and forwarding semantics across replication modes:
+//! These validate Tx fanout and forwarding semantics across replication modes:
 //! - Same-sled delivery (DELIVER action) is based purely on subscriptions and
-//!   independent of Replication mode set for TX.
+//!   independent of Replication mode set for Tx.
 //! - External replication sends Geneve to the multicast underlay address for
 //!   delivery to the boundary switch, which then replicates to front-panel ports.
 //! - Underlay replication sends Geneve to ff04::/16 multicast address for
 //!   sled-to-sled delivery; receiving sleds perform same-sled delivery based on
 //!   local subscriptions.
-//! - "Both" replication instructs TX to set bifurcated replication flags
+//! - "Both" replication instructs Tx to set bifurcated replication flags
 //!   (External + Underlay) in the Geneve header for switch-side handling, while
 //!   same-sled delivery still occurs independently based on subscriptions.
 
@@ -25,6 +25,7 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::Vni;
@@ -45,10 +46,11 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
-    let mcast_underlay = Ipv6Addr::from([
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 3,
-    ]);
+    ]))
+    .unwrap();
 
     // Set up multicast state with automatic cleanup on drop
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
@@ -61,10 +63,10 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
     // This test validates packet formatting, not actual multi-sled routing.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up TX forwarding with External replication mode.
-    // TX behavior: packet sent to underlay with Replication::External flag.
+    // Set up Tx forwarding with External replication mode.
+    // Tx behavior: packet sent to underlay with Replication::External flag.
     // In production, switch receives this flag and replicates to front-panel ports.
-    // RX behavior: same-sled delivery is controlled by subscriptions, independent
+    // Rx behavior: same-sled delivery is controlled by subscriptions, independent
     // of the Replication mode.
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
@@ -107,7 +109,7 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
     let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
     let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
 
-    // Also snoop underlay to verify unicast Geneve TX to boundary
+    // Also snoop underlay to verify unicast Geneve Tx to boundary
     let underlay_dev = "xde_test_sim1";
     let mut snoop_underlay =
         SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
@@ -166,7 +168,8 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
         DEFAULT_MULTICAST_VNI
     );
     assert_eq!(
-        geneve_info.outer_ipv6_dst, mcast_underlay,
+        geneve_info.outer_ipv6_dst,
+        Ipv6Addr::from(mcast_underlay),
         "External replication should use multicast address (outer IPv6 dst)"
     );
     assert_eq!(
@@ -189,10 +192,11 @@ fn test_multicast_underlay_replication() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
-    let mcast_underlay = Ipv6Addr::from([
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 4,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
@@ -201,9 +205,9 @@ fn test_multicast_underlay_replication() -> Result<()> {
     // Use node B's underlay address as the switch unicast address for routing.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up TX forwarding with Underlay replication mode.
-    // TX behavior: forward to underlay with multicast encapsulation.
-    // RX behavior: same-sled delivery to subscribers (none in this test).
+    // Set up Tx forwarding with Underlay replication mode.
+    // Tx behavior: forward to underlay with multicast encapsulation.
+    // Rx behavior: same-sled delivery to subscribers (none in this test).
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
         Replication::Underlay,
@@ -211,8 +215,8 @@ fn test_multicast_underlay_replication() -> Result<()> {
 
     // Allow IPv4 multicast traffic via Multicast target
     //
-    // Note: We deliberately do NOT subscribe any nodes. This tests TX forwarding
-    // with zero local subscribers (RX delivery is based on subscriptions, not
+    // Note: We deliberately do NOT subscribe any nodes. This tests Tx forwarding
+    // with zero local subscribers (Rx delivery is based on subscriptions, not
     // Replication)
     let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
     for node in &topol.nodes {
@@ -285,7 +289,8 @@ fn test_multicast_underlay_replication() -> Result<()> {
         DEFAULT_MULTICAST_VNI
     );
     assert_eq!(
-        geneve_info.outer_ipv6_dst, mcast_underlay,
+        geneve_info.outer_ipv6_dst,
+        Ipv6Addr::from(mcast_underlay),
         "Outer IPv6 dst should be multicast underlay address"
     );
     assert_eq!(
@@ -295,7 +300,7 @@ fn test_multicast_underlay_replication() -> Result<()> {
     );
 
     // Verify NO same-sled delivery (no subscribers = no delivery)
-    // Note: RX delivery is independent of Replication mode - it's based on subscriptions
+    // Note: Rx delivery is independent of Replication mode - it's based on subscriptions
     if let Ok(output) = snoop_local.wait_with_timeout(Duration::from_secs(2)) {
         let stdout = String::from_utf8_lossy(&output.stdout);
         panic!(
@@ -303,16 +308,16 @@ fn test_multicast_underlay_replication() -> Result<()> {
         );
     }
 
-    // Leaf-only RX assertion: start a second underlay snoop and ensure there
-    // is no additional multicast re-relay after RX. We expect only the single
-    // TX underlay packet captured above.
+    // Leaf-only Rx assertion: start a second underlay snoop and ensure there
+    // is no additional multicast re-relay after Rx. We expect only the single
+    // Tx underlay packet captured above.
     let mut snoop_underlay_2 =
         SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
     if let Ok(out) = snoop_underlay_2.wait_with_timeout(Duration::from_secs(2))
     {
         let stdout = String::from_utf8_lossy(&out.stdout);
         panic!(
-            "Expected leaf-only RX (no further underlay relay), got:\n{stdout}"
+            "Expected leaf-only Rx (no further underlay relay), got:\n{stdout}"
         );
     }
 
@@ -321,7 +326,7 @@ fn test_multicast_underlay_replication() -> Result<()> {
 
 #[test]
 fn test_multicast_both_replication() -> Result<()> {
-    // Test "Both" replication mode: validates that egress TX (External + Underlay)
+    // Test "Both" replication mode: validates that egress Tx (External + Underlay)
     // and local same-sled delivery both occur.
     let topol =
         xde_tests::three_node_topology_named("omicron1", "ara", "arb", "arc")?;
@@ -332,21 +337,22 @@ fn test_multicast_both_replication() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
-    let mcast_underlay = Ipv6Addr::from([
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 5,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
     // Use node B's underlay address as the switch unicast address for routing.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up TX forwarding with "Both" replication (drives egress encapsulation only)
-    // TX behavior: packet sent to underlay with Replication::Both flag set.
+    // Set up Tx forwarding with "Both" replication (drives egress encapsulation only)
+    // Tx behavior: packet sent to underlay with Replication::Both flag set.
     // In production, switch receives this and bifurcates: External (to front panel)
     // + Underlay (sled-to-sled multicast).
-    // RX behavior: same-sled local delivery occurs independently, driven purely by
+    // Rx behavior: same-sled local delivery occurs independently, driven purely by
     // port subscriptions (not the replication mode).
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
@@ -437,7 +443,8 @@ fn test_multicast_both_replication() -> Result<()> {
         DEFAULT_MULTICAST_VNI
     );
     assert_eq!(
-        geneve_info.outer_ipv6_dst, mcast_underlay,
+        geneve_info.outer_ipv6_dst,
+        Ipv6Addr::from(mcast_underlay),
         "Outer IPv6 dst should be multicast underlay address"
     );
     assert_eq!(
@@ -460,10 +467,11 @@ fn test_partial_unsubscribe() -> Result<()> {
     const MCAST_PORT: u16 = 9999;
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
-    let mcast_underlay = Ipv6Addr::from([
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         224, 1, 2, 6,
-    ]);
+    ]))
+    .unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 

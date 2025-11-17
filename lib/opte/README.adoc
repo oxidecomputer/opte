@@ -230,9 +230,9 @@ fleet-level VNI.)
 
 ==== Delivery Modes and Replication
 
-The `Replication` type is a TX‑only instruction to switches encoded in the Oxide Geneve
+The `Replication` type is a Tx‑only instruction to switches encoded in the Oxide Geneve
 multicast option as a 2‑bit field in the top two bits of the option body's first byte.
-It tells the switch which ports to replicate the frame to on transmission. On RX, OPTE
+It tells the switch which ports to replicate the frame to on transmission. On Rx, OPTE
 ignores the replication field and performs local same‑sled delivery based purely on
 subscriptions. The replication mode is not an access control mechanism.
 
@@ -253,9 +253,9 @@ address from M2P with multicast MAC (RFC 2464). All multicast uses fleet VNI 77.
 
 ==== Encapsulation Path
 
-On TX, the overlay layer encapsulates packets destined for multicast groups
+On Tx, the overlay layer encapsulates packets destined for multicast groups
 with a Geneve multicast option initially set to `External` replication mode.
-XDE's multicast TX path (`xde_mc_tx`) first delivers the packet locally to
+XDE's multicast Tx path (`xde_mc_tx`) first delivers the packet locally to
 all other ports on the same sled that have subscribed to the multicast group
 (within the same VNI), then consults the multicast forwarding table.
 
@@ -264,9 +264,9 @@ Geneve multicast option to match that next hop's configured replication mode.
 XDE routes to the next hop's unicast address (for all replication modes) to determine
 reachability and which underlay port/MAC to use. The packet destination (outer IPv6)
 is the multicast address from M2P with multicast MAC (RFC 2464). The Geneve replication
-option serves as a TX-only instruction telling switches which port groups to replicate to.
+option serves as a Tx-only instruction telling switches which port groups to replicate to.
 
-==== RX Behavior
+==== Rx Behavior
 
 OPTE acts as a leaf node and does not relay multicast traffic received from the underlay.
 

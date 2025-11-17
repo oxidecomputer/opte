@@ -4,12 +4,12 @@
 
 // Copyright 2025 Oxide Computer Company
 
-//! XDE multicast RX-path tests.
+//! XDE multicast Rx-path tests.
 //!
 //! These validate that:
-//! - Control-plane config (M2P map + forwarding) drives TX encapsulation only.
+//! - Control-plane config (M2P map + forwarding) drives Tx encapsulation only.
 //! - Same-sled delivery is based purely on subscriptions and is independent of
-//!   the Replication mode set for TX.
+//!   the Replication mode set for Tx.
 //! - Underlay multicast uses admin-local IPv6 (ff04::/16) and routes via the
 //!   host underlay interface.
 //! - Packets received from the underlay are delivered to subscribed ports and
@@ -20,6 +20,7 @@ use opte_ioctl::OpteHdl;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::Vni;
@@ -40,7 +41,8 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
     // M2P mapping: overlay layer needs IPv6 multicast underlay address
     // Use admin-scoped IPv6 multicast per Omicron's map_external_to_underlay_ip()
     // Maps IPv4 multicast to ff04::/16 (admin-local scope) + IPv4 address
-    let mcast_underlay: Ipv6Addr = "ff04::e000:fb".parse().unwrap();
+    let mcast_underlay =
+        MulticastUnderlay::new("ff04::e000:fb".parse().unwrap()).unwrap();
 
     // Set up multicast group with automatic cleanup on drop
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
@@ -51,9 +53,9 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
     // Note: This is a single-sled test; all nodes share one underlay network.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up TX forwarding with Underlay replication to test underlay RX path.
+    // Set up Tx forwarding with Underlay replication to test underlay Rx path.
     // This causes packets to be sent to the underlay multicast address, then
-    // received back via the underlay RX path for same-sled delivery.
+    // received back via the underlay Rx path for same-sled delivery.
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
         Replication::Underlay,
@@ -95,7 +97,7 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
         s_entry.ports
     );
 
-    // Assert forwarding table contains expected next-hop + replication
+    // Assert forwarding table contains expected next hop + replication
     let mfwd = hdl.dump_mcast_fwd()?;
     let entry = mfwd
         .entries
@@ -112,7 +114,7 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
         entry.next_hops
     );
 
-    // Start snoop on RX side (matches IPv6 test pattern)
+    // Start snoop on Rx side (matches IPv6 test pattern)
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let filter = format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
     let mut snoop_rx = SnoopGuard::start(&dev_name_b, &filter)?;
@@ -127,7 +129,7 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
         payload,
     )?;
 
-    // Wait for RX snoop to capture the packet (or timeout)
+    // Wait for Rx snoop to capture the packet (or timeout)
     let snoop_rx_output = snoop_rx.wait_with_timeout(Duration::from_secs(5))?;
 
     let stdout = String::from_utf8_lossy(&snoop_rx_output.stdout);
@@ -151,7 +153,7 @@ fn test_xde_multicast_rx_ipv4() -> Result<()> {
         stdout.contains("test"),
         "expected payload substring 'test' in ASCII portion of snoop output:\n{stdout}"
     );
-    // L2 dest: with current XDE/gateway pipeline, multicast RX to guests
+    // L2 dest: with current XDE/gateway pipeline, multicast Rx to guests
     // is delivered with broadcast dest MAC. snoop shows 16-bit grouped hex.
     assert!(
         stdout.to_ascii_lowercase().contains("ffff ffff ffff"),
@@ -206,7 +208,8 @@ fn test_xde_multicast_rx_ipv6() -> Result<()> {
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping: Use same admin-local address for underlay
-    let mcast_underlay: Ipv6Addr = "ff04::1:3".parse().unwrap();
+    let mcast_underlay =
+        MulticastUnderlay::new("ff04::1:3".parse().unwrap()).unwrap();
 
     // Set up multicast group with automatic cleanup on drop
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
@@ -217,9 +220,9 @@ fn test_xde_multicast_rx_ipv6() -> Result<()> {
     // Note: This is a single-sled test; all nodes share one underlay network.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up TX forwarding with Underlay replication to test underlay RX path.
+    // Set up Tx forwarding with Underlay replication to test underlay Rx path.
     // This causes packets to be sent to the underlay multicast address, then
-    // received back via the underlay RX path for same-sled delivery.
+    // received back via the underlay Rx path for same-sled delivery.
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
         Replication::Underlay,
@@ -285,9 +288,10 @@ fn test_reject_link_local_underlay_ff02() -> Result<()> {
     let mcast_group = Ipv4Addr::from([224, 1, 2, 99]);
 
     let link_local_underlay: Ipv6Addr = "ff02::e001:263".parse().unwrap();
+    let underlay = MulticastUnderlay::new_unchecked(link_local_underlay);
     let result = hdl.set_m2p(&oxide_vpc::api::SetMcast2PhysReq {
         group: mcast_group.into(),
-        underlay: link_local_underlay,
+        underlay,
     });
     assert!(
         result.is_err(),
@@ -303,9 +307,10 @@ fn test_reject_global_underlay_ff0e() -> Result<()> {
     let mcast_group = Ipv4Addr::from([224, 1, 2, 99]);
 
     let global_underlay: Ipv6Addr = "ff0e::e001:263".parse().unwrap();
+    let underlay = MulticastUnderlay::new_unchecked(global_underlay);
     let result = hdl.set_m2p(&oxide_vpc::api::SetMcast2PhysReq {
         group: mcast_group.into(),
-        underlay: global_underlay,
+        underlay,
     });
     assert!(
         result.is_err(),
@@ -318,7 +323,8 @@ fn test_reject_global_underlay_ff0e() -> Result<()> {
 #[test]
 fn test_accept_admin_local_underlay_ff04() -> Result<()> {
     let mcast_group = Ipv4Addr::from([224, 1, 2, 99]);
-    let admin_local: Ipv6Addr = "ff04::e001:263".parse().unwrap();
+    let admin_local =
+        MulticastUnderlay::new("ff04::e001:263".parse().unwrap()).unwrap();
 
     // MulticastGroup::new calls set_m2p internally and cleans up on drop.
     // This test verifies that admin-local (ff04::/16) addresses are accepted,
@@ -342,7 +348,8 @@ fn test_multicast_config_no_spurious_traffic() -> Result<()> {
     let mcast_group = Ipv4Addr::from([224, 1, 2, 200]);
     let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
 
-    let mcast_underlay: Ipv6Addr = "ff04::e001:2c8".parse().unwrap();
+    let mcast_underlay =
+        MulticastUnderlay::new("ff04::e001:2c8".parse().unwrap()).unwrap();
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 

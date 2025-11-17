@@ -6,7 +6,7 @@
  *
  * Configuration (set in BEGIN block):
  *   suppress_output = 1  - Suppress per-event output, show only aggregations
- *   flow_debug = 1       - Enable multicast TX/RX function entry/exit tracing
+ *   flow_debug = 1       - Enable multicast Tx/Rx function entry/exit tracing
  *   show_summary = 1     - Show aggregated summary at END (default: enabled)
  */
 #include "common.h"
@@ -29,14 +29,15 @@
 /*
  * OPTE command numbers for multicast-related ioctls (see crates/opte-api/src/cmd.rs).
  */
-#define CMD_SET_MCAST_FWD       100
-#define CMD_CLEAR_MCAST_FWD     101
-#define CMD_DUMP_MCAST_FWD      102
-#define CMD_MCAST_SUBSCRIBE     103
-#define CMD_MCAST_UNSUBSCRIBE   104
-#define CMD_SET_M2P             105
-#define CMD_CLEAR_M2P           106
-#define CMD_DUMP_MCAST_SUBS     107
+#define CMD_SET_MCAST_FWD         100
+#define CMD_CLEAR_MCAST_FWD       101
+#define CMD_DUMP_MCAST_FWD        102
+#define CMD_MCAST_SUBSCRIBE       103
+#define CMD_MCAST_UNSUBSCRIBE     104
+#define CMD_SET_M2P               105
+#define CMD_CLEAR_M2P             106
+#define CMD_DUMP_MCAST_SUBS       107
+#define CMD_MCAST_UNSUBSCRIBE_ALL 108
 
 BEGIN {
 	flow_debug = 0;  /* Set to 1 to enable detailed flow debugging */
@@ -59,7 +60,7 @@ BEGIN
 	printf(M_HDR_FMT, "EVENT", "VNI", "GROUP", "PORT/NEXTHOP");
 }
 
-/* Multicast TX function entry/exit (optional detailed debugging) */
+/* Multicast Tx function entry/exit (optional detailed debugging) */
 xde_mc_tx:entry
 /flow_debug/
 {
@@ -220,6 +221,7 @@ xde_ioc_opte_cmd:entry
 		this->cmd == CMD_DUMP_MCAST_SUBS ? "CFG DUMP_SUBS" :
 		this->cmd == CMD_MCAST_SUBSCRIBE ? "CFG SUBSCRIBE" :
 		this->cmd == CMD_MCAST_UNSUBSCRIBE ? "CFG UNSUBSCRIBE" :
+		this->cmd == CMD_MCAST_UNSUBSCRIBE_ALL ? "CFG UNSUB_ALL" :
 		NULL;
 
 	/* Always track aggregations for multicast ops */
@@ -342,6 +344,23 @@ mcast-unsubscribe
 	printf(M_LINE_FMT, "UNSUBSCR", this->vni, this->group, this->port);
 }
 
+mcast-unsubscribe-all {
+	/* arg0=af, arg1=group_ptr, arg2=vni */
+	this->af = arg0;
+	this->group_ptr = arg1;
+	this->vni = arg2;
+
+	/* Always track aggregations */
+	@cfg_counts["UNSUB_ALL"] = count();
+}
+
+mcast-unsubscribe-all
+/!suppress_output/
+{
+	this->group = MCAST_GROUP_STR(this->af, this->group_ptr);
+	printf(M_LINE_FMT, "UNSUB_ALL", this->vni, this->group, "ALL");
+}
+
 /* Dataplane failure probes */
 mcast-tx-pullup-fail {
 	/* arg0=len */
@@ -401,7 +420,7 @@ END
 	printa(@by_underlay);
 	printf("\nLocal delivery by port:\n");
 	printa(@by_port);
-	printf("\nForwarding by unicast next-hop (routing address):\n");
+	printf("\nForwarding by unicast next hop (routing address):\n");
 	printa(@by_nexthop_unicast);
 	printf("\nConfig ops:\n");
 	printa(@cfg_counts);

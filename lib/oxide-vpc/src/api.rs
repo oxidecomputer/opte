@@ -20,10 +20,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
-/// TX-only instruction to switches for multicast packet replication.
+/// Tx-only instruction to switches for multicast packet replication.
 ///
 /// Tells the switch which port groups to replicate outbound multicast packets
-/// to. It is a transmit-only setting - on RX, OPTE ignores the replication
+/// to. It is a transmit-only setting - on Rx, OPTE ignores the replication
 /// field and performs local same-sled delivery based purely on subscriptions.
 /// The replication mode is not an access control mechanism.
 ///
@@ -38,8 +38,9 @@ use uuid::Uuid;
 /// - `Underlay`: Switch replicates to underlay ports (other sleds) only
 /// - `Both`: Switch replicates to both external and underlay ports (bifurcated)
 ///
-/// Encoding: The Geneve Oxide multicast option encodes the replication strategy in the
-/// top 2 bits of the option body's first byte (u2). The remaining 30 bits are reserved.
+/// Encoding: The Geneve Oxide multicast option encodes the replication strategy
+/// in the top 2 bits of the option body's first byte (u2). The remaining 30
+/// bits are reserved.
 ///
 /// Current implementation uses a single fleet VNI (DEFAULT_MULTICAST_VNI = 77)
 /// for all multicast traffic rack-wide (RFD 488 "Multicast across VPCs").
@@ -384,7 +385,7 @@ pub struct PhysNet {
 /// OPTE routes to [`NextHopV6::addr`] (the switch's unicast address) for all
 /// replication modes to determine reachability and which underlay port/MAC to
 /// use. The packet destination (outer IPv6) is always the multicast address
-/// from M2P. The associated [`Replication`] mode is a TX-only instruction
+/// from M2P. The associated [`Replication`] mode is a Tx-only instruction
 /// telling the switch which port groups to replicate to on transmission.
 /// Routing is always to the unicast next hop.
 #[derive(
@@ -536,7 +537,7 @@ impl Display for RouterTarget {
 pub enum RouterClass {
     /// The rule belongs to the shared VPC-wide router.
     System,
-    /// The rule belongs to the subnet-specific router, and has precendence
+    /// The rule belongs to the subnet-specific router, and has precedence
     /// over a `System` rule of equal priority.
     Custom,
 }
@@ -686,8 +687,8 @@ pub struct ClearVirt2PhysReq {
 pub struct SetMcast2PhysReq {
     /// Overlay multicast group address
     pub group: IpAddr,
-    /// Underlay IPv6 multicast address
-    pub underlay: Ipv6Addr,
+    /// Underlay IPv6 multicast address (must be admin-scoped ff04::/16)
+    pub underlay: MulticastUnderlay,
 }
 
 /// Clear a mapping from multicast group to underlay multicast address.
@@ -697,8 +698,8 @@ pub struct SetMcast2PhysReq {
 pub struct ClearMcast2PhysReq {
     /// Overlay multicast group address
     pub group: IpAddr,
-    /// Underlay IPv6 multicast address
-    pub underlay: Ipv6Addr,
+    /// Underlay IPv6 multicast address (must be admin-scoped ff04::/16)
+    pub underlay: MulticastUnderlay,
 }
 
 /// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
@@ -745,7 +746,7 @@ pub enum DelRouterEntryResp {
 ///
 /// Configures how OPTE forwards multicast packets for a specific underlay group.
 /// The forwarding table maps underlay multicast addresses to switch endpoints
-/// and TX-only replication instructions.
+/// and Tx-only replication instructions.
 ///
 /// Routing vs destination: OPTE routes to [`NextHopV6::addr`] (switch's unicast
 /// address) to determine reachability and which underlay port/MAC to use. The
@@ -758,10 +759,11 @@ pub enum DelRouterEntryResp {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetMcastForwardingReq {
     /// The underlay IPv6 multicast address (outer IPv6 dst in transmitted packets)
-    pub underlay: Ipv6Addr,
-    /// Switch endpoints and TX-only replication instructions.
+    /// Must be admin-scoped ff04::/16
+    pub underlay: MulticastUnderlay,
+    /// Switch endpoints and Tx-only replication instructions.
     /// Each NextHopV6.addr is the unicast IPv6 of a switch (for routing).
-    /// The Replication is a TX-only instruction indicating which port groups
+    /// The Replication is a Tx-only instruction indicating which port groups
     /// the switch should use.
     pub next_hops: Vec<(NextHopV6, Replication)>,
 }
@@ -769,8 +771,8 @@ pub struct SetMcastForwardingReq {
 /// Clear multicast forwarding entries for an underlay multicast group.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearMcastForwardingReq {
-    /// The underlay IPv6 multicast address
-    pub underlay: Ipv6Addr,
+    /// The underlay IPv6 multicast address (must be admin-scoped ff04::/16)
+    pub underlay: MulticastUnderlay,
 }
 
 /// Response for dumping the multicast forwarding table.
@@ -785,9 +787,9 @@ impl CmdOk for DumpMcastForwardingResp {}
 /// A single multicast forwarding table entry.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct McastForwardingEntry {
-    /// The underlay IPv6 multicast address
-    pub underlay: Ipv6Addr,
-    /// The next hops (underlay IPv6 addresses) with TX-only replication instructions
+    /// The underlay IPv6 multicast address (admin-scoped ff04::/16)
+    pub underlay: MulticastUnderlay,
+    /// The next hops (underlay IPv6 addresses) with Tx-only replication instructions
     pub next_hops: Vec<(NextHopV6, Replication)>,
 }
 
@@ -804,8 +806,8 @@ impl CmdOk for DumpMcastSubscriptionsResp {}
 /// A single multicast subscription entry.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct McastSubscriptionEntry {
-    /// The underlay IPv6 multicast address (subscription key)
-    pub underlay: Ipv6Addr,
+    /// The underlay IPv6 multicast address (admin-scoped ff04::/16, subscription key)
+    pub underlay: MulticastUnderlay,
     /// Port names subscribed to this group on this sled
     pub ports: Vec<String>,
 }
@@ -824,6 +826,13 @@ pub struct McastSubscribeReq {
 pub struct McastUnsubscribeReq {
     /// The port name to unsubscribe
     pub port_name: String,
+    /// The multicast group address
+    pub group: IpAddr,
+}
+
+/// Unsubscribe all ports from a multicast group.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastUnsubscribeAllReq {
     /// The multicast group address
     pub group: IpAddr,
 }

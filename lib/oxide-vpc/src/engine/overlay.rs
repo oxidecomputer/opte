@@ -32,6 +32,7 @@ use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
 use opte::api::MacAddr;
+use opte::api::MulticastUnderlay;
 use opte::api::OpteError;
 use opte::ddi::sync::KMutex;
 use opte::ddi::sync::KMutexGuard;
@@ -249,8 +250,9 @@ impl StaticAction for EncapAction {
                 Some(underlay) => (
                     true,
                     PhysNet {
-                        ether: underlay.0.unchecked_multicast_mac(),
-                        ip: underlay.0,
+                        // Outer MAC filled in by XDE
+                        ether: MacAddr::ZERO,
+                        ip: underlay.addr(),
                         vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
                     },
                     true,
@@ -386,7 +388,7 @@ impl StaticAction for EncapAction {
 
         // For multicast originated from this host, we seed the multicast Geneve
         // option with `External` replication. XDE will then select the actual
-        // replication per next-hop based on the rack-wide forwarding table
+        // replication per next hop based on the rack-wide forwarding table
         // (mcast_fwd), which tells the switch which ports to replicate to
         // (external, underlay, or bifurcated).
         //
@@ -410,8 +412,13 @@ impl StaticAction for EncapAction {
                 data: Cow::Borrowed(GENEVE_MCAST_OPT_BODY),
             };
 
-        let outer_mac =
-            if is_mcast { phys_target.ether } else { MacAddr::ZERO };
+        // For multicast, derive the outer MAC from the IPv6 address per RFC 2464.
+        // For unicast, XDE fills in the MAC via routing table lookup.
+        let outer_mac = if is_mcast {
+            phys_target.ip.unchecked_multicast_mac()
+        } else {
+            MacAddr::ZERO
+        };
 
         let tfrm = HdrTransform {
             name: ENCAP_NAME.to_string(),
@@ -589,7 +596,7 @@ impl StaticAction for DecapAction {
 /// All outbound multicast packets are currently encapsulated with VNI 77
 /// (DEFAULT_MULTICAST_VNI) for fleet-wide delivery. See [`EncapAction::gen_ht`].
 ///
-/// ## Validation Policy on RX Path
+/// ## Validation Policy on Rx Path
 /// This validator accepts multicast packets with either of two VNI values:
 /// - **VNI 77 (DEFAULT_MULTICAST_VNI)**: Fleet-wide multicast, accepted by all
 ///   ports regardless of VPC. This enables rack-wide multicast delivery.
@@ -1010,12 +1017,20 @@ impl Mcast2Phys {
 
     /// Dump all IPv4 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, Ipv6Addr)> {
-        self.ip4.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+        self.ip4
+            .lock()
+            .iter()
+            .map(|(vip, mcast)| (*vip, mcast.addr()))
+            .collect()
     }
 
     /// Dump all IPv6 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, Ipv6Addr)> {
-        self.ip6.lock().iter().map(|(vip, mcast)| (*vip, mcast.0)).collect()
+        self.ip6
+            .lock()
+            .iter()
+            .map(|(vip, mcast)| (*vip, mcast.addr()))
+            .collect()
     }
 }
 
@@ -1025,15 +1040,7 @@ impl Default for Mcast2Phys {
     }
 }
 
-/// Transparent wrapper for underlay IPv6 multicast addresses.
-///
-/// This newtype exists only to satisfy the orphan rule for implementing
-/// `ResourceEntry`. Validation is performed at the API boundary (xde.rs).
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct MulticastUnderlay(pub Ipv6Addr);
-
 impl Resource for Mcast2Phys {}
-impl ResourceEntry for MulticastUnderlay {}
 
 impl MappingResource for Mcast2Phys {
     type Key = IpAddr;

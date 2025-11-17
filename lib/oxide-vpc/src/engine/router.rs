@@ -269,24 +269,16 @@ pub fn setup(
 
     let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
 
-    // Allow IPv6 multicast (ff00::/8) to bypass route lookup.
+    // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
     // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
     // The overlay addresses use any valid multicast prefix; underlay restriction
     // to ff04::/16 is enforced by M2P mapping validation.
-    let mut mcast_out =
-        Rule::new(0, Action::Meta(Arc::new(MulticastPassthrough)));
-    mcast_out.add_predicate(Predicate::InnerDstIp6(vec![
-        Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST),
+    let mut mcast_out = Rule::new(0, Action::Allow);
+    mcast_out.add_predicate(Predicate::Any(vec![
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)]),
+        Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)]),
     ]));
     layer.add_rule(Direction::Out, mcast_out.finalize());
-
-    // Allow IPv4 multicast (224.0.0.0/4) to bypass route lookup.
-    let mut mcast_out_v4 =
-        Rule::new(0, Action::Meta(Arc::new(MulticastPassthrough)));
-    mcast_out_v4.add_predicate(Predicate::InnerDstIp4(vec![
-        Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST),
-    ]));
-    layer.add_rule(Direction::Out, mcast_out_v4.finalize());
 
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
@@ -455,29 +447,6 @@ pub fn replace(
 
     port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules)?;
     Ok(NoResp::default())
-}
-
-/// Passthrough action for multicast traffic that bypasses route lookup.
-struct MulticastPassthrough;
-
-impl fmt::Display for MulticastPassthrough {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "multicast-passthrough")
-    }
-}
-
-impl MetaAction for MulticastPassthrough {
-    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        (vec![], vec![])
-    }
-
-    fn mod_meta(
-        &self,
-        _flow_id: &InnerFlowId,
-        _meta: &mut ActionMeta,
-    ) -> ModMetaResult {
-        Ok(AllowOrDeny::Allow(()))
-    }
 }
 
 // TODO I may want to have different types of rule/flow tables a layer

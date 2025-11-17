@@ -780,29 +780,3 @@ impl<T> Drop for TokenGuard<'_, T> {
         assert_eq!(Some(curthread), lock_thread);
     }
 }
-
-/// Clone an Arc from behind a RwLock, dropping the read lock immediately.
-///
-/// This pattern is used throughout the datapath to make readers lock-free
-/// while keeping snapshots alive via Arc refcounting. The brief lock hold
-/// (just the Arc clone) minimizes contention and avoids blocking management
-/// operations like `refresh_maps()`.
-#[inline(always)]
-pub fn clone_from_rwlock<T>(
-    lock: &KRwLock<alloc::sync::Arc<T>>,
-) -> alloc::sync::Arc<T> {
-    alloc::sync::Arc::clone(&*lock.read())
-}
-
-/// Clone an Arc from behind a Mutex, dropping the lock immediately.
-///
-/// This pattern is used throughout the datapath to make readers lock-free
-/// while keeping snapshots alive via Arc refcounting. The brief lock hold
-/// (just the Arc clone) minimizes contention and avoids blocking management
-/// operations like `refresh_maps()`.
-#[inline(always)]
-pub fn clone_from_mutex<T>(
-    lock: &KMutex<alloc::sync::Arc<T>>,
-) -> alloc::sync::Arc<T> {
-    alloc::sync::Arc::clone(&*lock.lock())
-}
