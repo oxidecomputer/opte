@@ -97,12 +97,15 @@ impl Display for EtherTypeMatch {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EtherAddrMatch {
     Exact(MacAddr),
+    /// Match any multicast/broadcast MAC address (LSB of first octet is 1).
+    Multicast,
 }
 
 impl EtherAddrMatch {
     fn matches(&self, flow_addr: MacAddr) -> bool {
         match self {
             EtherAddrMatch::Exact(addr) => flow_addr == *addr,
+            EtherAddrMatch::Multicast => flow_addr.is_group(),
         }
     }
 }
@@ -113,6 +116,7 @@ impl Display for EtherAddrMatch {
 
         match self {
             Exact(addr) => write!(f, "{addr}"),
+            Multicast => write!(f, "multicast"),
         }
     }
 }

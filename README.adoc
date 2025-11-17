@@ -42,6 +42,7 @@ More detail on our benchmarks can be found in xref:bench/README.adoc[bench/READM
 * https://rfd.shared.oxide.computer/rfd/0009[RFD 9: Networking Considerations]
 * https://rfd.shared.oxide.computer/rfd/0021[RFD 21: User Networking API]
 * https://rfd.shared.oxide.computer/rfd/0063[RFD 63: Network Architecture]
+* https://rfd.shared.oxide.computer/rfd/488[RFD 488: Multicast]
 * https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/vfp-nsdi-2017-final.pdf[Microsoft's VFP]
 
 == Directory Index
