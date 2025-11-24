@@ -10,6 +10,7 @@ repository.workspace = true
 usdt = ["oxide-vpc/usdt"]
 
 [dependencies]
+anyhow.workspace = true
 opte = { workspace = true, features = ["std"] }
 oxide-vpc = { workspace = true, features = ["engine", "std", "test-help"] }
 pcap-parser = { workspace = true, features = ["serialize"] }
