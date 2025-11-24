@@ -218,7 +218,7 @@ impl From<GenIcmpErr> for GenDescError {
     }
 }
 
-impl<T: ConcreteIpAddr + 'static> SNat<T> {
+impl<T: ConcreteIpAddr + 'static + Send + Sync> SNat<T> {
     pub fn new(addr: T) -> Self {
         SNat {
             priv_ip: addr,
@@ -299,7 +299,7 @@ impl Display for SNat<Ipv6Addr> {
     }
 }
 
-impl<T: ConcreteIpAddr + 'static> StatefulAction for SNat<T>
+impl<T: ConcreteIpAddr + 'static + Send + Sync> StatefulAction for SNat<T>
 where
     SNat<T>: Display,
 {
@@ -367,7 +367,7 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_NAME: &str = "SNAT";
 
-impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
+impl<T: ConcreteIpAddr + Send + Sync> ActionDesc for SNatDesc<T> {
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP and source port
@@ -425,7 +425,7 @@ pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
-impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
+impl<T: ConcreteIpAddr + Send + Sync> ActionDesc for SNatIcmpEchoDesc<T> {
     // SNAT needs to generate an additional transform for ICMP traffic in
     // order to treat the Echo Identifier as a psuedo ULP port.
     fn gen_ht(&self, dir: Direction) -> HdrTransform {
