@@ -6,6 +6,8 @@
 
 // stuff we need from mac
 
+use core::ffi::c_uchar;
+use illumos_sys_hdrs::MAXPATHLEN;
 use illumos_sys_hdrs::boolean_t;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::c_int;
@@ -67,6 +69,8 @@ pub enum link_state_t {
 #[allow(unused_imports)]
 use mac_client_promisc_type_t::*;
 
+use crate::ip::in6_addr__bindgen_ty_1;
+use crate::ip::in6_addr_t;
 use crate::ip::t_uscalar_t;
 
 pub type mac_tx_cookie_t = uintptr_t;
@@ -75,6 +79,12 @@ pub type mac_rx_fn = unsafe extern "C" fn(
     *mut mac_resource_handle,
     *mut mblk_t,
     boolean_t,
+);
+pub type mac_direct_rx_fn = unsafe extern "C" fn(
+    *mut c_void,
+    *mut mac_resource_handle,
+    *mut mblk_t,
+    *mut c_void, // Unused mac_header_info_t *
 );
 pub type mac_siphon_fn = unsafe extern "C" fn(
     *mut c_void,
@@ -184,6 +194,21 @@ unsafe extern "C" {
         min_sdu: *mut c_uint,
         max_sdu: *mut c_uint,
     );
+
+    pub fn mac_link_flow_add(
+        linkid: datalink_id_t,
+        flow_name: *const c_char,
+        flow_desc: *const flow_desc_t,
+        mrp: *const mac_resource_props_t,
+    ) -> c_int;
+    pub fn mac_link_flow_add_action(
+        linkid: datalink_id_t,
+        flow_name: *const c_char,
+        flow_desc: *const flow_desc_t,
+        mrp: *const mac_resource_props_t,
+        action: *const flow_action_t,
+    ) -> c_int;
+    pub fn mac_link_flow_remove(flow_name: *const c_char) -> c_int;
 }
 
 // Private MAC functions needed to get us a Tx path.
@@ -645,3 +670,236 @@ pub struct mac_register_t {
 pub const MAC_HWCKSUM_EMUL: u32 = 1 << 0;
 pub const MAC_IPCKSUM_EMUL: u32 = 1 << 1;
 pub const MAC_LSO_EMUL: u32 = 1 << 2;
+
+// ======================================================================
+// ust/common/sys/mac_flow.h
+// ======================================================================
+
+
+bitflags::bitflags! {
+/// Classes of TCP segmentation offload supported by a MAC provider.
+///
+/// These are derived from `#define LSO_TX_*` statements in
+/// mac_provider.h, omitting the enum prefix.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FlowActionFlags: u32 {
+    const ACTION = 1 << 0;
+    const RESOURCE = 1 << 1;
+    const RX_ONLY = 1 << 2;
+}
+}
+
+#[derive(Default)]
+#[repr(C)]
+pub struct flow_action_t {
+    pub fa_flags: FlowActionFlags,
+
+    // Valid IFF. FlowActionFlags::ACTION.
+    pub fa_direct_rx_fn: Option<mac_direct_rx_fn>,
+    pub fa_direct_rx_arg: *mut c_void,
+
+    // Valid IFF. FlowActionFlags::RESOURCE.
+    // TODO(ky): higher fidelity.
+    pub fa_resource_add: Option<fn()>,
+    pub fa_resource_remove: Option<fn()>,
+    pub fa_resource_quiesce: Option<fn()>,
+    pub fa_resource_restart: Option<fn()>,
+    pub fa_resource_bind: Option<fn()>,
+    pub fa_resource_arg: *mut c_void,
+}
+
+pub type flow_mask_t = u64;
+pub const MAXMACADDR: usize = 20;
+
+// mac_flow.h:
+// #if _LONG_LONG_ALIGNMENT == 8 && _LONG_LONG_ALIGNMENT_32 == 4
+// #pragma pack(4)
+// #endif
+
+#[repr(C, packed(4))]
+pub struct flow_desc_t {
+    pub fd_mask: flow_mask_t,
+    pub fd_mac_len: u32,
+    pub fd_dst_mac: [u8; MAXMACADDR],
+    pub fd_src_mac: [u8; MAXMACADDR],
+    pub fd_vid: u16,
+    pub fd_sap: u32,
+    pub fd_ipversion: u8,
+    pub fd_protocol: u8,
+    pub fd_local_addr: in6_addr_t,
+    pub fd_local_netmask: in6_addr_t,
+    pub fd_remote_addr: in6_addr_t,
+    pub fd_remote_netmask: in6_addr_t,
+    pub fd_local_port: crate::ip::in_port_t,
+    pub fd_remote_port: crate::ip::in_port_t,
+    pub fd_dsfield: u8,
+    pub fd_dsfield_mask: u8,
+}
+
+pub const IP_NO_ADDR: in6_addr_t =
+    in6_addr_t { _S6_un: in6_addr__bindgen_ty_1 { _S6_u16: [0u16; 8] } };
+
+#[repr(C, packed(4))]
+pub struct mac_resource_props_t {
+    mrp_mask: u32,
+    mrp_maxbw: u64,
+    mrp_priority: mac_priority_level_t,
+    mrp_cpus: mac_cpus_t,
+    mrp_protect: mac_protect_t,
+    mrp_nrxings: u32,
+    mrp_ntxrings: u32,
+    mrp_pool: [c_char; MAXPATHLEN],
+}
+
+pub const FLOW_LINK_DST: u64 = 0x00000001;
+pub const FLOW_LINK_SRC: u64 = 0x00000002;
+pub const FLOW_LINK_VID: u64 = 0x00000004;
+pub const FLOW_LINK_SAP: u64 = 0x00000008;
+
+pub const FLOW_IP_VERSION: u64 = 0x00000010;
+pub const FLOW_IP_PROTOCOL: u64 = 0x00000020;
+pub const FLOW_IP_LOCAL: u64 = 0x00000040;
+pub const FLOW_IP_REMOTE: u64 = 0x00000080;
+pub const FLOW_IP_DSFIELD: u64 = 0x00000100;
+
+pub const FLOW_ULP_PORT_LOCAL: u64 = 0x00001000;
+pub const FLOW_ULP_PORT_REMOTE: u64 = 0x00002000;
+
+pub const MPT_MACNOSPOOF: c_int = 0x00000001;
+pub const MPT_RESTRICTED: c_int = 0x00000002;
+pub const MPT_IPNOSPOOF: c_int = 0x00000004;
+pub const MPT_DHCPNOSPOOF: c_int = 0x00000008;
+pub const MPT_ALL: c_int = 0x0000000f;
+pub const MPT_RESET: c_int = -1;
+pub const MPT_MAXCNT: usize = 32;
+pub const MPT_MAXIPADDR: usize = MPT_MAXCNT;
+pub const MPT_MAXCID: usize = MPT_MAXCNT;
+pub const MPT_MAXCIDLEN: usize = 256;
+
+pub const MRP_MAXBW: c_int = 0x00000001;
+pub const MRP_CPUS: c_int = 0x00000002;
+pub const MRP_CPUS_USERSPEC: c_int = 0x00000004;
+pub const MRP_PRIORITY: c_int = 0x00000008;
+pub const MRP_PROTECT: c_int = 0x00000010;
+pub const MRP_RX_RINGS: c_int = 0x00000020;
+pub const MRP_TX_RINGS: c_int = 0x00000040;
+pub const MRP_RXRINGS_UNSPEC: c_int = 0x00000080;
+pub const MRP_TXRINGS_UNSPEC: c_int = 0x00000100;
+pub const MRP_RINGS_RESET: c_int = 0x00000200;
+pub const MRP_POOL: c_int = 0x00000400;
+
+pub const MRP_NCPUS: usize = 256;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_priority_level_t {
+    MPL_LOW,
+    MPL_MEDIUM,
+    MPL_HIGH,
+    MPL_RESET,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_cpu_mode_t {
+    MCM_FANOUT = 1,
+    MCM_CPUS,
+}
+
+pub const MAC_RESOURCE_PROPS_DEF: mac_resource_props_t = mac_resource_props_t {
+    mrp_mask: 0,
+    mrp_maxbw: 0,
+    mrp_priority: mac_priority_level_t::MPL_HIGH,
+    mrp_cpus: MAC_CPUS_DEF,
+    mrp_protect: MAC_PROTECT_DEF,
+    mrp_nrxings: 0,
+    mrp_ntxrings: 0,
+    mrp_pool: [0; MAXPATHLEN],
+};
+
+pub const MAC_CPUS_DEF: mac_cpus_t = mac_cpus_t {
+    mc_ncpus: 0,
+    mc_cpus: [0; MRP_NCPUS],
+    mc_rx_fanout_cnt: 0,
+    mc_rx_fanout_cpus: [0; MRP_NCPUS],
+    mc_rx_pollid: 0,
+    mc_rx_workerid: 0,
+    mc_rx_intr_cpu: 0,
+    mc_tx_fanout_cpus: [0; MRP_NCPUS],
+    mc_tx_intr_cpus: mac_tx_intr_cpu_t {
+        mtc_intr_cpu: [0; MRP_NCPUS],
+        mtc_retargeted_cpu: [0; MRP_NCPUS],
+    },
+    mc_fanout_mode: mac_cpu_mode_t::MCM_FANOUT,
+};
+
+#[repr(C, packed(4))]
+pub struct mac_cpus_t {
+    mc_ncpus: u32,
+    mc_cpus: [u32; MRP_NCPUS],
+    mc_rx_fanout_cnt: u32,
+    mc_rx_fanout_cpus: [u32; MRP_NCPUS],
+    mc_rx_pollid: u32,
+    mc_rx_workerid: u32,
+    mc_rx_intr_cpu: i32,
+    mc_tx_fanout_cpus: [i32; MRP_NCPUS],
+    mc_tx_intr_cpus: mac_tx_intr_cpu_t,
+    mc_fanout_mode: mac_cpu_mode_t,
+}
+
+#[repr(C, packed(4))]
+pub struct mac_tx_intr_cpu_t {
+    mtc_intr_cpu: [i32; MRP_NCPUS],
+    mtc_retargeted_cpu: [i32; MRP_NCPUS],
+}
+
+#[repr(C, packed(4))]
+pub struct mac_protect_t {
+    mp_types: u32,
+    mp_ipaddrcnt: u32,
+    mp_ipaddrs: [mac_ipaddr_t; MPT_MAXIPADDR as usize],
+    mp_cidcnt: u32,
+    mp_cids: [mac_dhcpcid_t; MPT_MAXCID as usize],
+}
+
+pub const MAC_PROTECT_DEF: mac_protect_t = mac_protect_t {
+    mp_types: 0,
+    mp_ipaddrcnt: 0,
+    mp_ipaddrs: [MAC_IPADDR_DEF; MPT_MAXIPADDR],
+    mp_cidcnt: 0,
+    mp_cids: [MAC_DHCPCID_DEF; MPT_MAXCID],
+};
+
+#[repr(C, packed(4))]
+pub struct mac_ipaddr_t {
+    ip_version: u32,
+    ip_addr: in6_addr_t,
+    ip_netmask: u8,
+}
+
+pub const MAC_IPADDR_DEF: mac_ipaddr_t =
+    mac_ipaddr_t { ip_version: 0, ip_addr: IP_NO_ADDR, ip_netmask: 0 };
+
+#[repr(C, packed(4))]
+pub struct mac_dhcpcid_t {
+    dc_id: [c_uchar; MPT_MAXCIDLEN as usize],
+    dc_len: u32,
+    dc_form: mac_dhcpcid_form_t,
+}
+
+pub const MAC_DHCPCID_DEF: mac_dhcpcid_t = mac_dhcpcid_t {
+    dc_id: [0; MPT_MAXCIDLEN],
+    dc_len: 0,
+    dc_form: mac_dhcpcid_form_t::CIDFORM_TYPED,
+};
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum mac_dhcpcid_form_t {
+    CIDFORM_TYPED = 1,
+    CIDFORM_HEX,
+    CIDFORM_STR,
+}
+
+// typedef mac_resource_handle_t   (*mac_resource_add_t)(void *, mac_resource_t *);
+pub type mac_resource_handle_t = *mut c_void;

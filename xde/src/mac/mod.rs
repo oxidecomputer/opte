@@ -16,6 +16,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use bitflags::bitflags;
+use ingot::ip::IpProtocol;
 use core::ffi::CStr;
 use core::fmt;
 use core::mem::MaybeUninit;
@@ -668,6 +669,185 @@ impl From<TxHint> for uintptr_t {
         match value {
             TxHint::NoneOrMixed => 0,
             TxHint::SingleFlow(v) => v.get(),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct MacFlowDesc {
+    mask: flow_mask_t,
+    ip_ver: Option<u8>,
+    proto: Option<IpProtocol>,
+    local_port: Option<u16>,
+}
+
+// TODO At the moment the flow system only allows six different
+// combinations of attributes:
+//
+//   local_ip=address[/prefixlen]
+//   remote_ip=address[/prefixlen]
+//   transport={tcp|udp|sctp|icmp|icmpv6}
+//   transport={tcp|udp|sctp},local_port=port
+//   transport={tcp|udp|sctp},remote_port=port
+//   dsfield=val[:dsfield_mask]
+//
+// Update this type to enforce the above.
+//
+// For now my best bet is to use
+// transport={tcp|udp|sctp},local_port=port to classify on Geneve
+// packets.
+impl MacFlowDesc {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// TODO create an IpVersion type to avoid invalid descriptors.
+    pub fn set_ipver(&mut self, ver: u8) -> &mut Self {
+        self.mask |= FLOW_IP_VERSION;
+        self.ip_ver = Some(ver);
+        self
+    }
+
+    pub fn set_proto(&mut self, proto: IpProtocol) -> &mut Self {
+        self.mask |= FLOW_IP_PROTOCOL;
+        self.proto = Some(proto);
+        self
+    }
+
+    pub fn set_local_port(&mut self, port: u16) -> &mut Self {
+        self.mask |= FLOW_ULP_PORT_LOCAL;
+        self.local_port = Some(port);
+        self
+    }
+
+    pub fn to_desc(&self) -> flow_desc_t {
+        flow_desc_t::from(self.clone())
+    }
+
+    pub fn new_flow<'a, P>(
+        &'a self,
+        flow_name: &'a str,
+        link_id: LinkId,
+        action: Option<(mac_direct_rx_fn, Arc<P>)>,
+    ) -> Result<MacFlow<P>, FlowCreateError<'a>> {
+        let name = CString::new(flow_name)
+            .map_err(|_| FlowCreateError::InvalidFlowName(flow_name))?;
+        let desc = self.to_desc();
+
+        let mut flow_ac = flow_action_t::default();
+        let parent = if let Some((fun, val)) = action {
+            let ptr = Arc::into_raw(val);
+            flow_ac.fa_flags |= FlowActionFlags::ACTION;
+            flow_ac.fa_direct_rx_fn = Some(fun);
+            flow_ac.fa_direct_rx_arg = ptr as *mut c_void;
+
+            Some(ptr)
+        } else {
+            None
+        };
+
+        match unsafe {
+            mac_link_flow_add_action(
+                link_id.into(),
+                name.as_ptr(),
+                &desc,
+                &MAC_RESOURCE_PROPS_DEF,
+                &flow_ac,
+            )
+        } {
+            0 => Ok(MacFlow {name, parent}),
+            err => {
+                if let Some(ptr) = parent {
+                    _ = unsafe {Arc::from_raw(ptr)};
+                }
+                Err(FlowCreateError::CreateFailed(flow_name, err))
+            },
+        }
+    }
+}
+
+impl From<MacFlowDesc> for flow_desc_t {
+    fn from(mf: MacFlowDesc) -> Self {
+        let no_addr = IP_NO_ADDR;
+        let fd_ipversion = mf.ip_ver.unwrap_or(0);
+
+        // The mac flow subsystem uses 0 as sentinel to indicate no
+        // filtering on protocol.
+        let fd_protocol = match mf.proto {
+            Some(p) => p.0,
+            None => 0,
+        };
+
+        // Apparently mac flow wants this in network order.
+        let fd_local_port = mf.local_port.unwrap_or(0).to_be();
+
+        Self {
+            // The mask controls options like priority and bandwidth,
+            // which we are not using at the moment.
+            fd_mask: mf.mask,
+            fd_mac_len: 0,
+            fd_dst_mac: [0u8; MAXMACADDR],
+            fd_src_mac: [0u8; MAXMACADDR],
+            fd_vid: 0,
+            // XXX Typically I would saw the SAP is the EtherType
+            // (when talking about Ethernet, but this stuff always
+            // confuses me. This doesn't seem to be used to filter
+            // anything.
+            fd_sap: 0,
+            fd_ipversion,
+            fd_protocol,
+            fd_local_addr: no_addr,
+            fd_local_netmask: no_addr,
+            fd_remote_addr: no_addr,
+            fd_remote_netmask: no_addr,
+            fd_local_port,
+            fd_remote_port: 0,
+            fd_dsfield: 0,
+            fd_dsfield_mask: 0,
+        }
+    }
+}
+
+/// Errors while opening a MAC handle.
+#[derive(Debug)]
+pub enum FlowCreateError<'a> {
+    InvalidFlowName(&'a str),
+    CreateFailed(&'a str, i32),
+    LookupFailed(&'a str, i32),
+}
+
+impl fmt::Display for FlowCreateError<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FlowCreateError::InvalidFlowName(flow) => {
+                write!(f, "invalid flow name: {flow}")
+            }
+            FlowCreateError::CreateFailed(flow, err) => {
+                write!(f, "mac_link_flow_add failed for {flow}: {err}")
+            }
+            FlowCreateError::LookupFailed(flow, err) => {
+                write!(f, "mac_flow_lookup_byname failed for {flow}: {err}")
+            }
+        }
+    }
+}
+
+/// Resource handle for a created Mac flow.
+#[derive(Debug)]
+pub struct MacFlow<P> {
+    name: CString,
+    parent: Option<*const P>,
+}
+
+impl<P> Drop for MacFlow<P> {
+    fn drop(&mut self) {
+        unsafe {
+            // TODO: need to reimplement FLOW_USER_REFRELE in here...
+            // flow_user_refrele(self.flent);
+            mac_link_flow_remove(self.name.as_ptr());
+            if let Some(parent) = self.parent {
+                Arc::from_raw(parent); // dropped immediately
+            }
         }
     }
 }

@@ -128,6 +128,7 @@ use crate::mac;
 use crate::mac::ChecksumOffloadCapabs;
 use crate::mac::MacClient;
 use crate::mac::MacEmul;
+use crate::mac::MacFlow;
 use crate::mac::MacHandle;
 use crate::mac::MacSiphon;
 use crate::mac::MacTxFlags;
@@ -141,6 +142,7 @@ use crate::mac::mac_capab_lso_t;
 use crate::mac::mac_getinfo;
 use crate::mac::mac_hw_emul;
 use crate::mac::mac_private_minor;
+use crate::mac::mac_resource_handle;
 use crate::postbox::Postbox;
 use crate::postbox::TxPostbox;
 use crate::route::Route;
@@ -158,6 +160,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use ingot::ip::IpProtocol;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::ptr;
@@ -350,7 +353,8 @@ pub struct XdeUnderlayPort {
     pub mtu: u32,
 
     /// MAC promiscuous handle for receiving packets on the underlay link.
-    siphon: MacSiphon<UnderlayDev>,
+    // siphon: MacSiphon<UnderlayDev>,
+    flow: MacFlow<UnderlayDev>,
 
     /// DLS-level handle on a device for promiscuous registration and
     /// packet Tx.
@@ -1261,7 +1265,8 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // there are no outstanding refs.
 
             // 1. Remove packet rx callback.
-            drop(u.siphon);
+            // drop(u.siphon);
+            drop(u.flow);
 
             // Although `xde_rx` can be called into without any running ports
             // via the siphon handle, illumos guarantees that this callback won't
@@ -1407,12 +1412,41 @@ fn create_underlay_port(
     let stream = Arc::new(UnderlayDev { stream, ports_map });
 
     // Bind a packet handler to the MAC client underlying `stream`.
-    let siphon = MacSiphon::new(stream.clone(), xde_rx).map_err(|e| {
-        OpteError::System {
+    // let siphon = MacSiphon::new(stream.clone(), xde_rx).map_err(|e| {
+    //     OpteError::System {
+    //         errno: EFAULT,
+    //         msg: format!("failed to set MAC siphon on {link_name}: {e}"),
+    //     }
+    // })?;
+
+    // Use a link flow to steer only IPv6 + Geneve traffic to our Rx
+    // handler.
+    //
+    // XXX The mac flow mechanism is currently not sophisticated
+    // enough to understand encapsulated packets. Each xde instance
+    // will receive all client traffic. It is up to each xde instance
+    // to further filter the traffic so that only packets destined for
+    // its client are sent upstream. The plan is to expand mac's flow
+    // classification to handle encapsulated packets; at which point
+    // we should be able to setup a distinct flow per xde instance.
+    let mut flow_desc = mac::MacFlowDesc::new();
+    flow_desc
+        // .set_ipver(6)
+        .set_proto(IpProtocol::UDP)
+        .set_local_port(opte::engine::geneve::GENEVE_PORT);
+
+    // TODO I'm able to remove these flows via flowadm while the
+    // driver is still attached -- that's no good. Either find a way
+    // to add a hold or I'll need to implement such a mechanism.
+    //
+    // There is a fe_refcnt and fe_user_refcnt, I'll have to look at
+    // those.
+    let mut flow = flow_desc
+        .new_flow(format!("{link_name}_xde").as_str(), link_id, Some((xde_rx_flow, stream.clone())))
+        .map_err(|e| OpteError::System {
             errno: EFAULT,
-            msg: format!("failed to set MAC siphon on {link_name}: {e}"),
-        }
-    })?;
+            msg: format!("{e}"),
+        })?;
 
     // Grab mac handle for underlying link, to retrieve its MAC address.
     let mh =
@@ -1434,7 +1468,7 @@ fn create_underlay_port(
             name: link_name.to_string(),
             mac: mh.get_mac_addr(),
             mtu,
-            siphon,
+            flow,
             stream,
         },
         OffloadInfo { lso_state, cso_state, mtu },
@@ -2452,6 +2486,53 @@ unsafe extern "C" fn xde_rx(
     }
 
     head
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn xde_rx_flow(
+    arg: *mut c_void,
+    _mrh: *mut mac_resource_handle,
+    mp_chain: *mut mblk_t,
+    _madeup_pkt_info: *mut c_void,
+) {
+    // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
+    // corresponding to the underlay port we're receiving on (derived from
+    // `DlsStream`). Being here in the callback means the `MacSiphon` hasn't
+    // been dropped yet, and thus our `MacClientHandle` is also still valid.
+    let stream = unsafe {
+        (arg as *const UnderlayDev)
+            .as_ref()
+            .expect("packet was received from siphon with a NULL argument")
+    };
+
+    let mut chain = if let Ok(chain) = unsafe { MsgBlkChain::new(mp_chain) } {
+        chain
+    } else {
+        bad_packet_probe(
+            None,
+            Direction::In,
+            mp_chain as uintptr_t,
+            c"rx'd packet chain was null",
+        );
+
+        // Continue processing on an empty chain to uphold the contract with
+        // MAC for the three `out_` pointer values.
+        MsgBlkChain::empty()
+    };
+
+    // Acquire our own dev map -- this gives us access to prebuilt postboxes
+    // for all active ports. We don't worry about this changing for rx -- caller
+    // threads here (interrupt contexts, poll threads, fanout, worker threads)
+    // are all bound to a given CPU each by MAC.
+    let cpu_index = current_cpu().seq_id;
+    let cpu_state = stream.ports_map[cpu_index].devs.lock();
+    let mut postbox = Postbox::new();
+
+    while let Some(pkt) = chain.pop_front() {
+        _ = xde_rx_one(&stream.stream, pkt, &cpu_state, &mut postbox);
+    }
+
+    cpu_state.deliver_all(postbox);
 }
 
 /// Processes an individual packet receiver on the underlay device `stream`.

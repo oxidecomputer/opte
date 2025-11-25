@@ -378,6 +378,10 @@ pub const MAC_VERSION_V1: c_int = 0x1;
 pub const MAC_VERSION: c_int = MAC_VERSION_V1;
 pub const MAC_PLUGIN_IDENT_ETHER: *const c_char = c"mac_ether".as_ptr();
 
+pub const MAXNAMELEN: c_int = 256;
+pub const MAXLINKNAMELEN: c_int = 32;
+pub const MAXPATHLEN: usize = 1024;
+
 pub type periodic_cb = unsafe extern "C" fn(arg: *mut c_void);
 
 // XXX Define this so mod_ops has a known size to rustc. I had to do
