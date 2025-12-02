@@ -36,7 +36,7 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock<'_>) {
     }
 }
 
-/// Build a packet capture file from a series of [`Packet<T>`].
+/// Build a packet capture file from a series of packets.
 pub struct PcapBuilder {
     file: File,
 }

@@ -16,6 +16,8 @@
 use anyhow::Result;
 use opte_ioctl::OpteHdl;
 use oxide_vpc::api::ClearMcast2PhysReq;
+use oxide_vpc::api::ClearMcastForwardingReq;
+use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
@@ -26,14 +28,17 @@ use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::Vni;
-use std::time::Duration;
+use xde_tests::GENEVE_UNDERLAY_FILTER;
+use xde_tests::IPV4_MULTICAST_CIDR;
+use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
+use xde_tests::SNOOP_TIMEOUT_EXPECT_NONE;
 use xde_tests::SnoopGuard;
+use xde_tests::UNDERLAY_TEST_DEVICE;
 
 #[test]
 fn test_subscribe_without_m2p_mapping() -> Result<()> {
-    let topol =
-        xde_tests::two_node_topology_named("omicron1", "nm2pa", "nm2pb")?;
+    let topol = xde_tests::two_node_topology()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 99]);
 
     let res = topol.nodes[0].port.subscribe_multicast(mcast_group.into());
@@ -48,8 +53,7 @@ fn test_subscribe_without_m2p_mapping() -> Result<()> {
 
 #[test]
 fn test_subscribe_ff04_direct_without_m2p() -> Result<()> {
-    let topol =
-        xde_tests::two_node_topology_named("omicron1", "ff04a", "ff04b")?;
+    let topol = xde_tests::two_node_topology()?;
 
     // IPv6 admin-scoped multicast (ff04::/16) - already an underlay address
     let underlay_mcast = MulticastUnderlay::new(Ipv6Addr::from([
@@ -105,7 +109,7 @@ fn test_subscribe_nonexistent_port() -> Result<()> {
 
 #[test]
 fn test_subscribe_unicast_ip_as_group() -> Result<()> {
-    let topol = xde_tests::two_node_topology_named("omicron1", "unia", "unib")?;
+    let topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
 
     let unicast_ip = Ipv4Addr::from([10, 0, 0, 1]);
@@ -125,10 +129,12 @@ fn test_subscribe_unicast_ip_as_group() -> Result<()> {
 
 #[test]
 fn test_double_subscribe() -> Result<()> {
-    let topol = xde_tests::two_node_topology_named("omicron1", "dsa", "dsb")?;
+    // Verify that subscribing to the same group twice is idempotent and does
+    // not duplicate packet delivery.
+
+    let topol = xde_tests::two_node_topology()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 101]);
-    const MCAST_PORT: u16 = 9999; // Avoid mDNS port 5353
-    let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -146,7 +152,7 @@ fn test_double_subscribe() -> Result<()> {
         Replication::External,
     )])?;
 
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
     }
@@ -176,25 +182,21 @@ fn test_double_subscribe() -> Result<()> {
         entry.ports
     );
 
-    let filter = format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
     let mut snoop = SnoopGuard::start(topol.nodes[1].port.name(), &filter)?;
 
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         "test",
     )?;
 
-    let output = snoop.wait_with_timeout(Duration::from_secs(5))?;
+    let output = snoop.assert_packet("after double subscribe");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    assert!(
-        output.status.success() && stdout.contains("UDP"),
-        "Should receive multicast after double subscribe:\n{stdout}"
-    );
 
     let count = stdout.matches("UDP").count();
     assert!(
@@ -207,7 +209,7 @@ fn test_double_subscribe() -> Result<()> {
 
 #[test]
 fn test_unsubscribe_never_subscribed() -> Result<()> {
-    let topol = xde_tests::two_node_topology_named("omicron1", "usa", "usb")?;
+    let topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 102]);
 
@@ -223,10 +225,12 @@ fn test_unsubscribe_never_subscribed() -> Result<()> {
 
 #[test]
 fn test_subscribe_then_clear_m2p() -> Result<()> {
-    let topol = xde_tests::two_node_topology_named("omicron1", "sca", "scb")?;
+    // Verify that clearing M2P mapping after subscribing stops both local
+    // delivery and underlay forwarding for the group.
+
+    let topol = xde_tests::two_node_topology()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 103]);
-    const MCAST_PORT: u16 = 9999; // Avoid mDNS port 5353
-    let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -244,7 +248,7 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
         Replication::External,
     )])?;
 
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
     }
@@ -260,41 +264,32 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
 
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let filter_local =
-        format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
     let mut snoop_local = SnoopGuard::start(&dev_name_b, &filter_local)?;
 
-    let underlay_dev = "xde_test_sim1";
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
 
     let sender_v4 = topol.nodes[0].port.ip();
     let res = topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         "test",
     );
 
     assert!(res.is_ok(), "Send after M2P clear should succeed: {res:?}");
 
-    if let Ok(out) = snoop_local.wait_with_timeout(Duration::from_secs(2)) {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        panic!("No local delivery expected; got:\n{stdout}");
-    }
-
-    if let Ok(out) = snoop_underlay.wait_with_timeout(Duration::from_secs(2)) {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        panic!(
-            "No underlay forwarding expected after M2P clear; got:\n{stdout}"
-        );
-    }
+    snoop_local.assert_no_packet("after M2P clear (local delivery)");
+    snoop_underlay.assert_no_packet("after M2P clear (underlay forwarding)");
 
     Ok(())
 }
 
 #[test]
 fn test_set_mcast_fwd_rejects_non_default_vni() -> Result<()> {
-    let topol = xde_tests::two_node_topology_named("omicron1", "vnix", "vniy")?;
+    let topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
 
     let mcast_group = Ipv4Addr::from([224, 1, 2, 200]);
@@ -307,7 +302,7 @@ fn test_set_mcast_fwd_rejects_non_default_vni() -> Result<()> {
     let _mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
 
     // Use a non-default VNI and multicast next hop address checks separately
-    let bad_vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI + 1)?;
+    let bad_vni = Vni::new(DEFAULT_MULTICAST_VNI + 1)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
     let res = hdl.set_mcast_fwd(&oxide_vpc::api::SetMcastForwardingReq {
@@ -324,8 +319,7 @@ fn test_set_mcast_fwd_rejects_non_default_vni() -> Result<()> {
 
 #[test]
 fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
-    let _topol =
-        xde_tests::two_node_topology_named("omicron1", "mnhx", "mnhy")?;
+    let _topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
 
     let mcast_group = Ipv4Addr::from([224, 1, 2, 201]);
@@ -339,7 +333,7 @@ fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
 
     // Use a multicast address for next hop (invalid)
     let bad_next_hop: Ipv6Addr = "ff04::1".parse().unwrap();
-    let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     let res = hdl.set_mcast_fwd(&oxide_vpc::api::SetMcastForwardingReq {
         underlay,
@@ -355,9 +349,8 @@ fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
 
 #[test]
 fn test_unsubscribe_ipv6_non_underlay_scopes() -> Result<()> {
-    let topol = xde_tests::two_node_topology_dualstack_named(
-        "omicron1", "unsv6a", "unsv6b",
-    )?;
+    // This test only needs an OPTE port to exist, not IPv6 data plane.
+    let topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
 
     // ff02::/16 (link-local) and ff0e::/16 (global) are rejected by set_m2p,
@@ -395,9 +388,9 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     // Test that set_forwarding accumulates next hops like `swadm route add`:
     // - Same underlay + different next hop → add
     // - Same underlay + same next hop → replace replication mode
-    let topol = xde_tests::two_node_topology_named("omicron1", "mnha", "mnhb")?;
+    let topol = xde_tests::two_node_topology()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 104]);
-    let vni = Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI)?;
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     let underlay = MulticastUnderlay::new(Ipv6Addr::from([
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -509,8 +502,10 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
 
 #[test]
 fn test_unsubscribe_all() -> Result<()> {
-    let topol =
-        xde_tests::two_node_topology_named("omicron1", "ualla", "uallb")?;
+    // Verify that unsubscribe_all removes all port subscriptions for a group
+    // and is idempotent when called multiple times.
+
+    let topol = xde_tests::two_node_topology()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 105]);
 
     let underlay = MulticastUnderlay::new(Ipv6Addr::from([
@@ -587,8 +582,7 @@ fn test_unsubscribe_all() -> Result<()> {
 
 #[test]
 fn test_unsubscribe_all_without_m2p() -> Result<()> {
-    let _topol =
-        xde_tests::two_node_topology_named("omicron1", "uanm2pa", "uanm2pb")?;
+    let _topol = xde_tests::two_node_topology()?;
     let hdl = OpteHdl::open()?;
     let mcast_group = Ipv4Addr::from([224, 1, 2, 106]);
 
@@ -601,6 +595,230 @@ fn test_unsubscribe_all_without_m2p() -> Result<()> {
         res.is_ok(),
         "mcast_unsubscribe_all without M2P should succeed (idempotent), got: {res:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
+    // Clearing the multicast forwarding entry should stop underlay egress,
+    // independent of subscription state.
+    let topol = xde_tests::two_node_topology()?;
+
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 210]);
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
+
+    let underlay = MulticastUnderlay::new(Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        224, 1, 2, 210,
+    ]))
+    .unwrap();
+
+    let mcast = MulticastGroup::new(mcast_group.into(), underlay)?;
+
+    // Route via node B's underlay address to select the egress link.
+    let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
+    mcast.set_forwarding(vec![(
+        NextHopV6::new(fake_switch_addr, vni),
+        Replication::Underlay,
+    )])?;
+
+    // Allow IPv4 multicast traffic via Multicast target
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    for node in &topol.nodes {
+        node.port.add_multicast_router_entry(mcast_cidr)?;
+    }
+
+    // Subscribe sender port to enable multicast Tx processing
+    topol.nodes[0]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("subscribe node 0 should succeed");
+
+    // Verify forwarding table contains the expected entry
+    let hdl = OpteHdl::open()?;
+    let fwd = hdl.dump_mcast_fwd()?;
+    let entry = fwd
+        .entries
+        .iter()
+        .find(|e| e.underlay == underlay)
+        .expect("missing forwarding entry before send");
+    assert_eq!(
+        entry.next_hops.len(),
+        1,
+        "Expected 1 next hop in forwarding table"
+    );
+    assert_eq!(
+        entry.next_hops[0].1,
+        Replication::Underlay,
+        "Expected Underlay replication mode"
+    );
+
+    // First send should produce an underlay Geneve packet
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
+    let mut snoop_underlay =
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+    let sender_v4 = topol.nodes[0].port.ip();
+    topol.nodes[0].zone.send_udp_v4(
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
+        "first",
+    )?;
+    snoop_underlay.assert_packet("before clearing forwarding");
+
+    // Clear forwarding entry
+    hdl.clear_mcast_fwd(&ClearMcastForwardingReq { underlay })?;
+
+    // Verify forwarding entry was removed from table
+    let fwd_after = hdl.dump_mcast_fwd()?;
+    assert!(
+        fwd_after.entries.iter().all(|e| e.underlay != underlay),
+        "Expected no forwarding entry after clear_mcast_fwd"
+    );
+
+    // Subsequent sends should not egress to underlay (forwarding cleared)
+    let mut snoop_underlay2 =
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+    topol.nodes[0].zone.send_udp_v4(
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
+        "second",
+    )?;
+    if let Ok(out2) =
+        snoop_underlay2.wait_with_timeout(SNOOP_TIMEOUT_EXPECT_NONE)
+    {
+        let stdout2 = String::from_utf8_lossy(&out2.stdout);
+        panic!(
+            "No underlay egress expected after clearing forwarding; got:\n{stdout2}"
+        );
+    }
+
+    // Verify idempotence: clearing again should succeed
+    let res = hdl.clear_mcast_fwd(&ClearMcastForwardingReq { underlay });
+    assert!(res.is_ok(), "clear_mcast_fwd should be idempotent, got: {res:?}");
+
+    Ok(())
+}
+
+#[test]
+fn test_multiple_simultaneous_groups() -> Result<()> {
+    // Tests that multiple multicast groups can be configured and operate
+    // independently without interference.
+    //
+    // This validates:
+    // - Two groups can have separate M2P mappings
+    // - Subscriptions to one group don't affect another
+    // - Packets sent to group A are only delivered to group A subscribers
+    // - Packets sent to group B are only delivered to group B subscribers
+
+    let topol = xde_tests::two_node_topology()?;
+
+    // Configure two distinct multicast groups
+    let group_a = Ipv4Addr::from([224, 1, 2, 10]);
+    let group_b = Ipv4Addr::from([224, 1, 2, 11]);
+
+    let underlay_a =
+        MulticastUnderlay::new("ff04::e001:20a".parse().unwrap()).unwrap();
+    let underlay_b =
+        MulticastUnderlay::new("ff04::e001:20b".parse().unwrap()).unwrap();
+
+    let mcast_a = MulticastGroup::new(group_a.into(), underlay_a)?;
+    let mcast_b = MulticastGroup::new(group_b.into(), underlay_b)?;
+
+    // Allow multicast traffic
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
+    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr)?;
+
+    // Subscribe node 0 to group A only, node 1 to group B only
+    topol.nodes[0]
+        .port
+        .subscribe_multicast(group_a.into())
+        .expect("subscribe node 0 to group A");
+    topol.nodes[1]
+        .port
+        .subscribe_multicast(group_b.into())
+        .expect("subscribe node 1 to group B");
+
+    // Verify subscription state
+    let hdl = OpteHdl::open()?;
+    let subs = hdl.dump_mcast_subs()?;
+
+    let p0 = topol.nodes[0].port.name().to_string();
+    let p1 = topol.nodes[1].port.name().to_string();
+
+    // Group A should have only node 0
+    let entry_a = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == underlay_a)
+        .expect("missing subscription entry for group A");
+    assert!(
+        entry_a.ports.contains(&p0) && !entry_a.ports.contains(&p1),
+        "group A should have only node 0; got {:?}",
+        entry_a.ports
+    );
+
+    // Group B should have only node 1
+    let entry_b = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == underlay_b)
+        .expect("missing subscription entry for group B");
+    assert!(
+        entry_b.ports.contains(&p1) && !entry_b.ports.contains(&p0),
+        "group B should have only node 1; got {:?}",
+        entry_b.ports
+    );
+
+    // Set up forwarding for both groups (needed for Tx path)
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
+    let fake_switch = topol.nodes[1].port.underlay_ip().into();
+    mcast_a.set_forwarding(vec![(
+        NextHopV6::new(fake_switch, vni),
+        Replication::Underlay,
+    )])?;
+    mcast_b.set_forwarding(vec![(
+        NextHopV6::new(fake_switch, vni),
+        Replication::Underlay,
+    )])?;
+
+    // Start snoops on node B (we send from node 0, so we snoop on node 1)
+    let dev_b = topol.nodes[1].port.name().to_string();
+    let filter_a =
+        format!("udp and ip dst {group_a} and port {MCAST_TEST_PORT}");
+    let filter_b =
+        format!("udp and ip dst {group_b} and port {MCAST_TEST_PORT}");
+
+    // Test 1: Send to group A - only node 0 should potentially receive
+    // (but node 0 is sender, so self-exclusion applies; node 1 not subscribed)
+    let mut snoop_b_for_a = SnoopGuard::start(&dev_b, &filter_a)?;
+
+    topol.nodes[0].zone.send_udp_v4(
+        topol.nodes[0].port.ip(),
+        group_a,
+        MCAST_TEST_PORT,
+        "group A packet",
+    )?;
+
+    // Node 1 should NOT receive group A packet (not subscribed to A)
+    snoop_b_for_a.assert_no_packet("node 1 for group A (not subscribed)");
+
+    // Test 2: Send to group B from node 0 - node 1 should receive (subscribed to B)
+    // Node 0 is not subscribed to B, so it won't receive via same-sled
+    let mut snoop_b_for_b = SnoopGuard::start(&dev_b, &filter_b)?;
+
+    topol.nodes[0].zone.send_udp_v4(
+        topol.nodes[0].port.ip(),
+        group_b,
+        MCAST_TEST_PORT,
+        "group B packet",
+    )?;
+
+    // Node 1 SHOULD receive group B packet (subscribed to B, receives via Rx path)
+    snoop_b_for_b.assert_packet("node 1 for group B (subscribed)");
 
     Ok(())
 }

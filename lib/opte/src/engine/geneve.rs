@@ -334,7 +334,7 @@ impl HeaderLen for GeneveMeta {
 }
 
 /// A dataplane-specific interpretation of a given Geneve option.
-pub trait OptionCast<'a> {
+pub trait OptionCast<'a>: HeaderLen {
     /// Return the Geneve class associated with `self`.
     fn option_class(&self) -> u16;
 
@@ -347,10 +347,10 @@ pub trait OptionCast<'a> {
     /// Implementors should return `Some(_)` when the
     /// `(option_class, option_type)` combination are recognised,
     /// and `None` otherwise. This allows [`GeneveOptionParse`] to
-    /// classify the option as `Known`/`Unknown`.
+    /// classify the option as `Known::Known` or `Known::Unknown`.
     fn try_cast(
         option_class: u16,
-        otion_type: GeneveOptionType,
+        option_type: GeneveOptionType,
         body: &'a [u8],
     ) -> Result<Option<(Self, &'a [u8])>, IngotParseError>
     where
@@ -387,16 +387,34 @@ impl<'a, T: OptionCast<'a>> HeaderLen for GeneveOptionParse<'a, T> {
     const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
 
     fn packet_length(&self) -> usize {
-        // Option header (4 bytes) + body length (already padded to 4-byte boundary)
-        GeneveOpt::MINIMUM_LENGTH + self.body_remainder.len()
+        // For Known options, use their HeaderLen implementation
+        // (e.g., Mss returns 8B).
+        // For Unknown options, the header (4B) + body remainder
+        // (which includes padding).
+        self.option.packet_length() + self.body_remainder.len()
     }
 }
 
-/// Marks whather a Geneve option has been successfuly interpreted as a known
-/// variant.
+/// Marks whether a Geneve option has been successfully interpreted as a known
+/// option variant.
 pub enum Known<T> {
     Known(T),
     Unknown(u16, GeneveOptionType),
+}
+
+impl<'a, T: OptionCast<'a>> HeaderLen for Known<T> {
+    const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        match self {
+            Known::Known(a) => a.packet_length(),
+            // For unknown options, we only have the header (4 bytes).
+            // The body is tracked separately in `GeneveOptionParse::body_remainder`.
+            // `GeneveOptionParse::packet_length()` adds that remainder to the
+            // value returned here, so do not include body bytes in this branch.
+            Known::Unknown(..) => GeneveOpt::MINIMUM_LENGTH,
+        }
+    }
 }
 
 impl<'a, T: OptionCast<'a>> Known<T> {

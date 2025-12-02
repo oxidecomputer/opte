@@ -8,7 +8,7 @@ use anyhow::Result;
 
 #[test]
 fn test_xde_loopback() -> Result<()> {
-    let topol = xde_tests::two_node_topology("omicron1")?;
+    let topol = xde_tests::two_node_topology()?;
 
     // Now we should be able to ping b from a on the overlay.
     _ = &topol.nodes[0]

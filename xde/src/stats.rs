@@ -86,6 +86,9 @@ pub struct XdeStats {
     /// The number of times a pullup operation failed during multicast Rx
     /// (packet delivery/relay), causing a packet to be dropped.
     mcast_rx_pullup_fail: KStatU64,
+    /// The number of multicast Rx packets dropped because the inner destination
+    /// IP address is not multicast (malformed packet).
+    mcast_rx_bad_inner_dst: KStatU64,
 }
 
 impl XdeStats {
@@ -127,6 +130,10 @@ impl XdeStats {
 
     pub fn mcast_rx_pullup_fail(&self) -> &KStatU64 {
         &self.mcast_rx_pullup_fail
+    }
+
+    pub fn mcast_rx_bad_inner_dst(&self) -> &KStatU64 {
+        &self.mcast_rx_bad_inner_dst
     }
 
     pub fn parse_error(&self, dir: Direction, err: &ParseError) {

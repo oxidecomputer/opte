@@ -492,16 +492,30 @@ impl StaticAction for EncapAction {
                     },
                 }),
             )?),
-            // For multicast packets, the inner destination MAC should already
-            // correspond to the inner L3 destination address.
-            inner_ether: if is_mcast {
-                HeaderAction::Ignore
-            } else {
-                HeaderAction::Modify(EtherMod {
-                    dst: Some(phys_target.ether),
-                    ..Default::default()
-                })
-            },
+
+            // For unicast, rewrite inner destination MAC to the target's physical MAC.
+            //
+            // For multicast, rewrite inner dest MAC to the RFC-compliant multicast
+            // MAC (RFC 1112 for IPv4, RFC 2464 for IPv6). This ensures Tx loopback
+            // delivery to local subscribers via `guest_loopback()` has the correct
+            // MAC for gateway layer validation, which requires `EtherAddrMatch::Multicast`.
+            //
+            // Note on Rx path: Incoming multicast packets from the underlay are
+            // handled differently. `DecapAction` only pops outer headers (doesn't
+            // modify inner MACs), and XDE's `handle_mcast_rx()` performs MAC
+            // normalization because 1) packets arrive with arbitrary inner MACs
+            // from remote hosts and 2) multicast subscription routing is
+            // handled in XDE, not OPTE.
+            inner_ether: HeaderAction::Modify(EtherMod {
+                dst: if is_mcast {
+                    // Sanity: if this path is taken, the destination IP must be multicast.
+                    debug_assert!(dst_ip.is_multicast());
+                    dst_ip.multicast_mac()
+                } else {
+                    Some(phys_target.ether)
+                },
+                ..Default::default()
+            }),
             ..Default::default()
         };
 

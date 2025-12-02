@@ -2776,6 +2776,14 @@ fn verify_dhcpv6_essentials<'a>(
     assert_eq!(reply_udp.destination(), dhcpv6::CLIENT_PORT);
     assert_eq!(reply_udp.source(), dhcpv6::SERVER_PORT);
 
+    // Verify UDP checksum is set.
+    // A checksum of 0 means "not computed" which is invalid for IPv6.
+    assert_ne!(
+        reply_udp.checksum(),
+        0,
+        "DHCPv6 reply UDP checksum must be non-zero (mandatory for IPv6)"
+    );
+
     // Verify the details of the DHCPv6 exchange itself.
     assert_eq!(reply.xid, request.xid);
     assert!(reply.has_option(dhcpv6::options::Code::ServerId));
@@ -4847,9 +4855,11 @@ fn test_ipv6_multicast_encapsulation() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    // Multicast traffic is now detected automatically by checking if the destination
-    // IP is a multicast address. No router entries are needed for multicast since it
-    // operates at the fleet level (cross-VPC) rather than within VPC routing.
+    // Multicast traffic is detected automatically by the gateway layer (checking
+    // if the destination IP is multicast), but still requires explicit firewall
+    // permission. This unit test bypasses the firewall by calling port.process()
+    // directly. In production (and XDE tests), `add_multicast_router_entry()` is
+    // required to allow multicast CIDRs through the overlay firewall.
 
     // Build a UDP packet to the multicast address
     let eth = Ethernet {
@@ -4976,154 +4986,216 @@ fn test_tcp_multicast_denied() {
     );
 }
 
-// Ensure packets with unknown critical Geneve options are rejected during
-// option validation (fail-closed on unrecognised critical options).
 #[test]
 fn test_drop_on_unknown_critical_option() {
-    // Build Ethernet + IPv6 (with no extensions) + UDP + Geneve header
-    // carrying a single unknown critical option (class=0xffff, type=0x80, len=0).
-    // Minimal inner Ethernet + IPv4 + UDP follows to satisfy the parser.
-    let mut buf: Vec<u8> = Vec::new();
+    // Ensure packets with unknown critical Geneve options are rejected during
+    // inbound parsing (fail-closed on unrecognised critical options).
+    //
+    // This test verifies that `parse_inbound()` properly validates Geneve options.
+    //
+    // Structure: Eth + IPv6 + UDP + Geneve + unknown_critical_opt + inner(Eth+IPv4+UDP)
 
-    // Ethernet (14B)
-    buf.extend_from_slice(&[
-        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, // dst
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
-        0x86, 0xdd, // ethertype IPv6
-    ]);
+    // Inner packet headers
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x02]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: "10.0.0.1".parse().unwrap(),
+        destination: "10.0.0.2".parse().unwrap(),
+        protocol: IngotIpProto::UDP,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: 0x1337,
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
 
-    // IPv6 header (40B)
-    // ver/tc/fl, payload_len, next_header=UDP(17), hop_limit
-    // payload_len = UDP length (we'll compute)
-    let ip6_hdr_pos = buf.len();
-    buf.extend_from_slice(&[
-        0x60, 0x00, 0x00, 0x00, // ver+tc+fl
-        0x00, 0x00, // payload length (placeholder)
-        0x11, // next header UDP
-        0x40, // hop limit
-        // src
-        0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x01, // dst
-        0xff, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0x00, 0x03,
-    ]);
+    // Build inner packet first
+    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    let inner_len = inner_pkt.byte_len();
 
-    // UDP header (8B)
-    let udp_pos = buf.len();
-    buf.extend_from_slice(&[
-        0x1e, 0x61, // source port
-        0x17, 0xc1, // dest 6081
-        0x00, 0x00, // length (placeholder)
-        0x00, 0x00, // checksum
-    ]);
+    // Create an unknown critical Geneve option (class=0xffff, type=0x80)
+    let unknown_critical_opt = GeneveOpt {
+        class: 0xffff,            // Unknown to OPTE
+        option_type: 0x80.into(), // Critical bit set (bit 7)
+        length: 0,                // No option data (0 words)
+        ..Default::default()
+    };
 
-    // Geneve header (8B): ver+optlen=1 (4B option header), flags=critical opts
-    buf.extend_from_slice(&[
-        0x01, // ver=0, optlen=1 word (4B option header)
-        0x40, // flags: critical options present
-        0x65, 0x58, // protocol type 0x6558
-        0x00, 0x00, 0x00, 0x00, // VNI=0, reserved
-    ]);
-    // Unknown critical option: class=0xffff, type=0x80 (critical), len=0
-    buf.extend_from_slice(&[
-        0xff, 0xff, // class
-        0x80, // critical + type
-        0x00, // rsvd+len=0
-    ]);
-    // No body (len=0)
+    // Geneve header with the unknown critical option
+    let mut outer_geneve = Geneve {
+        vni: Vni::new(0u32).unwrap(),
+        flags: opte::ingot::geneve::GeneveFlags::CRITICAL_OPTS,
+        ..Default::default()
+    };
+    outer_geneve.opt_len = (unknown_critical_opt.packet_length() >> 2) as u8;
+    outer_geneve.options.push(unknown_critical_opt);
 
-    // Minimal inner Ethernet + IPv4 + UDP (to satisfy inner parse)
-    buf.extend_from_slice(&[
-        // inner Ethernet
-        0x00, 0x16, 0x3e, 0x00, 0x00, 0x02, 0x00, 0x16, 0x3e, 0x00, 0x00, 0x01,
-        0x08, 0x00, // IPv4
-        // inner IPv4 (20B)
-        0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x11, 0x00, 0x0a, 0x00,
-        0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, // src=10.0.0.1, dst=10.0.0.2
-        // inner UDP (8B)
-        0x12, 0x34, 0x13, 0x37, 0x00, 0x08, 0x00, 0x00,
-    ]);
+    // UDP length = UDP header + Geneve (header + options) + inner packet
+    let outer_udp = Udp {
+        source: 0x1e61,
+        destination: opte::engine::geneve::GENEVE_PORT,
+        length: (Udp::MINIMUM_LENGTH + outer_geneve.packet_length() + inner_len)
+            as u16,
+        ..Default::default()
+    };
 
-    // Compute UDP length and IPv6 payload length
-    let udp_len = (buf.len() - udp_pos) as u16;
-    buf[udp_pos + 4] = (udp_len >> 8) as u8;
-    buf[udp_pos + 5] = (udp_len & 0xff) as u8;
+    // IPv6 payload_len = UDP length (everything after IPv6 header)
+    let outer_ip = Ipv6 {
+        source: "fd00::1".parse().unwrap(),
+        destination: "ff05::1:3".parse().unwrap(),
+        next_header: IngotIpProto::UDP,
+        payload_len: outer_udp.length,
+        ..Default::default()
+    };
 
-    let ip6_payload_len = (buf.len() - (ip6_hdr_pos + 40)) as u16;
-    buf[ip6_hdr_pos + 4] = (ip6_payload_len >> 8) as u8;
-    buf[ip6_hdr_pos + 5] = (ip6_payload_len & 0xff) as u8;
+    // Outer Ethernet header
+    let outer_eth = Ethernet {
+        destination: MacAddr::from([0x33, 0x33, 0x00, 0x00, 0x00, 0x01]),
+        source: MacAddr::from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        ethertype: Ethertype::IPV6,
+    };
 
-    // Parse Geneve directly from the UDP payload (skip L2/L3) and validate options
-    let geneve_offset = 14 /*eth*/ + 40 /*ipv6*/ + 8 /*udp*/;
-    let (geneve, _, _) =
-        opte::ingot::geneve::ValidGeneve::parse(&buf[geneve_offset..])
-            .expect("parse geneve header");
-    assert!(matches!(
-        geneve::validate_options(&geneve),
-        Err(opte::engine::packet::ParseError::UnrecognisedTunnelOpt { .. })
+    // Use ingot's `Emit` trait to build the outer packet, then append inner packet
+    let mut pkt = MsgBlk::new_ethernet_pkt((
+        outer_eth,
+        outer_ip,
+        outer_udp,
+        outer_geneve,
     ));
+    pkt.append(inner_pkt);
+
+    // Attempt to parse the packet through VpcParser's parse_inbound, which
+    // invokes validate_options via OxideGeneve::validate
+    let parse_result = common::parse_inbound(&mut pkt, VpcParser {});
+
+    // The parser should reject this packet due to the unrecognised critical option
+    let err = match parse_result {
+        Ok(_) => panic!(
+            "Expected parse error due to unknown critical option, but parsing succeeded"
+        ),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(
+            err,
+            ParseError::UnrecognisedTunnelOpt { class: 0xffff, ty: 0x80 }
+        ),
+        "Expected UnrecognisedTunnelOpt with class=0xffff and ty=0x80, got: {err:?}"
+    );
 }
 
 // Ensure Geneve parsing works correctly when an IPv6 extension header is present
-// before UDP (e.g., Hop-by-Hop). Verifies that option walking is positioned at
-// the correct Geneve offset.
+// before UDP (e.g., Hop-by-Hop). Verifies that the parser correctly follows the
+// IPv6 Next Header chain through extension headers to find Geneve + options.
+//
+// NOTE: This test uses manual byte construction to create a deterministic packet
+// with a minimal 8-byte Hop-by-Hop extension header. This ensures the parser
+// correctly walks the Next Header chain: IPv6 -> HopByHop -> UDP -> Geneve.
+// Manual construction allows us to validate exact wire layout.
+//
+// Packet structure:
+//   - Ethernet header (14 bytes)
+//   - IPv6 header (40 bytes, Next Header = 0x00 Hop-by-Hop)
+//   - Hop-by-Hop extension header (8 bytes, Next Header = 0x11 UDP)
+//   - UDP header (8 bytes, dst port 6081 Geneve)
+//   - Geneve header with multicast option (16 bytes)
+//   - Inner packet (Ethernet + IPv4 + UDP)
+//
+// The test verifies parse success and correct extraction of the Geneve multicast
+// replication option, confirming ingot's parser navigates extension headers correctly.
 #[test]
 fn test_v6_ext_hdr_geneve_offset_ok() {
     let mut buf: Vec<u8> = Vec::new();
 
-    // Ethernet
+    // Ethernet header (14 bytes)
     buf.extend_from_slice(&[
-        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
-        0x86, 0xdd,
+        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, // dst MAC (IPv6 multicast)
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src MAC
+        0x86, 0xdd, // ethertype (IPv6)
     ]);
 
-    // IPv6 header (Next Header = Hop-by-Hop (0))
+    // IPv6 header (40 bytes)
     let ip6_hdr_pos = buf.len();
     buf.extend_from_slice(&[
-        0x60, 0x00, 0x00, 0x00, 0x00,
-        0x00, // payload length (placeholder)
-        0x00, // next header: Hop-by-Hop
+        0x60, 0x00, 0x00, 0x00, // version(6), class(0), label(0)
+        0x00, 0x00, // payload length (placeholder - updated later)
+        0x00, // next header: Hop-by-Hop (0x00)
         0x40, // hop limit
-        // src
+        // source address: fd00::1
         0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x01, // dst
+        0x00, 0x00, 0x00, 0x01, // destination address: ff04::1:ffff
         0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x01, 0xff, 0xff,
     ]);
 
-    // Hop-by-Hop extension header (8B) -> next header UDP (17), hdr ext len=0
-    buf.extend_from_slice(&[0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    // Hop-by-Hop extension header (8 bytes)
+    // Format: next_header, hdr_ext_len, options...
+    buf.extend_from_slice(&[
+        0x11, // next header: UDP (0x11)
+        0x00, // header extension length: 0 (means 8 bytes total)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding options
+    ]);
 
-    // UDP header (8B)
+    // UDP header (8 bytes)
     let udp_pos = buf.len();
     buf.extend_from_slice(&[
-        0x1e, 0x61, // source
-        0x17, 0xc1, // dest 6081
-        0x00, 0x00, // length (placeholder)
+        0x1e, 0x61, // source port
+        0x17, 0xc1, // destination port (6081 - Geneve)
+        0x00, 0x00, // length (placeholder - updated later)
         0x00, 0x00, // checksum
     ]);
 
-    // Geneve header (8B): ver+optlen=2 (8B option area), flags=0
-    buf.extend_from_slice(&[0x02, 0x00, 0x65, 0x58, 0x00, 0x00, 0x00, 0x00]);
-    // Multicast option: class=0x0129, type=0x01, len=1; body=4B with External
+    // Geneve header (8 bytes) with options
     buf.extend_from_slice(&[
-        0x01,
-        0x29,
-        0x01,
-        0x01, // class, type, rsvd+len
-        (oxide_vpc::api::Replication::External as u8) << 6,
-        0x00,
-        0x00,
-        0x00,
+        0x02, // version(0) + opt_len(2) = 8 bytes of options
+        0x00, // flags
+        0x65, 0x58, // protocol type (0x6558 = Ethernet)
+        0x00, 0x00, 0x00, 0x00, // VNI (0) + reserved
     ]);
 
-    // Minimal inner Ethernet + IPv4 + UDP
+    // Multicast option (8 bytes): class=0x0129 (Oxide), type=0x01, len=1 (4B data)
     buf.extend_from_slice(&[
-        0x00, 0x16, 0x3e, 0x00, 0x00, 0x02, 0x00, 0x16, 0x3e, 0x00, 0x00, 0x01,
-        0x08, 0x00, 0x45, 0x00, 0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x11, 0x00,
-        0x0a, 0x00, 0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, 0x12, 0x34, 0x13, 0x37,
-        0x00, 0x08, 0x00, 0x00,
+        0x01,
+        0x29, // option class (Oxide)
+        0x01, // option type
+        0x01, // reserved(3 bits) + length(5 bits) = 1 (4 bytes)
+        (oxide_vpc::api::Replication::External as u8) << 6, // replication type
+        0x00,
+        0x00,
+        0x00, // padding
     ]);
+
+    // Build inner packet using ingot types to ensure proper structure
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x02]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: "10.0.0.1".parse().unwrap(),
+        destination: "10.0.0.2".parse().unwrap(),
+        protocol: IngotIpProto::UDP,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: 0x1337,
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
+
+    // Append inner packet bytes
+    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    for chunk in inner_pkt.iter() {
+        buf.extend_from_slice(chunk);
+    }
 
     // Set UDP and IPv6 payload lengths
     let udp_len = (buf.len() - udp_pos) as u16;
@@ -5134,12 +5206,18 @@ fn test_v6_ext_hdr_geneve_offset_ok() {
     buf[ip6_hdr_pos + 4] = (ip6_payload_len >> 8) as u8;
     buf[ip6_hdr_pos + 5] = (ip6_payload_len & 0xff) as u8;
 
-    // Parse Geneve directly after IPv6 ext header and UDP, then check multicast option
-    let geneve_offset = 14 /*eth*/ + 40 /*ipv6*/ + 8 /*hop-by-hop*/ + 8 /*udp*/;
-    let (geneve, _, _) =
-        opte::ingot::geneve::ValidGeneve::parse(&buf[geneve_offset..])
-            .expect("parse geneve header after ext hdr");
-    let repl = geneve::extract_multicast_replication(&geneve)
-        .expect("multicast option present");
+    // Parse through the full pipeline using `parse_inbound()` with VpcParser
+    // This tests that the parser correctly handles IPv6 extension headers and
+    // finds the Geneve header after navigating the extension header chain
+    let mut pkt = MsgBlk::copy(&buf);
+    let parse_result = common::parse_inbound(&mut pkt, VpcParser {});
+
+    // Parsing should succeed
+    let parsed = parse_result.expect("packet should parse successfully");
+
+    // Verify we can extract the multicast replication option
+    let repl =
+        geneve::extract_multicast_replication(&parsed.meta().outer_encap)
+            .expect("multicast option present");
     assert_eq!(repl, oxide_vpc::api::Replication::External);
 }

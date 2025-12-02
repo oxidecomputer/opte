@@ -49,6 +49,7 @@ use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use zone::Zlogin;
@@ -95,6 +96,21 @@ fn ensure_zone_absent(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Poll until a condition is met or timeout expires.
+fn poll_until<F>(condition: F, timeout: Duration, what: &str) -> Result<()>
+where
+    F: Fn() -> bool,
+{
+    let deadline = Instant::now() + timeout;
+    while !condition() {
+        if Instant::now() > deadline {
+            bail!("timed out waiting for {what}");
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
 /// The IPv4 overlay network used in all tests.
 pub const OVERLAY_NET: &str = "10.0.0.0/24";
 /// The IPv4 overlay OPTE gateway used in all tests.
@@ -103,6 +119,30 @@ pub const OVERLAY_GW: &str = "10.0.0.254";
 pub const OVERLAY_NET_V6: &str = "fd00::/64";
 /// The IPv6 overlay OPTE gateway used in all tests.
 pub const OVERLAY_GW_V6: &str = "fd00::254";
+
+/// Snoop timeout when expecting to capture packets (5 seconds).
+pub const SNOOP_TIMEOUT_EXPECT_PACKET: Duration = Duration::from_secs(5);
+/// Snoop timeout when expecting no packets (2 seconds).
+pub const SNOOP_TIMEOUT_EXPECT_NONE: Duration = Duration::from_secs(2);
+
+/// Standard UDP port used for multicast tests.
+pub const MCAST_TEST_PORT: u16 = 9999;
+
+/// IPv4 multicast address range (224.0.0.0/4).
+/// Used for firewall rules and route configuration in multicast tests.
+pub const IPV4_MULTICAST_CIDR: &str = "224.0.0.0/4";
+
+/// IPv6 admin-local multicast scope (ff04::/16).
+/// Used for underlay multicast addresses and route configuration.
+pub const IPV6_ADMIN_LOCAL_MULTICAST_CIDR: &str = "ff04::/16";
+
+/// Geneve encapsulation filter for snoop captures.
+/// Matches IPv6 UDP packets on Geneve port 6081 for underlay traffic.
+pub const GENEVE_UNDERLAY_FILTER: &str = "ip6 and udp port 6081";
+
+/// Underlay device name used in single-sled test topology.
+/// The simnet pair creates a loopback underlay for multicast tests.
+pub const UNDERLAY_TEST_DEVICE: &str = "xde_test_sim1";
 
 /// This is a wrapper around the ztest::Zone object that encapsulates common
 /// logic needed for running the OPTE tests zones used in this test suite.
@@ -123,13 +163,11 @@ impl OpteZone {
     }
 
     /// Wait for the network to come up, then set up the IPv4 overlay network.
-    fn setup(&self, devname: &str, addr: String) -> Result<()> {
+    fn setup(&self, devname: &str, addr: Ipv4Addr) -> Result<()> {
         self.zone.wait_for_network()?;
-        // Configure IPv4 with static address (immediate, no DHCP wait)
-        self.zone.zexec(&format!(
-            "ipadm create-addr -t -T static -a {addr}/24 {devname}/test"
-        ))?;
-
+        // Configure IPv4 via DHCP
+        self.zone
+            .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/test"))?;
         self.zone.zexec(&format!("route add -iface {OVERLAY_GW} {addr}"))?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
         // Add multicast route so multicast traffic goes through the OPTE gateway
@@ -137,32 +175,40 @@ impl OpteZone {
         Ok(())
     }
 
-    /// Wait for the network to come up, then set up dual-stack (IPv4 + IPv6) overlay network.
+    /// Wait for the network to come up, then set up dual-stack (IPv4 + IPv6)
+    /// overlay network.
     fn setup_dualstack(
         &self,
         devname: &str,
-        ipv4_addr: String,
-        ipv6_addr: String,
+        ipv4_addr: Ipv4Addr,
+        ipv6_addr: Ipv6Addr,
     ) -> Result<()> {
         self.zone.wait_for_network()?;
-        // Configure IPv4 with static address (immediate, no DHCP wait)
-        self.zone.zexec(&format!(
-            "ipadm create-addr -t -T static -a {ipv4_addr}/24 {devname}/testv4"
-        ))?;
+        // Configure IPv4 via DHCP (OPTE provides DHCP server via hairpin)
+        self.zone
+            .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/testv4"))?;
         self.zone
             .zexec(&format!("route add -iface {OVERLAY_GW} {ipv4_addr}"))?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
 
-        // Configure IPv6 with static address
-        // Use addrconf first to enable IPv6 on the interface, then add static address
+        // Configure IPv6 via DHCPv6 with stateful mode.
+        // DHCPv6 checksum correctness is validated in the integration tests;
+        // here we just need the address assigned for multicast tests.
         self.zone.zexec(&format!(
-            "ipadm create-addr -t -T addrconf {devname}/addrconf"
+            "ipadm create-addr -t -T addrconf -p stateful=yes,stateless=no {devname}/testv6"
         ))?;
-        // Small delay to let addrconf initialize
-        std::thread::sleep(Duration::from_millis(500));
-        self.zone.zexec(&format!(
-            "ipadm create-addr -t -T static -a {ipv6_addr}/64 {devname}/testv6"
-        ))?;
+        // Wait for DHCPv6 to complete (addrconf is async)
+        let zone = &self.zone;
+        let addr_str = ipv6_addr.to_string();
+        poll_until(
+            || {
+                zone.zexec("ipadm show-addr -o addr,state")
+                    .map(|out| out.contains(&addr_str))
+                    .unwrap_or(false)
+            },
+            Duration::from_secs(10),
+            &format!("DHCPv6 address {ipv6_addr}"),
+        )?;
         self.zone.zexec(&format!(
             "route add -inet6 -iface {OVERLAY_GW_V6} {ipv6_addr}"
         ))?;
@@ -180,8 +226,8 @@ impl OpteZone {
     /// Pins the source address with `-s` for deterministic egress selection.
     pub fn send_udp_v4(
         &self,
-        src_ip: &str,
-        dst_ip: &str,
+        src_ip: Ipv4Addr,
+        dst_ip: Ipv4Addr,
         port: u16,
         payload: &str,
     ) -> Result<()> {
@@ -196,8 +242,8 @@ impl OpteZone {
     /// Avoids `-6` for illumos netcat compatibility (destination selects family).
     pub fn send_udp_v6(
         &self,
-        src_ip: &str,
-        dst_ip: &str,
+        src_ip: Ipv6Addr,
+        dst_ip: Ipv6Addr,
         port: u16,
         payload: &str,
     ) -> Result<()> {
@@ -343,19 +389,19 @@ impl OptePort {
         self.cfg.guest_mac.bytes()
     }
 
-    /// Return the guest IPv4 address as a string.
-    pub fn ip(&self) -> String {
+    /// Return the guest IPv4 address.
+    pub fn ip(&self) -> Ipv4Addr {
         match &self.cfg.ip_cfg {
-            IpCfg::Ipv4(cfg) => cfg.private_ip.to_string(),
-            IpCfg::DualStack { ipv4, .. } => ipv4.private_ip.to_string(),
+            IpCfg::Ipv4(cfg) => cfg.private_ip,
+            IpCfg::DualStack { ipv4, .. } => ipv4.private_ip,
             _ => panic!("expected ipv4 or dualstack guest"),
         }
     }
 
-    /// Return the guest IPv6 address as a string (for dual-stack ports).
-    pub fn ipv6(&self) -> Option<String> {
+    /// Return the guest IPv6 address (for dual-stack ports).
+    pub fn ipv6(&self) -> Option<Ipv6Addr> {
         match &self.cfg.ip_cfg {
-            IpCfg::DualStack { ipv6, .. } => Some(ipv6.private_ip.to_string()),
+            IpCfg::DualStack { ipv6, .. } => Some(ipv6.private_ip),
             _ => None,
         }
     }
@@ -445,10 +491,15 @@ impl Drop for OptePort {
     }
 }
 
-/// This is resource handle for an xde device. It provides a few convenience
-/// methods for setting up global OPTE properties. It also removes the xde
-/// driver from the kernel when dropped. This is helpful for cleaning things up
-/// after a test run.
+/// Resource handle for an xde device. Provides convenience methods for setting
+/// up global OPTE properties.
+///
+/// When dropped, this clears the underlay configuration to release references
+/// to simnet/vnic devices, allowing their cleanup to proceed. The driver itself
+/// remains loaded for local development ergonomics.
+///
+/// Full teardown (including driver removal via `pfexec rem_drv xde`) should be
+/// performed explicitly in a test script.
 pub struct Xde {}
 
 impl Xde {
@@ -499,9 +550,27 @@ impl SnoopGuard {
     /// Captures a single packet (`-c 1`) and dumps hex output (`-x0`).
     /// Uses `-r` to disable name resolution for deterministic numeric output.
     pub fn start(dev_name: &str, filter: &str) -> anyhow::Result<Self> {
+        Self::start_with_count(dev_name, filter, 1)
+    }
+
+    /// Start a `snoop` capture with a specific packet count.
+    /// Useful for tests that need to capture multiple packets (e.g., multi-next-hop fanout).
+    pub fn start_with_count(
+        dev_name: &str,
+        filter: &str,
+        count: u32,
+    ) -> anyhow::Result<Self> {
         let child = Command::new("pfexec")
             .args([
-                "snoop", "-r", "-d", dev_name, "-c", "1", "-P", "-x0", filter,
+                "snoop",
+                "-r",
+                "-d",
+                dev_name,
+                "-c",
+                &count.to_string(),
+                "-P",
+                "-x0",
+                filter,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -533,6 +602,56 @@ impl SnoopGuard {
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }
+            }
+        }
+    }
+
+    /// Assert that no packets are captured within the expected timeout.
+    ///
+    /// If packets are captured, this panics with a descriptive message including
+    /// the provided context and the snoop output. This is the preferred pattern
+    /// for negative assertions (verifying that traffic is not flowing).
+    ///
+    /// # Example
+    /// ```no_run
+    /// let mut snoop = SnoopGuard::start("xde_test_sim1", "udp port 9999")?;
+    /// // ... perform operations that should NOT generate traffic ...
+    /// snoop.assert_no_packet("on unsubscribed node B");
+    /// ```
+    pub fn assert_no_packet(&mut self, context: &str) {
+        if let Ok(out) = self.wait_with_timeout(SNOOP_TIMEOUT_EXPECT_NONE) {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            panic!("Expected no packet {context}; got:\n{stdout}");
+        }
+    }
+
+    /// Assert that packets are captured within the expected timeout.
+    ///
+    /// If no packets are captured (timeout), this panics with a descriptive message
+    /// including the provided context. Returns the snoop output for further processing
+    /// (e.g., Geneve packet parsing). This is the preferred pattern for positive
+    /// assertions (typically verifying that traffic is flowing).
+    ///
+    /// # Example
+    /// ```no_run
+    /// let mut snoop = SnoopGuard::start("xde_test_sim1", "udp port 9999")?;
+    /// // ... perform operations that should generate traffic ...
+    /// let output = snoop.assert_packet("on subscribed node B");
+    /// // Further process output if needed (e.g., parse Geneve headers)
+    /// ```
+    pub fn assert_packet(&mut self, context: &str) -> std::process::Output {
+        match self.wait_with_timeout(SNOOP_TIMEOUT_EXPECT_PACKET) {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !output.status.success() || stdout.is_empty() {
+                    panic!(
+                        "Expected packet {context}, but snoop failed or captured no packets:\n{stdout}"
+                    );
+                }
+                output
+            }
+            Err(e) => {
+                panic!("Expected packet {context}, but timed out: {e}");
             }
         }
     }
@@ -701,15 +820,13 @@ pub struct Topology {
 /// to OPTE and then to the adjacent vopte device. This is a nice little
 /// sanity checker to make sure basic opte/xde functionality is working - and
 /// that we're not hitting things like debug asserts in the OS.
-pub fn two_node_topology(brand: &str) -> Result<Topology> {
-    two_node_topology_named(brand, "a", "b")
-}
-
-pub fn two_node_topology_named(
-    brand: &str,
-    zone_a_name: &str,
-    zone_b_name: &str,
-) -> Result<Topology> {
+///
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b")
+/// and brand ("omicron1") for simplicity.
+pub fn two_node_topology() -> Result<Topology> {
+    let brand = "omicron1";
+    let zone_a_name = "a";
+    let zone_b_name = "b";
     // Create the "underlay loopback". With simnet device pairs, any packet that
     // goes in one is forwarded to the other. In the topology depicted above,
     // this means that anything vopte0 sends, will be encapsulated onto the
@@ -797,15 +914,12 @@ pub fn two_node_topology_named(
     })
 }
 
-pub fn two_node_topology_dualstack(brand: &str) -> Result<Topology> {
-    two_node_topology_dualstack_named(brand, "a", "b")
-}
-
-pub fn two_node_topology_dualstack_named(
-    brand: &str,
-    zone_a_name: &str,
-    zone_b_name: &str,
-) -> Result<Topology> {
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b")
+/// and brand ("omicron1") for simplicity.
+pub fn two_node_topology_dualstack() -> Result<Topology> {
+    let brand = "omicron1";
+    let zone_a_name = "a";
+    let zone_b_name = "b";
     let sim = SimnetLink::new("xde_test_sim0", "xde_test_sim1")?;
     let vn0 = Vnic::new("xde_test_vnic0", &sim.end_a)?;
     let vn1 = Vnic::new("xde_test_vnic1", &sim.end_b)?;
@@ -856,10 +970,18 @@ pub fn two_node_topology_dualstack_named(
     let b = OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand)?;
 
     println!("setup zone {zone_a_name}");
-    a.setup_dualstack(&opte0.name, opte0.ip(), "fd00::1".to_string())?;
+    a.setup_dualstack(
+        &opte0.name,
+        opte0.ip(),
+        opte0.ipv6().expect("dualstack port must have IPv6"),
+    )?;
 
     println!("setup zone {zone_b_name}");
-    b.setup_dualstack(&opte1.name, opte1.ip(), "fd00::2".to_string())?;
+    b.setup_dualstack(
+        &opte1.name,
+        opte1.ip(),
+        opte1.ipv6().expect("dualstack port must have IPv6"),
+    )?;
 
     Ok(Topology {
         nodes: vec![
@@ -876,16 +998,13 @@ pub fn two_node_topology_dualstack_named(
     })
 }
 
-pub fn three_node_topology(brand: &str) -> Result<Topology> {
-    three_node_topology_named(brand, "a", "b", "c")
-}
-
-pub fn three_node_topology_named(
-    brand: &str,
-    zone_a_name: &str,
-    zone_b_name: &str,
-    zone_c_name: &str,
-) -> Result<Topology> {
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b", "c")
+/// and brand ("omicron1") for simplicity.
+pub fn three_node_topology() -> Result<Topology> {
+    let brand = "omicron1";
+    let zone_a_name = "a";
+    let zone_b_name = "b";
+    let zone_c_name = "c";
     // Create three-node topology for testing multicast fanout
     let sim = SimnetLink::new("xde_test_sim0", "xde_test_sim1")?;
     let vn0 = Vnic::new("xde_test_vnic0", &sim.end_a)?;
@@ -1106,8 +1225,6 @@ pub fn single_node_over_real_nic(
 
     println!("start zone");
     let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
-
-    std::thread::sleep(Duration::from_secs(30));
 
     println!("setup zone");
     a.setup(&opte.name, opte.ip())?;

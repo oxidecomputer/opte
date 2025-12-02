@@ -28,6 +28,7 @@ use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::api::ClearMcast2PhysReq;
 use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
@@ -59,6 +60,7 @@ use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
@@ -235,6 +237,33 @@ enum Command {
 
     /// Clear a virtual-to-boundary mapping
     ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+
+    /// Set a multicast-to-physical (M2P) mapping
+    ///
+    /// Maps an overlay multicast group address to an underlay IPv6 multicast
+    /// address. This mapping is required before ports can subscribe to the
+    /// group. Subscriptions use overlay addresses while OPTE uses underlay
+    /// addresses for actual packet delivery.
+    ///
+    /// All multicast groups use the fleet-wide DEFAULT_MULTICAST_VNI (77).
+    SetM2P {
+        /// The overlay multicast group address (IPv4 or IPv6)
+        group: IpAddr,
+        /// The underlay IPv6 multicast address (admin-local scope ff04::/16)
+        underlay: MulticastUnderlay,
+    },
+
+    /// Clear a multicast-to-physical (M2P) mapping
+    ///
+    /// Removes the mapping from an overlay multicast group to its underlay
+    /// address. After clearing, ports can no longer subscribe to this group
+    /// (but existing subscriptions will succeed as no-ops on unsubscribe).
+    ClearM2P {
+        /// The overlay multicast group address (IPv4 or IPv6)
+        group: IpAddr,
+        /// The underlay IPv6 multicast address (admin-local scope ff04::/16)
+        underlay: MulticastUnderlay,
+    },
 
     /// Set a multicast forwarding entry
     ///
@@ -860,6 +889,16 @@ fn main() -> anyhow::Result<()> {
                 .collect();
             let req = ClearVirt2BoundaryReq { vip: prefix, tep };
             hdl.clear_v2b(&req)?;
+        }
+
+        Command::SetM2P { group, underlay } => {
+            let req = SetMcast2PhysReq { group, underlay };
+            hdl.set_m2p(&req)?;
+        }
+
+        Command::ClearM2P { group, underlay } => {
+            let req = ClearMcast2PhysReq { group, underlay };
+            hdl.clear_m2p(&req)?;
         }
 
         Command::SetMcastFwd { underlay, next_hop, replication } => {

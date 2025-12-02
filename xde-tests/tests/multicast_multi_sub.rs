@@ -7,16 +7,21 @@
 //! XDE multicast multiple subscriber tests.
 //!
 //! These validate Tx fanout and forwarding semantics across replication modes:
-//! - Same-sled delivery (DELIVER action) is based purely on subscriptions and
-//!   independent of Replication mode set for Tx.
-//! - External replication sends Geneve to the multicast underlay address for
+//! - Same-sled delivery is based purely on subscriptions and independent of the
+//!   [`Replication`] mode set for Tx. Sender ports are always excluded from
+//!   receiving their own multicast packets (sender self-exclusion).
+//! - `Replication::External` sends Geneve to the multicast underlay address for
 //!   delivery to the boundary switch, which then replicates to front-panel ports.
-//! - Underlay replication sends Geneve to ff04::/16 multicast address for
+//! - `Replication::Underlay` sends Geneve to ff04::/16 multicast address for
 //!   sled-to-sled delivery; receiving sleds perform same-sled delivery based on
 //!   local subscriptions.
-//! - "Both" replication instructs Tx to set bifurcated replication flags
+//! - `Replication::Both` instructs Tx to set bifurcated replication flags
 //!   (External + Underlay) in the Geneve header for switch-side handling, while
 //!   same-sled delivery still occurs independently based on subscriptions.
+//!
+//! Note: OPTE routes to NextHopV6::addr (unicast switch address) to determine
+//! reachability and underlay egress, while the actual packet destination (outer
+//! IPv6) is always the multicast address.
 
 use anyhow::Result;
 use opte_ioctl::OpteHdl;
@@ -29,20 +34,31 @@ use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::Vni;
-use std::time::Duration;
+use xde_tests::GENEVE_UNDERLAY_FILTER;
+use xde_tests::IPV4_MULTICAST_CIDR;
+use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SnoopGuard;
+use xde_tests::UNDERLAY_TEST_DEVICE;
 
 #[test]
-fn test_multicast_multiple_local_subscribers() -> Result<()> {
-    // Create 3-node topology to test local fanout
-    let topol = xde_tests::three_node_topology_named(
-        "omicron1", "mlsa", "mlsb", "mlsc",
-    )?;
+fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
+    // Tests Tx underlay forwarding when only the sender is subscribed.
+    //
+    // This validates that underlay forwarding works independently of local
+    // subscriptions: packets are sent to the underlay even when no local ports
+    // (besides the sender) are subscribed.
+    //
+    // Test setup:
+    // - Sender A is subscribed (will not receive its own packet due to self-exclusion)
+    // - B and C are not subscribed (no same-sled delivery to them)
+    // - Forwarding is configured with `Replication::External`
+    // - Verifies underlay packet is sent with correct Geneve header
+
+    let topol = xde_tests::three_node_topology()?;
 
     // IPv4 multicast group: 224.1.2.3
     let mcast_group = Ipv4Addr::from([224, 1, 2, 3]);
-    const MCAST_PORT: u16 = 9999;
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
@@ -55,34 +71,35 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
     // Set up multicast state with automatic cleanup on drop
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
-    // Use node B's underlay address as the switch unicast address for routing.
+    // Use node B's underlay address as the next hop to select underlay egress.
     //
-    // Note: This is a single-sled test - all nodes share one underlay.
-    // In production, XDE would route toward this switch address to determine the
-    // underlay port/MAC, but the packet dst would be the multicast address.
-    // This test validates packet formatting, not actual multi-sled routing.
+    // Note: In this harness, the underlay is a single L2 segment effectively
+    // hooked back to itself. Any address reachable from u1 provides a path to
+    // send on that segment and receive the same packet on u2. This differs from
+    // product multi-sled underlays. The unicast next hop only selects the
+    // underlay egress; the actual packet destination is the multicast address.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up Tx forwarding with External replication mode.
-    // Tx behavior: packet sent to underlay with Replication::External flag.
-    // In production, switch receives this flag and replicates to front-panel ports.
-    // Rx behavior: same-sled delivery is controlled by subscriptions, independent
-    // of the Replication mode.
+    // Set up Tx forwarding with `Replication::External` mode.
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
         Replication::External,
     )])?;
 
-    // Allow IPv4 multicast traffic via Multicast target and subscribe to the group
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    // Allow IPv4 multicast traffic via Multicast target
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
-        node.port
-            .subscribe_multicast(mcast_group.into())
-            .expect("subscribe should succeed");
     }
 
-    // Assert subscription table reflects all three subscribers
+    // Subscribe ONLY sender A (sender self-exclusion means A won't receive its own packet)
+    // B and C are not subscribed, so no same-sled delivery and no Rx delivery.
+    topol.nodes[0]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("subscribe sender A should succeed");
+
+    // Assert subscription table reflects only A subscribed
     let hdl = OpteHdl::open()?;
     let subs = hdl.dump_mcast_subs()?;
     let s_entry = subs
@@ -94,6 +111,120 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
+        s_entry.ports.contains(&p0),
+        "expected {p0} to be subscribed; got {:?}",
+        s_entry.ports
+    );
+    assert!(
+        !s_entry.ports.contains(&p1) && !s_entry.ports.contains(&p2),
+        "expected {p1} and {p2} not to be subscribed; got {:?}",
+        s_entry.ports
+    );
+
+    // Start snoops on nodes B and C to verify no delivery (not subscribed)
+    let dev_name_b = topol.nodes[1].port.name().to_string();
+    let dev_name_c = topol.nodes[2].port.name().to_string();
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
+
+    let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
+    let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
+
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
+    // Start underlay snoop to capture Geneve (UDP/6081) with External replication
+    let mut snoop_underlay =
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+
+    // Clear UFT before sending to ensure fresh flow computation
+    hdl.clear_uft(topol.nodes[0].port.name())?;
+
+    // Send multicast packet from node A
+    let payload = "forwarding test";
+    let sender_v4 = topol.nodes[0].port.ip();
+    topol.nodes[0].zone.send_udp_v4(
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
+        payload,
+    )?;
+
+    // Verify B and C do not receive packets (not subscribed)
+    snoop_b.assert_no_packet("on unsubscribed node B");
+    snoop_c.assert_no_packet("on unsubscribed node C");
+
+    // Verify underlay multicast forwarding (`Replication::External` mode)
+    // Parse the captured Geneve packet and assert:
+    // - VNI == DEFAULT_MULTICAST_VNI
+    // - Outer IPv6 dst == mcast_underlay (multicast group)
+    // - Replication == `Replication::External`
+    // Note: In production, the switch would see this External tag and replicate
+    // to front panel. This test verifies the Geneve header is correctly formed.
+    let snoop_underlay_out =
+        snoop_underlay.assert_packet("underlay External replication");
+    let stdout_underlay = String::from_utf8_lossy(&snoop_underlay_out.stdout);
+
+    geneve_verify::assert_geneve_packet(
+        &stdout_underlay,
+        vni,
+        mcast_underlay,
+        Replication::External,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_multicast_tx_same_sled_only() -> Result<()> {
+    // Test Tx same-sled delivery in isolation without underlay forwarding.
+    // This validates that OPTE's Tx path performs local replication to
+    // subscribers on the same sled, independent of forwarding table entries.
+    //
+    // Behavior(s) tested:
+    // - Tx same-sled delivery works without any forwarding entries
+    // - Source port (A) does not receive its own packet (self-delivery skipped)
+    // - Subscriber ports (B, C) receive packets via guest_loopback during Tx
+    // - No packets are sent to the underlay (no forwarding configured)
+    //
+    // This test exercises Tx behavior by not programming the next hop.
+
+    let topol = xde_tests::three_node_topology()?;
+
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 7]);
+
+    // M2P mapping for multicast group
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        224, 1, 2, 7,
+    ]))
+    .unwrap();
+
+    let _mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
+
+    // We do NOT set up any forwarding entries. This ensures we're only testing
+    // Tx same-sled delivery, not underlay forwarding
+    // `mcast.set_forwarding(...)` is intentionally omitted
+
+    // Allow IPv4 multicast traffic and subscribe all nodes
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    for node in &topol.nodes {
+        node.port.add_multicast_router_entry(mcast_cidr)?;
+        node.port
+            .subscribe_multicast(mcast_group.into())
+            .expect("subscribe should succeed");
+    }
+
+    // Verify all three nodes are subscribed
+    let hdl = OpteHdl::open()?;
+    let subs = hdl.dump_mcast_subs()?;
+    let s_entry = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == mcast_underlay)
+        .expect("missing multicast subscription entry");
+    let p0 = topol.nodes[0].port.name().to_string();
+    let p1 = topol.nodes[1].port.name().to_string();
+    let p2 = topol.nodes[2].port.name().to_string();
+    assert!(
         s_entry.ports.contains(&p0)
             && s_entry.ports.contains(&p1)
             && s_entry.ports.contains(&p2),
@@ -101,94 +232,63 @@ fn test_multicast_multiple_local_subscribers() -> Result<()> {
         s_entry.ports
     );
 
-    // Start snoops on nodes B and C using SnoopGuard
+    // Verify no forwarding entries exist
+    let fwd = hdl.dump_mcast_fwd()?;
+    assert!(
+        !fwd.entries.iter().any(|e| e.underlay == mcast_underlay),
+        "expected no forwarding entries for {mcast_underlay}, got: {:?}",
+        fwd.entries
+    );
+
+    // Start snoops on nodes B and C (expect delivery) and underlay (expect nothing)
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let dev_name_c = topol.nodes[2].port.name().to_string();
-    let filter = format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
 
     let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
     let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
 
-    // Also snoop underlay to verify unicast Geneve Tx to boundary
-    let underlay_dev = "xde_test_sim1";
+    // Start underlay snoop to verify no packets are sent (no forwarding configured)
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
 
     // Send multicast packet from node A
-    let payload = "fanout test";
+    let payload = "tx same-sled only";
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         payload,
     )?;
 
-    // Wait for both snoops to capture packets
-    let snoop_output_b = snoop_b.wait_with_timeout(Duration::from_secs(5))?;
-    let snoop_output_c = snoop_c.wait_with_timeout(Duration::from_secs(5))?;
+    // Verify B and C receive packets (essentially from Tx same-sled delivery only)
+    snoop_b.assert_packet("Tx same-sled delivery to node B");
+    snoop_c.assert_packet("Tx same-sled delivery to node C");
 
-    let stdout_b = String::from_utf8_lossy(&snoop_output_b.stdout);
-    assert!(
-        snoop_output_b.status.success() && stdout_b.contains("UDP"),
-        "Expected to capture multicast UDP packet on node B, snoop output:\n{stdout_b}"
-    );
-
-    let stdout_c = String::from_utf8_lossy(&snoop_output_c.stdout);
-    assert!(
-        snoop_output_c.status.success() && stdout_c.contains("UDP"),
-        "Expected to capture multicast UDP packet on node C, snoop output:\n{stdout_c}"
-    );
-
-    // Verify underlay multicast forwarding (External mode)
-    // Parse the captured Geneve packet and assert:
-    // - VNI == DEFAULT_MULTICAST_VNI
-    // - Outer IPv6 dst == mcast_underlay (multicast group)
-    // - Replication == External
-    // Note: In production, the switch would see this External tag and replicate
-    // to front panel. This test verifies the Geneve header is correctly formed.
-    let snoop_underlay_out =
-        snoop_underlay.wait_with_timeout(Duration::from_secs(5))?;
-    let stdout_underlay = String::from_utf8_lossy(&snoop_underlay_out.stdout);
-    assert!(
-        snoop_underlay_out.status.success() && stdout_underlay.contains("UDP"),
-        "Expected to capture Geneve packet on underlay for External replication, output:\n{stdout_underlay}"
-    );
-
-    let hex_str = geneve_verify::extract_snoop_hex(&stdout_underlay)
-        .expect("Failed to extract hex from snoop output");
-    let packet_bytes = geneve_verify::parse_snoop_hex(&hex_str)
-        .expect("Failed to parse hex string");
-    let geneve_info = geneve_verify::parse_geneve_packet(&packet_bytes)
-        .expect("Failed to parse Geneve packet");
-
-    assert_eq!(
-        geneve_info.vni, vni,
-        "Geneve VNI should be DEFAULT_MULTICAST_VNI ({})",
-        DEFAULT_MULTICAST_VNI
-    );
-    assert_eq!(
-        geneve_info.outer_ipv6_dst,
-        Ipv6Addr::from(mcast_underlay),
-        "External replication should use multicast address (outer IPv6 dst)"
-    );
-    assert_eq!(
-        geneve_info.replication,
-        Some(Replication::External),
-        "Geneve replication mode should be External"
-    );
+    // Verify no underlay packet was sent (no forwarding configured)
+    snoop_underlay.assert_no_packet("(no forwarding entries)");
 
     Ok(())
 }
 
 #[test]
-fn test_multicast_underlay_replication() -> Result<()> {
+fn test_multicast_underlay_replication_no_local_subscribers() -> Result<()> {
+    // Tests `Replication::Underlay` mode without local subscribers.
+    //
+    // Behavior(s) tested:
+    // - Tx forwarding sends Geneve packets to ff04::/16 multicast underlay
+    // - Geneve header contains `Replication::Underlay` flag
+    // - No same-sled delivery occurs (zero subscribers)
+    // - Leaf-only Rx
+
     // Create 2-node topology to test Underlay replication mode
-    let topol = xde_tests::two_node_topology_named("omicron1", "ura", "urb")?;
+    let topol = xde_tests::two_node_topology()?;
 
     // IPv4 multicast group
     let mcast_group = Ipv4Addr::from([224, 1, 2, 4]);
-    const MCAST_PORT: u16 = 9999;
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
@@ -202,10 +302,18 @@ fn test_multicast_underlay_replication() -> Result<()> {
 
     let hdl = OpteHdl::open()?;
 
-    // Use node B's underlay address as the switch unicast address for routing.
+    // Use node B's underlay address as the next hop to select underlay egress.
+    //
+    // Note: In this harness, the underlay is a single L2 segment effectively
+    // hooked back to itself. Any address reachable on the underlay provides a
+    // path for packets to be sent and received on that segment. This differs
+    // from product multi-sled underlays. The unicast next hop only selects the
+    // underlay egress; the actual packet destination is the multicast address.
+    // In production, receiving sleds would perform same-sled delivery to their
+    // local subscribers based on the `Replication::Underlay` flag.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up Tx forwarding with Underlay replication mode.
+    // Set up Tx forwarding with `Replication::Underlay` mode.
     // Tx behavior: forward to underlay with multicast encapsulation.
     // Rx behavior: same-sled delivery to subscribers (none in this test).
     mcast.set_forwarding(vec![(
@@ -213,12 +321,12 @@ fn test_multicast_underlay_replication() -> Result<()> {
         Replication::Underlay,
     )])?;
 
-    // Allow IPv4 multicast traffic via Multicast target
+    // Allow IPv4 multicast traffic via Multicast target.
     //
-    // Note: We deliberately do NOT subscribe any nodes. This tests Tx forwarding
+    // Note: We deliberately do not subscribe any nodes. This tests Tx forwarding
     // with zero local subscribers (Rx delivery is based on subscriptions, not
-    // Replication)
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    // `Replication` mode).
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
     }
@@ -231,109 +339,180 @@ fn test_multicast_underlay_replication() -> Result<()> {
         subs.entries
     );
 
-    // Add IPv6 multicast route for admin-scoped multicast (ff04::/16)
-    // This tells the kernel to route multicast packets through the underlay interface
-    xde_tests::ensure_underlay_admin_scoped_route_v6("xde_test_vnic0")?;
-
     // Start snoop on the UNDERLAY simnet device (not the OPTE port)
     // to verify the packet is forwarded to the underlay
-    let underlay_dev = "xde_test_sim1"; // Underlay device
+    let underlay_dev = UNDERLAY_TEST_DEVICE; // Underlay device
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?; // Geneve port
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?; // Geneve port
 
-    // Also snoop node B's OPTE port to verify NO local delivery with Underlay mode
+    // Also snoop node B's OPTE port to verify no local delivery with `Replication::Underlay` mode
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let filter_local =
-        format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
     let mut snoop_local = SnoopGuard::start(&dev_name_b, &filter_local)?;
 
-    // Clear UFT right before sending to ensure fresh flow computation
+    // Clear UFT before sending to ensure fresh flow computation
     hdl.clear_uft(topol.nodes[0].port.name())?;
 
     // Send multicast packet from node A
     let payload = "underlay test";
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         payload,
     )?;
 
     // Wait for snoop to capture the underlay packet (one send expected)
     let snoop_output_underlay =
-        snoop_underlay.wait_with_timeout(Duration::from_secs(5))?;
-
+        snoop_underlay.assert_packet("underlay Underlay replication");
     let stdout_underlay =
         String::from_utf8_lossy(&snoop_output_underlay.stdout);
 
-    assert!(
-        snoop_output_underlay.status.success()
-            && stdout_underlay.contains("UDP"),
-        "Expected to capture Geneve packet on underlay, snoop output:\n{stdout_underlay}"
-    );
-
     // Verify Geneve header fields (VNI, outer IPv6 dst, replication mode)
-    let hex_str = geneve_verify::extract_snoop_hex(&stdout_underlay)
-        .expect("Failed to extract hex from snoop output");
-
-    let packet_bytes = geneve_verify::parse_snoop_hex(&hex_str)
-        .expect("Failed to parse hex string");
-
-    let geneve_info = geneve_verify::parse_geneve_packet(&packet_bytes)
-        .expect("Failed to parse Geneve packet");
-
-    assert_eq!(
-        geneve_info.vni, vni,
-        "Geneve VNI should be DEFAULT_MULTICAST_VNI ({})",
-        DEFAULT_MULTICAST_VNI
-    );
-    assert_eq!(
-        geneve_info.outer_ipv6_dst,
-        Ipv6Addr::from(mcast_underlay),
-        "Outer IPv6 dst should be multicast underlay address"
-    );
-    assert_eq!(
-        geneve_info.replication,
-        Some(Replication::Underlay),
-        "Geneve replication mode should be Underlay"
+    geneve_verify::assert_geneve_packet(
+        &stdout_underlay,
+        vni,
+        mcast_underlay,
+        Replication::Underlay,
     );
 
-    // Verify NO same-sled delivery (no subscribers = no delivery)
-    // Note: Rx delivery is independent of Replication mode - it's based on subscriptions
-    if let Ok(output) = snoop_local.wait_with_timeout(Duration::from_secs(2)) {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        panic!(
-            "Expected no same-sled delivery (zero subscribers), but captured:\n{stdout}"
-        );
-    }
+    // Verify no same-sled delivery (no subscribers = no delivery)
+    // Note: Rx delivery is independent of `Replication` mode - it's based on subscriptions
+    snoop_local.assert_no_packet("(zero subscribers)");
 
     // Leaf-only Rx assertion: start a second underlay snoop and ensure there
     // is no additional multicast re-relay after Rx. We expect only the single
     // Tx underlay packet captured above.
     let mut snoop_underlay_2 =
-        SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
-    if let Ok(out) = snoop_underlay_2.wait_with_timeout(Duration::from_secs(2))
-    {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        panic!(
-            "Expected leaf-only Rx (no further underlay relay), got:\n{stdout}"
-        );
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+    snoop_underlay_2.assert_no_packet("(leaf-only Rx, no further relay)");
+
+    Ok(())
+}
+
+#[test]
+fn test_multicast_external_replication_no_local_subscribers() -> Result<()> {
+    // Tests `Replication::External` mode without local subscribers.
+    // This validates that Tx forwarding works independently of subscription state,
+    // mirroring `test_multicast_underlay_replication_no_local_subscribers`.
+    //
+    // Behavior(s) tested:
+    // - Tx forwarding with `Replication::External` flag works without subscribers
+    // - No same-sled delivery occurs (zero subscribers = zero local delivery)
+    // - Geneve packet sent to underlay with `Replication::External` flag
+
+    let topol = xde_tests::two_node_topology()?;
+
+    // IPv4 multicast group
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 8]);
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
+
+    // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        224, 1, 2, 8,
+    ]))
+    .unwrap();
+
+    let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
+
+    let hdl = OpteHdl::open()?;
+
+    // Use node B's underlay address as the next hop to select underlay egress.
+    //
+    // Note: In this harness, the underlay is a single L2 segment effectively
+    // hooked back to itself. Any address reachable on the underlay provides a
+    // path for packets to be sent and received on that segment. This differs
+    // from product multi-sled underlays. The unicast next hop only selects the
+    // underlay egress; the actual packet destination is the multicast address.
+    // In production, the switch would see the `Replication::External` flag and
+    // replicate to front-panel ports.
+    let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
+
+    // Set up Tx forwarding with `Replication::External` mode.
+    // Tx behavior: forward to underlay with `Replication::External` flag for
+    // boundary switch replication.
+    // Rx behavior: same-sled delivery to subscribers (none in this test).
+    mcast.set_forwarding(vec![(
+        NextHopV6::new(fake_switch_addr, vni),
+        Replication::External,
+    )])?;
+
+    // Allow IPv4 multicast traffic via Multicast target
+    //
+    // Note: We deliberately do not subscribe any nodes. This tests Tx forwarding
+    // with zero local subscribers (Rx delivery is based on subscriptions, not
+    // `Replication` mode).
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    for node in &topol.nodes {
+        node.port.add_multicast_router_entry(mcast_cidr)?;
     }
+
+    // Assert there are no local subscribers for this group
+    let subs = hdl.dump_mcast_subs()?;
+    assert!(
+        !subs.entries.iter().any(|e| e.underlay == mcast_underlay),
+        "expected no local subscribers for {mcast_underlay}, got: {:?}",
+        subs.entries
+    );
+
+    // Start snoop on the UNDERLAY simnet device (not the OPTE port)
+    // to verify the packet is forwarded to the underlay
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
+    let mut snoop_underlay =
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+
+    // Also snoop node B's OPTE port to verify no local delivery with `Replication::External` mode
+    let dev_name_b = topol.nodes[1].port.name().to_string();
+    let filter_local =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
+    let mut snoop_local = SnoopGuard::start(&dev_name_b, &filter_local)?;
+
+    // Clear UFT before sending to ensure fresh flow computation
+    hdl.clear_uft(topol.nodes[0].port.name())?;
+
+    // Send multicast packet from node A
+    let payload = "external no subs";
+    let sender_v4 = topol.nodes[0].port.ip();
+    topol.nodes[0].zone.send_udp_v4(
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
+        payload,
+    )?;
+
+    // Wait for snoop to capture the underlay packet
+    let snoop_output_underlay =
+        snoop_underlay.assert_packet("underlay External no subscribers");
+    let stdout_underlay =
+        String::from_utf8_lossy(&snoop_output_underlay.stdout);
+
+    // Verify Geneve header fields (VNI, outer IPv6 dst, replication mode)
+    geneve_verify::assert_geneve_packet(
+        &stdout_underlay,
+        vni,
+        mcast_underlay,
+        Replication::External,
+    );
+
+    // Verify no same-sled delivery (no subscribers = no delivery)
+    // Note: Rx delivery is independent of `Replication` mode - it's based on subscriptions
+    snoop_local.assert_no_packet("(zero subscribers)");
 
     Ok(())
 }
 
 #[test]
 fn test_multicast_both_replication() -> Result<()> {
-    // Test "Both" replication mode: validates that egress Tx (External + Underlay)
+    // Test `Replication::Both` mode: validates that egress Tx (External + Underlay)
     // and local same-sled delivery both occur.
-    let topol =
-        xde_tests::three_node_topology_named("omicron1", "ara", "arb", "arc")?;
+
+    let topol = xde_tests::three_node_topology()?;
 
     // IPv4 multicast group
     let mcast_group = Ipv4Addr::from([224, 1, 2, 5]);
-    const MCAST_PORT: u16 = 9999;
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     // M2P mapping - use admin-scoped IPv6 multicast per Omicron constraints
@@ -345,22 +524,28 @@ fn test_multicast_both_replication() -> Result<()> {
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
-    // Use node B's underlay address as the switch unicast address for routing.
+    // Use node B's underlay address as the next hop to select underlay egress.
+    //
+    // Note: In this harness, the underlay is a single L2 segment effectively
+    // hooked back to itself. Any address reachable on the underlay provides a
+    // path for packets to be sent and received on that segment. This differs
+    // from product multi-sled underlays. The unicast next hop only selects the
+    // underlay egress; the actual packet destination is the multicast address.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    // Set up Tx forwarding with "Both" replication (drives egress encapsulation only)
-    // Tx behavior: packet sent to underlay with Replication::Both flag set.
-    // In production, switch receives this and bifurcates: External (to front panel)
-    // + Underlay (sled-to-sled multicast).
-    // Rx behavior: same-sled local delivery occurs independently, driven purely by
-    // port subscriptions (not the replication mode).
+    // Set up Tx forwarding with `Replication::Both` (drives egress encapsulation only)
+    // Tx behavior: packet sent to underlay with `Replication::Both` flag set.
+    // In production, switch receives this and bifurcates: `Replication::External`
+    // (to front panel) & `Replication::Underlay` (sled-to-sled multicast).
+    // Rx behavior: same-sled delivery occurs independently, driven purely by
+    // port subscriptions (not the `Replication` mode).
     mcast.set_forwarding(vec![(
         NextHopV6::new(fake_switch_addr, vni),
         Replication::Both,
     )])?;
 
     // Allow IPv4 multicast traffic via Multicast target and subscribe to the group
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
@@ -387,71 +572,127 @@ fn test_multicast_both_replication() -> Result<()> {
         s_entry.ports
     );
 
-    // Start snoop on node B (local delivery) and underlay (underlay forwarding)
+    // Start snoops on nodes B and C (same-sled delivery) and underlay
     let dev_name_b = topol.nodes[1].port.name().to_string();
+    let dev_name_c = topol.nodes[2].port.name().to_string();
     let filter_local =
-        format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
-    let mut snoop_local = SnoopGuard::start(&dev_name_b, &filter_local)?;
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
+    let mut snoop_local_b = SnoopGuard::start(&dev_name_b, &filter_local)?;
+    let mut snoop_local_c = SnoopGuard::start(&dev_name_c, &filter_local)?;
 
-    let underlay_dev = "xde_test_sim1";
+    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, "ip6 and udp port 6081")?;
+        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
 
     // Send multicast packet from node A
     let payload = "all replication test";
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         payload,
     )?;
 
-    // Wait for both snoops to capture packets
-    let snoop_output_local =
-        snoop_local.wait_with_timeout(Duration::from_secs(5))?;
+    // Wait for snoops to capture packets
+    snoop_local_b.assert_packet("same-sled delivery to node B");
+    snoop_local_c.assert_packet("same-sled delivery to node C");
     let snoop_output_underlay =
-        snoop_underlay.wait_with_timeout(Duration::from_secs(5))?;
-
-    // Verify same-sled local delivery (DELIVER action based on subscription)
-    let stdout_local = String::from_utf8_lossy(&snoop_output_local.stdout);
-    assert!(
-        snoop_output_local.status.success() && stdout_local.contains("UDP"),
-        "Expected same-sled delivery to subscribed node B, snoop output:\n{stdout_local}"
-    );
-
-    // Verify egress underlay forwarding with "Both" replication flag
+        snoop_underlay.assert_packet("underlay Replication::Both");
     let stdout_underlay =
         String::from_utf8_lossy(&snoop_output_underlay.stdout);
+
+    // Parse the Geneve packet and verify the `Replication::Both` flag is set
+    geneve_verify::assert_geneve_packet(
+        &stdout_underlay,
+        vni,
+        mcast_underlay,
+        Replication::Both,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_multicast_sender_self_exclusion() -> Result<()> {
+    // Test that sender does not receive its own multicast packets.
+    // This validates a critical correctness property: senders must be excluded
+    // from same-sled delivery to prevent self-delivery loops.
+    //
+    // Setup:
+    // - Single sender (node A) subscribed to the multicast group it sends to
+    // - Send packet from A to the group
+    // - Verify A does not receive its own packet (timeout expected on snoop)
+
+    let topol = xde_tests::three_node_topology()?;
+
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 9]);
+
+    // M2P mapping for multicast group
+    let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        224, 1, 2, 9,
+    ]))
+    .unwrap();
+
+    let _mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
+
+    // Allow IPv4 multicast traffic and subscribe ALL nodes (including sender A)
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    for node in &topol.nodes {
+        node.port.add_multicast_router_entry(mcast_cidr)?;
+        node.port
+            .subscribe_multicast(mcast_group.into())
+            .expect("subscribe should succeed");
+    }
+
+    // Verify all three nodes are subscribed (including sender A)
+    let hdl = OpteHdl::open()?;
+    let subs = hdl.dump_mcast_subs()?;
+    let s_entry = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == mcast_underlay)
+        .expect("missing multicast subscription entry");
+    let p0 = topol.nodes[0].port.name().to_string();
+    let p1 = topol.nodes[1].port.name().to_string();
+    let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        snoop_output_underlay.status.success()
-            && stdout_underlay.contains("UDP"),
-        "Expected egress underlay packet with 'Both' replication, snoop output:\n{stdout_underlay}"
+        s_entry.ports.contains(&p0)
+            && s_entry.ports.contains(&p1)
+            && s_entry.ports.contains(&p2),
+        "expected all 3 ports subscribed (including sender A); got {:?}",
+        s_entry.ports
     );
 
-    // Parse the Geneve packet and verify the "Both" replication flag is set
-    let hex_str = geneve_verify::extract_snoop_hex(&stdout_underlay)
-        .expect("Failed to extract hex from snoop output");
-    let packet_bytes = geneve_verify::parse_snoop_hex(&hex_str)
-        .expect("Failed to parse hex string");
-    let geneve_info = geneve_verify::parse_geneve_packet(&packet_bytes)
-        .expect("Failed to parse Geneve packet");
+    // Start snoops on ALL nodes (A, B, C)
+    let dev_name_a = topol.nodes[0].port.name().to_string();
+    let dev_name_b = topol.nodes[1].port.name().to_string();
+    let dev_name_c = topol.nodes[2].port.name().to_string();
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
 
-    assert_eq!(
-        geneve_info.vni, vni,
-        "Geneve VNI should be DEFAULT_MULTICAST_VNI ({})",
-        DEFAULT_MULTICAST_VNI
-    );
-    assert_eq!(
-        geneve_info.outer_ipv6_dst,
-        Ipv6Addr::from(mcast_underlay),
-        "Outer IPv6 dst should be multicast underlay address"
-    );
-    assert_eq!(
-        geneve_info.replication,
-        Some(Replication::Both),
-        "Geneve replication mode should be Both"
-    );
+    let mut snoop_a = SnoopGuard::start(&dev_name_a, &filter)?;
+    let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
+    let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
+
+    // Send multicast packet from node A (which is subscribed to the group)
+    let payload = "sender exclusion test";
+    let sender_v4 = topol.nodes[0].port.ip();
+    topol.nodes[0].zone.send_udp_v4(
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
+        payload,
+    )?;
+
+    // Verify B and C receive packets (from Tx same-sled delivery)
+    snoop_b.assert_packet("Tx same-sled delivery to node B");
+    snoop_c.assert_packet("Tx same-sled delivery to node C");
+
+    // Verify A does not receive its own packet (sender self-exclusion)
+    // Even though A is subscribed, it must not receive packets it sends
+    snoop_a.assert_no_packet("(sender self-exclusion)");
 
     Ok(())
 }
@@ -460,11 +701,9 @@ fn test_multicast_both_replication() -> Result<()> {
 fn test_partial_unsubscribe() -> Result<()> {
     // Test selective unsubscribe: subscribe 3 nodes, unsubscribe 1, verify
     // only the remaining 2 receive packets while forwarding state is unchanged.
-    let topol =
-        xde_tests::three_node_topology_named("omicron1", "pua", "pub", "puc")?;
+    let topol = xde_tests::three_node_topology()?;
 
     let mcast_group = Ipv4Addr::from([224, 1, 2, 6]);
-    const MCAST_PORT: u16 = 9999;
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
     let mcast_underlay = MulticastUnderlay::new(Ipv6Addr::from([
@@ -475,7 +714,13 @@ fn test_partial_unsubscribe() -> Result<()> {
 
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
-    // Use node B's underlay address as the switch unicast address for routing.
+    // Use node B's underlay address as the next hop to select underlay egress.
+    //
+    // Note: In this harness, the underlay is a single L2 segment effectively
+    // hooked back to itself. Any address reachable on the underlay provides a
+    // path for packets to be sent and received on that segment. This differs
+    // from product multi-sled underlays. The unicast next hop only selects the
+    // underlay egress; the actual packet destination is the multicast address.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
     mcast.set_forwarding(vec![(
@@ -483,7 +728,7 @@ fn test_partial_unsubscribe() -> Result<()> {
         Replication::External,
     )])?;
 
-    let mcast_cidr = IpCidr::Ip4("224.0.0.0/4".parse().unwrap());
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
         node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
@@ -513,7 +758,8 @@ fn test_partial_unsubscribe() -> Result<()> {
     // Send packet and verify B and C receive (A is sender, won't receive its own)
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let dev_name_c = topol.nodes[2].port.name().to_string();
-    let filter = format!("udp and ip dst {mcast_group} and port {MCAST_PORT}");
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
 
     let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
     let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
@@ -521,26 +767,17 @@ fn test_partial_unsubscribe() -> Result<()> {
     let payload = "all three";
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         payload,
     )?;
 
     // B and C should receive (A is sender, won't see its own packet)
-    let snoop_b_out = snoop_b.wait_with_timeout(Duration::from_secs(5))?;
-    let snoop_c_out = snoop_c.wait_with_timeout(Duration::from_secs(5))?;
+    snoop_b.assert_packet("on node B (first packet)");
+    snoop_c.assert_packet("on node C (first packet)");
 
-    assert!(
-        String::from_utf8_lossy(&snoop_b_out.stdout).contains("UDP"),
-        "Node B should receive first packet"
-    );
-    assert!(
-        String::from_utf8_lossy(&snoop_c_out.stdout).contains("UDP"),
-        "Node C should receive first packet"
-    );
-
-    // Unsubscribe node B (middle node)
+    // Unsubscribe node B
     topol.nodes[1]
         .port
         .unsubscribe_multicast(mcast_group.into())
@@ -586,24 +823,17 @@ fn test_partial_unsubscribe() -> Result<()> {
 
     let payload2 = "only two";
     topol.nodes[0].zone.send_udp_v4(
-        &sender_v4,
-        &mcast_group.to_string(),
-        MCAST_PORT,
+        sender_v4,
+        mcast_group,
+        MCAST_TEST_PORT,
         payload2,
     )?;
 
     // C should receive
-    let snoop_c2_out = snoop_c2.wait_with_timeout(Duration::from_secs(5))?;
-    assert!(
-        String::from_utf8_lossy(&snoop_c2_out.stdout).contains("UDP"),
-        "Node C should receive second packet"
-    );
+    snoop_c2.assert_packet("on node C (second packet)");
 
-    // B should NOT receive (timeout expected)
-    if let Ok(out) = snoop_b2.wait_with_timeout(Duration::from_millis(800)) {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        panic!("Node B should not receive after unsubscribe; got:\n{stdout}");
-    }
+    // B should not receive (timeout expected)
+    snoop_b2.assert_no_packet("on node B after unsubscribe");
 
     Ok(())
 }

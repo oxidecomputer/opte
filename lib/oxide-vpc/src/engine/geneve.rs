@@ -54,11 +54,11 @@
 //! - **External**: Switch decaps and replicates to external-facing ports (front panel)
 //! - **Underlay**: Switch replicates to underlay ports (other sleds)
 //! - **Both**: Switch replicates to both external and underlay port groups (bifurcated)
-//! - **Local same-sled delivery**: Always happens regardless of the replication setting.
-//!   Not an access control mechanism - local delivery is independent of replication mode.
+//! - **Local same-sled delivery**: Always happens regardless of the [`Replication`] setting.
+//!   Not an access control mechanism - local delivery is independent of [`Replication`] mode.
 //!
 //! All multicast packets are encapsulated with fleet VNI 77 (`DEFAULT_MULTICAST_VNI`)
-//! regardless of replication mode. The replication mode determines delivery behavior,
+//! regardless of [`Replication`] mode. The [`Replication`] mode determines delivery behavior,
 //! not VNI selection.
 //!
 //! The 2-bit encoding allows extraction in P4 programs and aligns with the
@@ -80,9 +80,11 @@
 
 use crate::api::Replication;
 use ingot::geneve::GeneveFlags;
+use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::types::CRStr;
+use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
 use ingot::types::NetworkRepr;
 use ingot::types::ParseError;
@@ -115,6 +117,20 @@ pub enum ValidOxideOption<'a> {
     External,
     Multicast(ValidMulticastInfo<&'a [u8]>),
     Mss(ValidMssInfo<&'a [u8]>),
+}
+
+impl<'a> HeaderLen for ValidOxideOption<'a> {
+    const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        match self {
+            // External option: 4B header, 0B body
+            Self::External => Self::MINIMUM_LENGTH,
+            // Multicast/Mss options: 4B header + 4B body
+            Self::Multicast(mc) => Self::MINIMUM_LENGTH + mc.packet_length(),
+            Self::Mss(mss) => Self::MINIMUM_LENGTH + mss.packet_length(),
+        }
+    }
 }
 
 impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
@@ -505,5 +521,81 @@ mod test {
         assert!(valid_geneve_has_oxide_external(&geneve));
 
         assert_eq!(geneve.1.raw().unwrap().iter(None).count(), 3);
+    }
+
+    #[test]
+    fn option_packet_length_with_known_options() {
+        // Test that `packet_length()` returns correct values for known options
+        // where the body has been consumed during parsing. This validates that
+        // `Known<T>::packet_length()` correctly delegates to T's `HeaderLen`
+        // implementation rather than relying on `body_remainder`.
+
+        // Build a minimal packet with just one Multicast option
+        #[rustfmt::skip]
+        let mut buf = vec![
+            // UDP source
+            0x1E, 0x61,
+            // UDP dest
+            0x17, 0xC1,
+            // UDP length (8 UDP hdr + 8 Geneve hdr + 8 bytes options = 24 = 0x18)
+            0x00, 0x18,
+            // UDP csum
+            0x00, 0x00,
+            // Geneve: ver(2b)=0 + opt_len(6b)=2 words = 8 bytes
+            0x02,
+            // Geneve flags
+            0x00,
+            // Geneve proto (Ethernet)
+            0x65, 0x58,
+            // Geneve vni + reserved
+            0x00, 0x00, 0x00, 0x00,
+            // Geneve option: class 0x0129 (Oxide)
+            0x01, 0x29,
+            // Geneve option: flags+type (Multicast = 0x01, non-critical)
+            0x01,
+            // Geneve option: rsvd + len (1 word = 4 bytes body)
+            0x01,
+        ];
+        // Geneve option body: 4-byte body with replication in top 2 bits
+        buf.push(0x00); // Replication::External = 0b00 in top 2 bits
+        buf.extend_from_slice(&[0x00, 0x00, 0x00]);
+
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        opte::engine::geneve::validate_geneve(&geneve).unwrap();
+        validate_options(&geneve).unwrap();
+
+        // Parse the multicast option
+        let mut opt_iter = OxideOptions::from_raw(&geneve);
+
+        if let Some(Ok(opt)) = opt_iter.next() {
+            assert!(
+                matches!(
+                    opt.option.known(),
+                    Some(ValidOxideOption::Multicast(_))
+                ),
+                "Option should be parsed as Multicast"
+            );
+
+            // `body_remainder` is empty because the 4-byte body was consumed
+            // during `ValidMulticastInfo::parse()`. `packet_length()` must
+            // delegate to `ValidOxideOption::packet_length()`, which returns
+            // 8B (4B header + 4B body), NOT 4B (which would be returned if we
+            // incorrectly used only `body_remainder.len()`).
+            assert_eq!(
+                opt.body_remainder.len(),
+                0,
+                "Multicast option body_remainder should be empty"
+            );
+
+            assert_eq!(
+                opt.packet_length(),
+                8,
+                "`GeneveOptionParse::packet_length()` should return 8B (4B header + 4B body)"
+            );
+        } else {
+            panic!("Failed to parse multicast option");
+        }
     }
 }

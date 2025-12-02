@@ -314,6 +314,20 @@ impl IpAddr {
             IpAddr::Ip6(v6) => v6.is_multicast(),
         }
     }
+
+    /// Return the multicast MAC address associated with this multicast IP address.
+    /// If the IP address is not multicast, None will be returned.
+    ///
+    /// See [RFC 1112 §6.4] for IPv4 and [RFC 2464 §7] for IPv6.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    /// [RFC 2464 §7]: https://www.rfc-editor.org/rfc/rfc2464
+    pub const fn multicast_mac(&self) -> Option<MacAddr> {
+        match self {
+            IpAddr::Ip4(v4) => v4.multicast_mac(),
+            IpAddr::Ip6(v6) => v6.multicast_mac(),
+        }
+    }
 }
 
 impl From<Ipv4Addr> for IpAddr {
@@ -443,6 +457,38 @@ impl Ipv4Addr {
 
     pub const fn is_multicast(&self) -> bool {
         matches!(self.inner[0], 224..240)
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv4
+    /// address. If the IPv4 address is not multicast, None will be returned.
+    ///
+    /// See [RFC 1112 §6.4] for details.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    pub const fn multicast_mac(&self) -> Option<MacAddr> {
+        if self.is_multicast() {
+            Some(self.unchecked_multicast_mac())
+        } else {
+            None
+        }
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv4
+    /// address, without checking if this IP address is a multicast address.
+    ///
+    /// See [RFC 1112 §6.4] for details.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    pub const fn unchecked_multicast_mac(&self) -> MacAddr {
+        let bytes = &self.inner;
+        MacAddr::from_const([
+            0x01,
+            0x00,
+            0x5e,
+            bytes[1] & 0x7f, // Mask bit 24 to get lower 23 bits
+            bytes[2],
+            bytes[3],
+        ])
     }
 }
 
@@ -1598,6 +1644,19 @@ mod test {
         assert_eq!(
             to_ipv6("ff00::0001:0203").multicast_mac().unwrap(),
             MacAddr::from([0x33, 0x33, 0, 1, 2, 3]),
+        );
+    }
+
+    fn to_ipv4(s: &str) -> Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn test_ipv4_multicast_mac() {
+        assert!(to_ipv4("192.168.1.1").multicast_mac().is_none());
+        assert_eq!(
+            to_ipv4("224.0.0.251").multicast_mac().unwrap(),
+            MacAddr::from([0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]),
         );
     }
 
