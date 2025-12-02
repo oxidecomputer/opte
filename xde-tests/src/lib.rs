@@ -206,7 +206,7 @@ impl OpteZone {
                     .map(|out| out.contains(&addr_str))
                     .unwrap_or(false)
             },
-            Duration::from_secs(10),
+            Duration::from_secs(30),
             &format!("DHCPv6 address {ipv6_addr}"),
         )?;
         self.zone.zexec(&format!(

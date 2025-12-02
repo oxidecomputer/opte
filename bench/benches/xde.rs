@@ -345,7 +345,7 @@ fn zone_to_zone(brand: ZoneBrand, pause: bool) -> Result<()> {
     ensure_xde()?;
 
     print_banner("Building test topology... (120s)");
-    let topol = xde_tests::two_node_topology(brand.to_str())?;
+    let topol = xde_tests::two_node_topology()?;
     print_banner("Topology built!");
 
     // Create iPerf server on one zone.
@@ -369,7 +369,7 @@ fn zone_to_zone(brand: ZoneBrand, pause: bool) -> Result<()> {
         .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
 
     for expt in base_experiments("local") {
-        test_iperf(&topol, &target_ip, &expt)?
+        test_iperf(&topol, &target_ip.to_string(), &expt)?
     }
 
     Ok(())
