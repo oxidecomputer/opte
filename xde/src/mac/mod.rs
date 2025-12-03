@@ -737,7 +737,7 @@ impl MacFlowDesc {
         let mut flow_ac = flow_action_t::default();
         let parent = if let Some((fun, val)) = action {
             let ptr = Arc::into_raw(val);
-            flow_ac.fa_flags |= FlowActionFlags::ACTION;
+            flow_ac.fa_flags = FlowActionFlags::ACTION.bits();
             flow_ac.fa_direct_rx_fn = Some(fun);
             flow_ac.fa_direct_rx_arg = ptr as *mut c_void;
 

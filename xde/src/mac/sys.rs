@@ -677,10 +677,6 @@ pub const MAC_LSO_EMUL: u32 = 1 << 2;
 
 
 bitflags::bitflags! {
-/// Classes of TCP segmentation offload supported by a MAC provider.
-///
-/// These are derived from `#define LSO_TX_*` statements in
-/// mac_provider.h, omitting the enum prefix.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FlowActionFlags: u32 {
     const ACTION = 1 << 0;
@@ -689,10 +685,15 @@ pub struct FlowActionFlags: u32 {
 }
 }
 
+// mac_flow.h:
+// #if _LONG_LONG_ALIGNMENT == 8 && _LONG_LONG_ALIGNMENT_32 == 4
+// #pragma pack(4)
+// #endif
+
 #[derive(Default)]
-#[repr(C)]
+#[repr(C, packed(4))]
 pub struct flow_action_t {
-    pub fa_flags: FlowActionFlags,
+    pub fa_flags: u32,
 
     // Valid IFF. FlowActionFlags::ACTION.
     pub fa_direct_rx_fn: Option<mac_direct_rx_fn>,
@@ -710,11 +711,6 @@ pub struct flow_action_t {
 
 pub type flow_mask_t = u64;
 pub const MAXMACADDR: usize = 20;
-
-// mac_flow.h:
-// #if _LONG_LONG_ALIGNMENT == 8 && _LONG_LONG_ALIGNMENT_32 == 4
-// #pragma pack(4)
-// #endif
 
 #[repr(C, packed(4))]
 pub struct flow_desc_t {
