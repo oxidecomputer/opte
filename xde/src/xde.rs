@@ -1411,27 +1411,9 @@ fn create_underlay_port(
 
     let stream = Arc::new(UnderlayDev { stream, ports_map });
 
-    // Bind a packet handler to the MAC client underlying `stream`.
-    // let siphon = MacSiphon::new(stream.clone(), xde_rx).map_err(|e| {
-    //     OpteError::System {
-    //         errno: EFAULT,
-    //         msg: format!("failed to set MAC siphon on {link_name}: {e}"),
-    //     }
-    // })?;
-
-    // Use a link flow to steer only IPv6 + Geneve traffic to our Rx
-    // handler.
-    //
-    // XXX The mac flow mechanism is currently not sophisticated
-    // enough to understand encapsulated packets. Each xde instance
-    // will receive all client traffic. It is up to each xde instance
-    // to further filter the traffic so that only packets destined for
-    // its client are sent upstream. The plan is to expand mac's flow
-    // classification to handle encapsulated packets; at which point
-    // we should be able to setup a distinct flow per xde instance.
+    // Use a link flow to steer only Geneve traffic to our Rx handler.
     let mut flow_desc = mac::MacFlowDesc::new();
     flow_desc
-        // .set_ipver(6)
         .set_proto(IpProtocol::UDP)
         .set_local_port(opte::engine::geneve::GENEVE_PORT);
 
@@ -1442,7 +1424,7 @@ fn create_underlay_port(
     // There is a fe_refcnt and fe_user_refcnt, I'll have to look at
     // those.
     let mut flow = flow_desc
-        .new_flow(format!("{link_name}_xde").as_str(), link_id, Some((xde_rx_flow, stream.clone())))
+        .new_flow(format!("{link_name}_xde").as_str(), link_id, Some((xde_rx, stream.clone())))
         .map_err(|e| OpteError::System {
             errno: EFAULT,
             msg: format!("{e}"),
@@ -2408,89 +2390,6 @@ fn new_port(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_rx(
     arg: *mut c_void,
-    mp_chain: *mut mblk_t,
-    out_mp_tail: *mut *mut mblk_t,
-    out_count: *mut c_uint,
-    out_len: *mut usize,
-) -> *mut mblk_t {
-    // Safety: This arg comes from `Arc::from_ptr()` on the `MacClientHandle`
-    // corresponding to the underlay port we're receiving on (derived from
-    // `DlsStream`). Being here in the callback means the `MacSiphon` hasn't
-    // been dropped yet, and thus our `MacClientHandle` is also still valid.
-    let stream = unsafe {
-        (arg as *const UnderlayDev)
-            .as_ref()
-            .expect("packet was received from siphon with a NULL argument")
-    };
-
-    let mut chain = if let Ok(chain) = unsafe { MsgBlkChain::new(mp_chain) } {
-        chain
-    } else {
-        bad_packet_probe(
-            None,
-            Direction::In,
-            mp_chain as uintptr_t,
-            c"rx'd packet chain was null",
-        );
-
-        // Continue processing on an empty chain to uphold the contract with
-        // MAC for the three `out_` pointer values.
-        MsgBlkChain::empty()
-    };
-
-    let mut out_chain = MsgBlkChain::empty();
-    let mut count = 0;
-    let mut len = 0;
-
-    // Acquire our own dev map -- this gives us access to prebuilt postboxes
-    // for all active ports. We don't worry about this changing for rx -- caller
-    // threads here (interrupt contexts, poll threads, fanout, worker threads)
-    // are all bound to a given CPU each by MAC.
-    let cpu_index = current_cpu().seq_id;
-    let cpu_state = stream.ports_map[cpu_index].devs.lock();
-    let mut postbox = Postbox::new();
-
-    while let Some(pkt) = chain.pop_front() {
-        if let Some(pkt) =
-            xde_rx_one(&stream.stream, pkt, &cpu_state, &mut postbox)
-        {
-            count += 1;
-            len += pkt.byte_len();
-            out_chain.append(pkt);
-        }
-    }
-
-    cpu_state.deliver_all(postbox);
-
-    let (head, tail) = out_chain
-        .unwrap_head_and_tail()
-        .map(|v| (v.0.as_ptr(), v.1.as_ptr()))
-        .unwrap_or((ptr::null_mut(), ptr::null_mut()));
-
-    if let Some(ptr) = NonNull::new(out_len) {
-        unsafe {
-            ptr.write(len);
-        }
-    }
-
-    if let Some(ptr) = NonNull::new(out_count) {
-        unsafe {
-            ptr.write(count);
-        }
-    }
-
-    if let Some(ptr) = NonNull::new(out_mp_tail) {
-        unsafe {
-            ptr.write(tail);
-        }
-    }
-
-    head
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xde_rx_flow(
-    arg: *mut c_void,
     _mrh: *mut mac_resource_handle,
     mp_chain: *mut mblk_t,
     _madeup_pkt_info: *mut c_void,
@@ -2539,7 +2438,7 @@ unsafe extern "C" fn xde_rx_flow(
 ///
 /// This function returns any input `pkt` which is not of interest to XDE (e.g.,
 /// the packet is not Geneve over v6, or no matching OPTE port could be found).
-#[inline]
+#[inline(always)]
 fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
