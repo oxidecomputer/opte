@@ -79,9 +79,9 @@
 //!      local delivery.
 //!    - Multicast: Hold per-port `mcast_fwd` and `DevMap` read locks for the
 //!      duration of Tx processing (replication + local delivery).
-//!    We prefer an RwLock here over a Mutex given that we can be called from
-//!    multiple threads, and our callers are not expected to bound to a given
-//!    CPU.
+//!      We prefer an RwLock here over a Mutex given that we can be called from
+//!      multiple threads, and our callers are not expected to bound to a given
+//!      CPU.
 //!
 //! Read locks and mutexes are held for the duration of packet processing to
 //! prevent use-after-free of the illumos datapath of any port. Management
@@ -3800,8 +3800,7 @@ fn set_mcast_forwarding_hdlr(
         let mut mcast_fwd = token.mcast_fwd.write();
 
         // Get or create the next hop map for this underlay address
-        let next_hop_map =
-            mcast_fwd.entry(underlay).or_insert_with(BTreeMap::new);
+        let next_hop_map = mcast_fwd.entry(underlay).or_default();
 
         // Insert/update next hops: same next hop addr → replace replication mode,
         // different next hop addr → add new entry (like `swadm route add`)
