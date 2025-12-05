@@ -267,9 +267,8 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
         format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
     let mut snoop_local = SnoopGuard::start(&dev_name_b, &filter_local)?;
 
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     let sender_v4 = topol.nodes[0].port.ip();
     let res = topol.nodes[0].zone.send_udp_v4(
@@ -655,9 +654,8 @@ fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
     );
 
     // First send should produce an underlay Geneve packet
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
     let sender_v4 = topol.nodes[0].port.ip();
     topol.nodes[0].zone.send_udp_v4(
         sender_v4,

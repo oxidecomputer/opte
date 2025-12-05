@@ -352,9 +352,8 @@ fn test_multicast_config_no_spurious_traffic() -> Result<()> {
     }
 
     // Snoop the underlay to verify no spurious traffic without sending
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Verify no spurious underlay traffic (we're not sending any packets)
     let snoop_result =

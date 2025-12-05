@@ -130,10 +130,9 @@ fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
     let mut snoop_b = SnoopGuard::start(&dev_name_b, &filter)?;
     let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
 
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     // Start underlay snoop to capture Geneve (UDP/6081) with External replication
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Clear UFT before sending to ensure fresh flow computation
     hdl.clear_uft(topol.nodes[0].port.name())?;
@@ -250,9 +249,8 @@ fn test_multicast_tx_same_sled_only() -> Result<()> {
     let mut snoop_c = SnoopGuard::start(&dev_name_c, &filter)?;
 
     // Start underlay snoop to verify no packets are sent (no forwarding configured)
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Send multicast packet from node A
     let payload = "tx same-sled only";
@@ -341,9 +339,8 @@ fn test_multicast_underlay_replication_no_local_subscribers() -> Result<()> {
 
     // Start snoop on the UNDERLAY simnet device (not the OPTE port)
     // to verify the packet is forwarded to the underlay
-    let underlay_dev = UNDERLAY_TEST_DEVICE; // Underlay device
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?; // Geneve port
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Also snoop node B's OPTE port to verify no local delivery with `Replication::Underlay` mode
     let dev_name_b = topol.nodes[1].port.name().to_string();
@@ -460,9 +457,8 @@ fn test_multicast_external_replication_no_local_subscribers() -> Result<()> {
 
     // Start snoop on the UNDERLAY simnet device (not the OPTE port)
     // to verify the packet is forwarded to the underlay
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Also snoop node B's OPTE port to verify no local delivery with `Replication::External` mode
     let dev_name_b = topol.nodes[1].port.name().to_string();
@@ -580,9 +576,8 @@ fn test_multicast_both_replication() -> Result<()> {
     let mut snoop_local_b = SnoopGuard::start(&dev_name_b, &filter_local)?;
     let mut snoop_local_c = SnoopGuard::start(&dev_name_c, &filter_local)?;
 
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
     let mut snoop_underlay =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
 
     // Send multicast packet from node A
     let payload = "all replication test";

@@ -532,7 +532,7 @@ mod test {
 
         // Build a minimal packet with just one Multicast option
         #[rustfmt::skip]
-        let mut buf = vec![
+        let buf = vec![
             // UDP source
             0x1E, 0x61,
             // UDP dest
@@ -555,10 +555,10 @@ mod test {
             0x01,
             // Geneve option: rsvd + len (1 word = 4 bytes body)
             0x01,
+            // Geneve option body: 4-byte body with replication in top 2 bits
+            // Replication::External = 0b00 in top 2 bits
+            0x00, 0x00, 0x00, 0x00,
         ];
-        // Geneve option body: 4-byte body with replication in top 2 bits
-        buf.push(0x00); // Replication::External = 0b00 in top 2 bits
-        buf.extend_from_slice(&[0x00, 0x00, 0x00]);
 
         let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
         let (geneve, ..) = ValidGeneve::parse(rem).unwrap();

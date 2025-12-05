@@ -2228,7 +2228,7 @@ fn handle_mcast_tx<'a>(
     ctx: MulticastTxContext,
     src_dev: &'a XdeDev,
     postbox: &mut TxPostbox,
-    cpu_devs: &'a DevMap,
+    devs: &'a DevMap,
     cpu_mcast_fwd: &'a McastForwardingTable,
 ) {
     // DTrace probe: multicast Tx entry
@@ -2258,7 +2258,7 @@ fn handle_mcast_tx<'a>(
         oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
 
-    if let Some(listeners) = cpu_devs.mcast_listeners(&group_key) {
+    if let Some(listeners) = devs.mcast_listeners(&group_key) {
         let my_key = VniMac::new(ctx.vni, src_dev.port.mac_addr());
         for el in listeners {
             // Skip delivering to self
@@ -2279,7 +2279,7 @@ fn handle_mcast_tx<'a>(
                 continue;
             };
 
-            match cpu_devs.get_by_key(*el) {
+            match devs.get_by_key(*el) {
                 Some(dev) => {
                     // DTrace probe: local delivery
                     let (af, addr_ptr) = match &ctx.inner_dst {

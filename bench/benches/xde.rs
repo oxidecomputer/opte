@@ -77,12 +77,13 @@ fn main() -> Result<()> {
             over_nic(&opte_create, &iperf_server, pause)?;
             give_ownership()
         }
-        Experiment::Local { no_bench, brand, pause, .. } => {
-            check_deps(true, !no_bench, Some(brand))?;
+        Experiment::Local { no_bench, pause, .. } => {
+            // two_node_topology() always uses omicron1 brand
+            check_deps(true, !no_bench, Some(ZoneBrand::Omicron1))?;
             if no_bench {
                 zone_to_zone_dummy()?;
             } else {
-                zone_to_zone(brand, pause)?;
+                zone_to_zone(pause)?;
             }
             give_ownership()
         }
@@ -141,14 +142,6 @@ enum Experiment {
         /// Only run end-of-benchmark processing.
         #[arg(short, long)]
         no_bench: bool,
-
-        /// Type of Zone created to host iperf instances.
-        #[arg(
-            short,
-            long,
-            default_value_t=ZoneBrand::Omicron1,
-        )]
-        brand: ZoneBrand,
 
         /// Pauses before running experiments from a zone, allowing
         /// a window of time to access the zone using `zlogin a`.
@@ -340,7 +333,7 @@ fn check_deps(
 }
 
 #[cfg(target_os = "illumos")]
-fn zone_to_zone(brand: ZoneBrand, pause: bool) -> Result<()> {
+fn zone_to_zone(pause: bool) -> Result<()> {
     // add_drv xde.
     ensure_xde()?;
 

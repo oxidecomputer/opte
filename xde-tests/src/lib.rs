@@ -821,8 +821,8 @@ pub struct Topology {
 /// sanity checker to make sure basic opte/xde functionality is working - and
 /// that we're not hitting things like debug asserts in the OS.
 ///
-/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b")
-/// and brand ("omicron1") for simplicity.
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b").
+/// We use "omicron1" brand for faster zone startup/teardown.
 pub fn two_node_topology() -> Result<Topology> {
     let brand = "omicron1";
     let zone_a_name = "a";
@@ -914,8 +914,8 @@ pub fn two_node_topology() -> Result<Topology> {
     })
 }
 
-/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b")
-/// and brand ("omicron1") for simplicity.
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b").
+/// We use "omicron1" brand for faster zone startup/teardown.
 pub fn two_node_topology_dualstack() -> Result<Topology> {
     let brand = "omicron1";
     let zone_a_name = "a";
@@ -998,8 +998,8 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
     })
 }
 
-/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b", "c")
-/// and brand ("omicron1") for simplicity.
+/// Tests run with `test-threads=1`, so we always use the same zone names ("a", "b", "c").
+/// We use "omicron1" brand for faster zone startup/teardown.
 pub fn three_node_topology() -> Result<Topology> {
     let brand = "omicron1";
     let zone_a_name = "a";

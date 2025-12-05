@@ -110,10 +110,11 @@ fn test_multicast_multi_nexthop_fanout() -> Result<()> {
 
     // Start snoop on underlay to capture both Geneve packets
     // Use -c 2 to capture exactly two packets, then exit
-    let underlay_dev = UNDERLAY_TEST_DEVICE;
-    let filter = GENEVE_UNDERLAY_FILTER;
-    let mut snoop_underlay =
-        SnoopGuard::start_with_count(underlay_dev, filter, 2)?;
+    let mut snoop_underlay = SnoopGuard::start_with_count(
+        UNDERLAY_TEST_DEVICE,
+        GENEVE_UNDERLAY_FILTER,
+        2,
+    )?;
 
     // Send one multicast packet from zone A
     let payload = "fanout test";
