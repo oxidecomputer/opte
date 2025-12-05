@@ -528,10 +528,10 @@ impl Drop for Xde {
     fn drop(&mut self) {
         // Clear underlay to release references to simnet/vnic devices,
         // allowing their cleanup to proceed. Driver remains loaded.
-        if let Ok(adm) = OpteHdl::open() {
-            if let Err(e) = adm.clear_xde_underlay() {
-                eprintln!("failed to clear xde underlay: {e}");
-            }
+        if let Ok(adm) = OpteHdl::open()
+            && let Err(e) = adm.clear_xde_underlay()
+        {
+            eprintln!("failed to clear xde underlay: {e}");
         }
     }
 }

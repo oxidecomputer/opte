@@ -677,7 +677,7 @@ fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
 
     // Subsequent sends should not egress to underlay (forwarding cleared)
     let mut snoop_underlay2 =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
     topol.nodes[0].zone.send_udp_v4(
         sender_v4,
         mcast_group,

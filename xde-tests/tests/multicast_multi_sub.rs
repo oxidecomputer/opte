@@ -383,7 +383,7 @@ fn test_multicast_underlay_replication_no_local_subscribers() -> Result<()> {
     // is no additional multicast re-relay after Rx. We expect only the single
     // Tx underlay packet captured above.
     let mut snoop_underlay_2 =
-        SnoopGuard::start(underlay_dev, GENEVE_UNDERLAY_FILTER)?;
+        SnoopGuard::start(UNDERLAY_TEST_DEVICE, GENEVE_UNDERLAY_FILTER)?;
     snoop_underlay_2.assert_no_packet("(leaf-only Rx, no further relay)");
 
     Ok(())
