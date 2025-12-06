@@ -112,7 +112,7 @@ pfexec cp /input/xde/work/release/xde /kernel/drv/amd64
 pfexec add_drv xde
 
 banner "bench"
-cargo kbench local -b omicron1
+cargo kbench local
 cargo ubench
 
 cp -r target/criterion $OUT_DIR
