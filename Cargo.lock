@@ -1317,6 +1317,7 @@ dependencies = [
 name = "opte-test-utils"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "opte",
  "oxide-vpc",
  "pcap-parser",
@@ -2709,6 +2710,7 @@ dependencies = [
  "anyhow",
  "libnet",
  "opte-ioctl",
+ "opte-test-utils",
  "oxide-vpc",
  "rand",
  "slog",
