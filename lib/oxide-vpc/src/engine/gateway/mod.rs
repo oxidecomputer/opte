@@ -39,6 +39,21 @@
 //! # Link-Local IPv6
 //!
 //! No IPv6 link-local traffic should ever make it past this layer.
+//!
+//! # Multicast Traffic
+//!
+//! The gateway layer allows both unicast and multicast traffic through
+//! the no-spoof rules (outbound) and separate inbound rules:
+//!
+//! - Outbound: The no-spoof rule matches on source IP/MAC but has no
+//!   destination IP predicate, so it permits multicast destinations. This
+//!   allows guests to send to any multicast group address at the gateway
+//!   layer. However, the overlay layer enforces M2P (Multicast-to-Physical)
+//!   mappings, denying packets for unconfigured multicast groups.
+//!
+//! - Inbound: Separate rules (IPv4 224.0.0.0/4 and IPv6 ff00::/8)
+//!   allow multicast packets to reach guests and rewrite the source MAC
+//!   to the gateway MAC, similar to unicast traffic.
 
 use crate::api::DhcpCfg;
 use crate::api::MacAddr;
@@ -56,6 +71,8 @@ use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
+use opte::engine::ip::v4::Ipv4Cidr;
+use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
@@ -173,6 +190,16 @@ fn setup_ipv4(
 
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
 
+    // Outbound no-spoof rule: only allow traffic from the guest's IP and MAC.
+    // This rule has no destination IP predicate, so it matches both unicast
+    // and multicast destinations, enforcing no-spoof for all outbound traffic.
+    //
+    // NOTE: Because this gateway rule is unconditional on destination IP, guests
+    // can send to any multicast group address. The overlay layer enforces M2P
+    // mappings and underlay address validation, so guests cannot send multicast
+    // unless the group is configured. In the future, we may want to explicitly
+    // filter outbound multicast to only the groups configured via M2P to further
+    // tighten spoof prevention at the gateway layer.
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
     nospoof_out.add_predicate(Predicate::InnerSrcIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
@@ -196,6 +223,22 @@ fn setup_ipv4(
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
 
+    // Inbound IPv4 multicast - rewrite source MAC to gateway and allow
+    let ipv4_mcast = vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)];
+    // This mirrors the IPv6 multicast inbound rule to ensure multicast
+    // delivery to guests is permitted by the gateway layer.
+    let mut mcast_in_v4 = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in_v4.add_predicate(Predicate::InnerDstIp4(ipv4_mcast));
+    mcast_in_v4.add_predicate(Predicate::InnerEtherDst(vec![
+        EtherAddrMatch::Multicast,
+    ]));
+    layer.add_rule(Direction::In, mcast_in_v4.finalize());
+
     Ok(())
 }
 
@@ -209,6 +252,17 @@ fn setup_ipv6(
     icmpv6::setup(layer, cfg, ip_cfg)?;
     dhcpv6::setup(layer, cfg, dhcp_cfg)?;
     let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
+
+    // Outbound no-spoof rule: only allow traffic from the guest's IP and MAC.
+    // This rule has no destination IP predicate, so it matches both unicast
+    // and multicast destinations, enforcing no-spoof for all outbound traffic.
+    //
+    // NOTE: Because this gateway rule is unconditional on destination IP, guests
+    // can send to any multicast group address. The overlay layer enforces M2P
+    // mappings and underlay address validation, so guests cannot send multicast
+    // unless the group is configured. In the future, we may want to explicitly
+    // filter outbound multicast to only the groups configured via M2P to further
+    // tighten spoof prevention at the gateway layer.
     let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
@@ -231,6 +285,20 @@ fn setup_ipv6(
         EtherAddrMatch::Exact(cfg.guest_mac),
     ]));
     layer.add_rule(Direction::In, unicast_in.finalize());
+
+    // Inbound IPv6 multicast - rewrite source MAC to gateway and allow
+    let ipv6_mcast = vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)];
+    let mut mcast_in = Rule::new(
+        1001,
+        Action::Static(Arc::new(RewriteSrcMac {
+            gateway_mac: cfg.gateway_mac,
+        })),
+    );
+    mcast_in.add_predicate(Predicate::InnerDstIp6(ipv6_mcast));
+    mcast_in.add_predicate(Predicate::InnerEtherDst(vec![
+        EtherAddrMatch::Multicast,
+    ]));
+    layer.add_rule(Direction::In, mcast_in.finalize());
 
     Ok(())
 }
