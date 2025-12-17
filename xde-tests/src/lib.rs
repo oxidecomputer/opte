@@ -162,8 +162,20 @@ impl OpteZone {
         Ok(Self { zone })
     }
 
+    /// Wait for the SMF repository to be available in the zone.
+    /// This must be called before `wait_for_network` to avoid failures
+    /// when the zone is still booting.
+    fn wait_for_smf(&self) -> Result<()> {
+        poll_until(
+            || self.zone.zexec("svcs -a").map(|_| true).unwrap_or(false),
+            Duration::from_secs(60),
+            "SMF repository",
+        )
+    }
+
     /// Wait for the network to come up, then set up the IPv4 overlay network.
     fn setup(&self, devname: &str, addr: Ipv4Addr) -> Result<()> {
+        self.wait_for_smf()?;
         self.zone.wait_for_network()?;
         // Configure IPv4 via DHCP
         self.zone
@@ -183,6 +195,7 @@ impl OpteZone {
         ipv4_addr: Ipv4Addr,
         ipv6_addr: Ipv6Addr,
     ) -> Result<()> {
+        self.wait_for_smf()?;
         self.zone.wait_for_network()?;
         // Configure IPv4 via DHCP (OPTE provides DHCP server via hairpin)
         self.zone
