@@ -1484,7 +1484,7 @@ dependencies = [
 [[package]]
 name = "poptrie"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/poptrie?branch=multipath#ca52bef3f87ff1a67d81b3c6e601dcb5fdbcc165"
+source = "git+https://github.com/oxidecomputer/poptrie?branch=ry%2F8-byte-key-alignment#25748c31568ad85356f5bda6a0a781c92375ae69"
 
 [[package]]
 name = "postcard"

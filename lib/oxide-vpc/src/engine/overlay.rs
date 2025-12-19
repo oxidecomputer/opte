@@ -939,7 +939,7 @@ impl Virt2Boundary {
     ) {
         let table = poptrie::Ipv4RoutingTable(
             tree.iter()
-                .map(|(k, v)| ((u32::from(k.ip()), k.prefix_len()), v.clone()))
+                .map(|(k, v)| ((k.ip().bytes(), k.prefix_len()), v.clone()))
                 .collect(),
         );
         *self.pt4.write() = poptrie::Poptrie::from(table);
@@ -951,7 +951,7 @@ impl Virt2Boundary {
     ) {
         let table = poptrie::Ipv6RoutingTable(
             tree.iter()
-                .map(|(k, v)| ((u128::from(k.ip()), k.prefix_len()), v.clone()))
+                .map(|(k, v)| ((k.ip().bytes(), k.prefix_len()), v.clone()))
                 .collect(),
         );
         *self.pt6.write() = poptrie::Poptrie::from(table);

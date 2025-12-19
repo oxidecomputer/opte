@@ -80,7 +80,8 @@ version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "ry/8-byte-key-alignment" }
+#poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 
 [profile.dev]
 opt-level = 1
