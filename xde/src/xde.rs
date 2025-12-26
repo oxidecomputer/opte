@@ -1995,7 +1995,7 @@ unsafe extern "C" fn xde_mc_multicst(
     _add: boolean_t,
     _addrp: *const u8,
 ) -> c_int {
-    ENOTSUP
+    0
 }
 
 #[unsafe(no_mangle)]
