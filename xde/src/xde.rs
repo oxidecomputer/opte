@@ -1995,6 +1995,19 @@ unsafe extern "C" fn xde_mc_multicst(
     _add: boolean_t,
     _addrp: *const u8,
 ) -> c_int {
+    // The value returned to the mc_multicst(9e) entry point is both an
+    // opportunity for xde to set up multicast filtering and to signal to the
+    // kernel that multicast addresses are supported for opte data links. Since
+    // we're not doing any hardware-based multicast filtering at the moment,
+    // it's sufficient to signal to the kernel that multicast addresses are
+    // supported for opte data links. If we do not return success here, the
+    // kernel will assign broadcast macs where multicast macs would normally be
+    // used. This breaks protocols such as IPv6 NDP that expect multicast MACs
+    // to be used.
+    //
+    // In the future we may have a more sophisticated approach here that
+    // actually programs hardware multicast filters, either for things like NDP
+    // or in response to signals from the guest such as VIRTIO_NET_F_CTRL_RX.
     0
 }
 
