@@ -247,6 +247,7 @@ use opte::ddi::sync::TokenLock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
 use opte::engine::NetworkImpl;
+use opte::engine::ether::ETHER_ADDR_LEN;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
@@ -2377,7 +2378,7 @@ fn handle_mcast_tx<'a>(
             // multicast MAC.
             let route_key =
                 RouteKey { dst: routing_dst, l4_hash: Some(ctx.l4_hash) };
-            let Route { src: mac_src, dst: _mac_dst, underlay_idx } =
+            let Route { src: src_mac, dst: _, underlay_idx } =
                 src_dev.routes.next_hop(route_key, src_dev);
 
             // Derive destination MAC from IPv6 multicast address per RFC 2464:
@@ -2392,15 +2393,13 @@ fn handle_mcast_tx<'a>(
                 ipv6_bytes[15],
             ]);
 
-            // Fill in outer MAC addresses
-            let final_pkt = unsafe {
-                let mblk = fwd_pkt.unwrap_mblk().as_ptr();
-                let rptr = (*mblk).b_rptr;
-                ptr::copy(dst_mac.as_ptr(), rptr, 6);
-                ptr::copy(mac_src.as_ptr(), rptr.add(6), 6);
-
-                MsgBlk::wrap_mblk(mblk).unwrap()
-            };
+            // Fill in outer MAC addresses.
+            // In this case we know we have pulled up the outer headers,
+            // so we are guaranteed enough space to have Ethernet source/destination
+            // contiguous.
+            fwd_pkt[..ETHER_ADDR_LEN].copy_from_slice(&*dst_mac);
+            fwd_pkt[ETHER_ADDR_LEN..2 * ETHER_ADDR_LEN]
+                .copy_from_slice(&*src_mac);
 
             // Replication is a Tx-only instruction telling the switch which
             // port groups to replicate to. Local same-sled delivery always
@@ -2464,7 +2463,7 @@ fn handle_mcast_tx<'a>(
             postbox.post_underlay(
                 underlay_idx,
                 TxHint::from_crc32(ctx.l4_hash),
-                final_pkt,
+                fwd_pkt,
             );
         }
     }
@@ -2523,7 +2522,8 @@ fn handle_mcast_rx(
     // are handled by OPTE's inbound overlay layer.
     if let Some(ports) = devs.mcast_listeners(&group_key) {
         for el in ports {
-            let Ok(my_pkt) = ctx.pkt.pullup(NonZeroUsize::new(ctx.pullup_len))
+            let Ok(mut my_pkt) =
+                ctx.pkt.pullup(NonZeroUsize::new(ctx.pullup_len))
             else {
                 opte::engine::dbg!(
                     "mcast Rx pullup failed: requested {} bytes",
@@ -2546,16 +2546,8 @@ fn handle_mcast_rx(
             //
             // This cannot be done in OPTE because the multicast routing decision
             // (which packets need normalization) requires XDE's subscription tables.
-            let my_pkt = unsafe {
-                let mblk = my_pkt.unwrap_mblk().as_ptr();
-                let rptr = (*mblk).b_rptr;
-                let dst_mac_ptr = rptr.add(ctx.inner_eth_off);
-
-                // Write the correct multicast MAC
-                ptr::copy(expected_mac.as_ptr(), dst_mac_ptr, 6);
-
-                MsgBlk::wrap_mblk(mblk).unwrap()
-            };
+            my_pkt[ctx.inner_eth_off..][..ETHER_ADDR_LEN]
+                .copy_from_slice(&expected_mac);
 
             match devs.get_by_key(*el) {
                 Some(dev) => {
@@ -2967,23 +2959,16 @@ fn xde_mc_tx_one<'a>(
             let Route { src, dst, underlay_idx } =
                 src_dev.routes.next_hop(my_key, src_dev);
 
-            // Get a pointer to the beginning of the outer frame and
-            // fill in the dst/src addresses before sending out the
-            // device.
-            let new_pkt = unsafe {
-                let mblk = out_pkt.unwrap_mblk().as_ptr();
-                let rptr = (*mblk).b_rptr;
-                ptr::copy(dst.as_ptr(), rptr, 6);
-                ptr::copy(src.as_ptr(), rptr.add(6), 6);
-                // Unwrap: We know the packet is good because we just
-                // unwrapped it above.
-                MsgBlk::wrap_mblk(mblk).unwrap()
-            };
+            // Fill in outer MAC addresses according to the device we're sending from.
+            // In this case we know the outer headers are contiguous L2/3/4/Geneve,
+            // so we are guaranteed the Ethernet source/destination are in this slice.
+            out_pkt[..ETHER_ADDR_LEN].copy_from_slice(&*dst);
+            out_pkt[ETHER_ADDR_LEN..2 * ETHER_ADDR_LEN].copy_from_slice(&*src);
 
             postbox.post_underlay(
                 underlay_idx,
                 TxHint::from_crc32(l4_hash),
-                new_pkt,
+                out_pkt,
             );
         }
 

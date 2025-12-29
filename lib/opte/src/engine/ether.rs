@@ -18,6 +18,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::ops::Deref;
 use core::result;
 use core::str::FromStr;
 use ingot::Ingot;
@@ -121,8 +122,13 @@ impl EtherAddr {
     pub fn zero() -> Self {
         EtherAddr { bytes: [0u8; ETHER_ADDR_LEN] }
     }
-    pub fn as_ptr(&self) -> *const u8 {
-        &self.bytes as *const u8
+}
+
+impl Deref for EtherAddr {
+    type Target = [u8; 6];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
     }
 }
 
