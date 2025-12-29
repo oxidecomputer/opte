@@ -2398,7 +2398,7 @@ fn handle_mcast_tx<'a>(
             // so we are guaranteed enough space to have Ethernet source/destination
             // contiguous.
             fwd_pkt[..ETHER_ADDR_LEN].copy_from_slice(&*dst_mac);
-            fwd_pkt[ETHER_ADDR_LEN..2 * ETHER_ADDR_LEN]
+            fwd_pkt[ETHER_ADDR_LEN..][..ETHER_ADDR_LEN]
                 .copy_from_slice(&*src_mac);
 
             // Replication is a Tx-only instruction telling the switch which
@@ -2963,7 +2963,7 @@ fn xde_mc_tx_one<'a>(
             // In this case we know the outer headers are contiguous L2/3/4/Geneve,
             // so we are guaranteed the Ethernet source/destination are in this slice.
             out_pkt[..ETHER_ADDR_LEN].copy_from_slice(&*dst);
-            out_pkt[ETHER_ADDR_LEN..2 * ETHER_ADDR_LEN].copy_from_slice(&*src);
+            out_pkt[ETHER_ADDR_LEN..][..ETHER_ADDR_LEN].copy_from_slice(&*src);
 
             postbox.post_underlay(
                 underlay_idx,
