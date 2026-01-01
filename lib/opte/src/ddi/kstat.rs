@@ -61,7 +61,7 @@ cfg_if! {
 /// ```
 ///
 /// To register a provider see [`KStatNamed`].
-pub trait KStatProvider {
+pub trait KStatProvider: Send + Sync {
     const NUM_FIELDS: u32;
     type Snap;
 
@@ -307,24 +307,14 @@ impl From<alloc::ffi::NulError> for Error {
     }
 }
 
-// SAFETY: KStatNamed<T> is safe for Send + Sync under the following conditions:
+// SAFETY: KStatNamed<T> is safe for Send + Sync because:
 //
-// 1. Read-only sharing: After creation, the `ksp` pointer is never mutated - only
-//    passed to kstat_delete() in Drop. Multiple threads can safely read the same
-//    immutable pointer value.
+// 1. The underlying T must itself be Send + Sync because it is fully visible to any
+//    user of the struct. We meet this through the new type bound on KStatProvider.
 //
-// 2. Kernel manages concurrency: The kstat framework handles concurrent access to
-//    the underlying kernel structures via its own internal mechanisms.
-//
-// 3. Atomic statistics: Individual stats in `vals` use AtomicU64, ensuring each
-//    counter update is atomic and thread-safe.
-//
-// 4. Intentional design trade-off: We explicitly do NOT set ks_lock (see struct
-//    comment), accepting that different threads may see inconsistent snapshots
-//    of the stats as a group, while individual values remain uncorrupted.
-//
-// 5. No shared mutable state: The raw pointer represents a kernel resource with
-//    a clear lifecycle (create -> install -> delete) with no Rust-side mutation.
+// 2. ksp is itself safe to move between threads, since KSTAT(9S) imposes no MT
+//    constraints on callers. ksp is never exposed via a &ref (nor is it used by any
+//    methods taking &self), and is only used during drop.
 #[cfg(all(not(feature = "std"), not(test)))]
 unsafe impl<T: KStatProvider> Send for KStatNamed<T> {}
 #[cfg(all(not(feature = "std"), not(test)))]
