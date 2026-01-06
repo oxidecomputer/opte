@@ -15,7 +15,7 @@ use opte::engine::dhcpv6::LeasedAddress;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub(crate) fn setup(ctx: &mut BuildCtx) -> Result<(), OpteError> {
+pub(super) fn setup(ctx: &mut BuildCtx) -> Result<(), OpteError> {
     let ip_cfg = match ctx.cfg.ipv6_cfg() {
         None => return Ok(()),
         Some(ip_cfg) => ip_cfg,

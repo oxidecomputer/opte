@@ -14,7 +14,7 @@ use opte::engine::icmp::v4::IcmpEchoReply;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub(crate) fn setup(
+pub(super) fn setup(
     ctx: &mut BuildCtx,
     ip_cfg: &Ipv4Cfg,
 ) -> Result<(), OpteError> {

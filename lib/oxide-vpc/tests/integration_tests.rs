@@ -1426,7 +1426,7 @@ fn external_ip_epoch_affinity_preserved() {
         // since that won't affect the internal flowtable for NAT.
         // ====================================================================
         nat::set_external_ips(&g1.port, req.clone()).unwrap();
-        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7",]);
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7"]);
 
         // ================================================================
         // The reply packet must still originate from the ephemeral port
@@ -4380,7 +4380,7 @@ fn port_as_router_target() {
     let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
 
     let res = g2.port.process(Out, pkt2);
-    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
     expect_modified!(res, pkt2_m);
 
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
@@ -4390,10 +4390,10 @@ fn port_as_router_target() {
     // Removing CIDR blocks should piecewise remove the gateway rules.
     gateway::remove_cidr(&g2.port, cidr, Direction::In, g2.vpc_map.clone())
         .unwrap();
-    update!(g2, ["incr:epoch", "decr:gateway.rules.in",]);
+    update!(g2, ["incr:epoch", "decr:gateway.rules.in"]);
     gateway::remove_cidr(&g2.port, cidr, Direction::Out, g2.vpc_map.clone())
         .unwrap();
-    update!(g2, ["incr:epoch", "decr:gateway.rules.out",]);
+    update!(g2, ["incr:epoch", "decr:gateway.rules.out"]);
 }
 
 // RFD 599 defines two mechanisms relating to attaching subnets to
@@ -4430,9 +4430,9 @@ fn internal_attached_subnets() {
     )
     .unwrap();
 
-    update!(g1, ["set:epoch=5", "incr:gateway.rules.in, gateway.rules.out",]);
+    update!(g1, ["set:epoch=5", "incr:gateway.rules.in, gateway.rules.out"]);
 
-    // Suppose there is another port (same subnet) on G1's node.
+    // Suppose there is another port (same non-attached subnet) on G1's node.
     let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
     g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
 
@@ -4488,7 +4488,7 @@ fn internal_attached_subnets() {
     let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt2);
     expect_modified!(res, pkt2_m);
-    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
 
     // Add/remove of an identical transit IP range should be a NO-OP.
     // (`incr` here implicitly asserts that the gateway rule count is unchanged).
@@ -4511,7 +4511,7 @@ fn internal_attached_subnets() {
         DetachSubnetReq { port_name: g1.port.name().into(), cidr },
     )
     .unwrap();
-    update!(g1, ["set:epoch=11", "decr:gateway.rules.in, gateway.rules.out",]);
+    update!(g1, ["set:epoch=11", "decr:gateway.rules.in, gateway.rules.out"]);
 }
 
 #[test]
@@ -4589,7 +4589,7 @@ fn external_attached_subnets_dont_apply_nat() {
         ]
     );
 
-    // This packet must not have had it's source/dest IP addresses alltered.
+    // This packet must not have had its source/dest IP addresses altered.
     let pkt1 =
         parse_outbound(&mut pkt1_m, VpcParser {}).unwrap().to_full_meta();
     assert_eq!(pkt1.meta().inner_ip4().unwrap().source(), partner_ip);
@@ -4610,7 +4610,7 @@ fn external_attached_subnets_dont_apply_nat() {
     let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt2);
     expect_modified!(res, pkt2_m);
-    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap().to_full_meta();
     let L3::Ipv6(outer_ip6) = pkt2.meta().outer_ip().unwrap() else {
         panic!("Encapsulation must be IPv6.");
@@ -4651,7 +4651,7 @@ fn external_attached_subnets_cannot_reach_internal() {
         ]
     );
 
-    // Suppose there is another port (same subnet) on G1's node.
+    // Suppose there is another port (same non-attached subnet) on G1's node.
     let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
     g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
 

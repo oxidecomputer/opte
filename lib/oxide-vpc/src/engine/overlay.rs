@@ -292,9 +292,10 @@ impl StaticAction for EncapAction {
                 // In future we want this to be a tunable property of the VPC. In this
                 // case we would require an extra table/poptrie per VPC, containing all
                 // external CIDR blocks visible across the VPC. We would then:
-                //  * resolve `recipient` against this table, pulling the address of the
-                //    owner's primary NIC.
-                //  * if found, resolve the primary NIC address against the V2P.
+                //  * resolve `recipient` against this table when going via an IGW,
+                //    pulling the address of the owner's primary NIC.
+                //  * if found, resolve the primary NIC address against the V2P instead of
+                //    the V2B.
                 //  * Possibly add the Geneve external packet tag to the packet, esp. if
                 //    crossing VPC boundaries.
                 RouterTargetInternal::InternetGateway(_) => {
@@ -517,7 +518,7 @@ impl StaticAction for EncapAction {
 /// Tag a packet with the VNI it will be sent on, or that was recorded in
 /// encapsulation.
 #[derive(Debug)]
-pub struct VniTag(pub Vni);
+pub(crate) struct VniTag(pub Vni);
 
 impl ActionMetaValue for VniTag {
     const KEY: &'static str = "vni";

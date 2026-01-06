@@ -32,7 +32,7 @@ use smoltcp::wire::Icmpv6Message;
 // - Respond to NDP Neighbor Solicitations from the guest to the gateway. This
 // includes solicitations unicast to the gateway, and also delivered to the
 // solicited-node multicast group.
-pub(crate) fn setup(
+pub(super) fn setup(
     ctx: &mut BuildCtx,
     ip_cfg: &Ipv6Cfg,
 ) -> Result<(), OpteError> {

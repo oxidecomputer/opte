@@ -100,7 +100,7 @@ impl ActionMeta {
         self.inner.get(key).map(|v| &**v)
     }
 
-    /// Get a reference to the value at a well known key key, or `None`
+    /// Get a reference to the value at a well known key for `T`, or `None`
     /// if no such entry exists.
     pub fn get_typed<T: ActionMetaValue>(
         &self,

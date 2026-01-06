@@ -18,7 +18,7 @@ use opte::api::NoResp;
 use opte::engine::port::Port;
 use opte::engine::rule::Finalized;
 
-pub(crate) fn make_holepunch_rule(
+pub(super) fn make_holepunch_rule(
     guest_mac: MacAddr,
     gateway_mac: MacAddr,
     dest: IpCidr,
@@ -50,8 +50,7 @@ pub(crate) fn make_holepunch_rule(
             cidr_in.finalize()
         }
         Direction::Out => {
-            let vpc_meta = vpc_meta.clone();
-            let mut cidr_out = Rule::new(1000, Action::Meta(vpc_meta));
+            let mut cidr_out = Rule::new(1000, Action::Meta(vpc_meta.clone()));
             cidr_out.add_predicate(Predicate::InnerEtherSrc(vec![
                 EtherAddrMatch::Exact(guest_mac),
             ]));

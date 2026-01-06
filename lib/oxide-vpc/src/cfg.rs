@@ -108,7 +108,7 @@ pub struct VpcCfg {
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
 
-    /// Configuration for DHCP responses created by OPTE
+    /// Configuration for DHCP responses created by OPTE.
     pub dhcp: DhcpCfg,
 }
 

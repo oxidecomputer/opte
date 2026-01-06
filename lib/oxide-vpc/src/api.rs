@@ -141,7 +141,7 @@ pub struct AttachedSubnetConfig {
     pub is_external: bool,
 }
 
-/// Configuration for an exceptions to source/destination address filtering.
+/// Configuration for an exception to source/destination address filtering.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TransitIpConfig {
     /// Allow inbound traffic with a destination IP in the target CIDR.
@@ -299,7 +299,7 @@ pub struct VpcCfg {
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
 
-    /// Configuration for DHCP responses created by OPTE
+    /// Configuration for DHCP responses created by OPTE.
     pub dhcp: DhcpCfg,
 }
 

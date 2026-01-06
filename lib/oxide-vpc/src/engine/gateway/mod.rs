@@ -112,7 +112,7 @@ use super::VpcNetwork;
 
 pub const NAME: &str = "gateway";
 
-pub(crate) struct BuildCtx<'a> {
+struct BuildCtx<'a> {
     in_rules: Vec<Rule<Finalized>>,
     out_rules: Vec<Rule<Finalized>>,
     cfg: &'a VpcCfg,
@@ -397,7 +397,7 @@ fn setup_ipv6(ctx: &mut BuildCtx, ip_cfg: &Ipv6Cfg) -> Result<(), OpteError> {
 ///
 /// This allows the outbound side of firewall layer to filter based on
 /// VPC.
-pub(crate) struct VpcMeta {
+struct VpcMeta {
     vpc_mappings: Arc<VpcMappings>,
 }
 

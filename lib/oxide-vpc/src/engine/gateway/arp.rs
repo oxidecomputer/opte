@@ -16,7 +16,7 @@ use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub(crate) fn setup(ctx: &mut BuildCtx) -> Result<(), OpteError> {
+pub(super) fn setup(ctx: &mut BuildCtx) -> Result<(), OpteError> {
     // ================================================================
     // Outbound ARP Request for Gateway, from Guest
     //

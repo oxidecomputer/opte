@@ -4218,12 +4218,10 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    {
-        let mut igw_map_lock = dev.port_igw_map.lock();
-        *igw_map_lock = req.inet_gw_map.clone();
+    let mut igw_map_lock = dev.port_igw_map.lock();
+    *igw_map_lock = req.inet_gw_map.clone();
 
-        nat::set_external_ips(&dev.port, req)?;
-    }
+    nat::set_external_ips(&dev.port, req)?;
 
     Ok(NoResp::default())
 }
