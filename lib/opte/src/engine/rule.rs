@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -174,8 +174,9 @@ where
 /// [`HdrTransform`] which implements the desired action. An
 /// ActionDesc is created by a [`StatefulAction`] implementation.
 pub trait ActionDesc: Send + Sync {
-    /// Generate the [`HdrTransform`] which implements this descriptor.
-    fn gen_ht(&self, dir: Direction) -> HdrTransform;
+    /// Generate the [`HdrTransform`] which implements this descriptor, and
+    /// apply any modifications to the [`ActionMeta`].
+    fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform;
 
     /// Generate a body transformation.
     ///
@@ -251,7 +252,7 @@ impl IdentityDesc {
 }
 
 impl ActionDesc for IdentityDesc {
-    fn gen_ht(&self, _dir: Direction) -> HdrTransform {
+    fn gen_ht(&self, _dir: Direction, _meta: &mut ActionMeta) -> HdrTransform {
         Default::default()
     }
 
@@ -758,7 +759,7 @@ pub trait StatefulAction: Display + Send + Sync {
         &self,
         flow_id: &InnerFlowId,
         pkt: &Packet<MblkFullParsed>,
-        meta: &mut ActionMeta,
+        meta: &ActionMeta,
     ) -> GenDescResult;
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);

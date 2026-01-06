@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Utility functions to allow a port to permit traffic on an
 //! additional set of CIDR blocks, e.g. to enable transit for
@@ -10,18 +10,20 @@
 
 use super::*;
 use crate::api::RemoveCidrResp;
+use crate::cfg::IpCfg;
 use crate::engine::VpcNetwork;
+use alloc::collections::btree_map::Entry;
 use opte::api::IpCidr;
 use opte::api::NoResp;
 use opte::engine::port::Port;
 use opte::engine::rule::Finalized;
 
-fn make_holepunch_rule(
+pub(crate) fn make_holepunch_rule(
     guest_mac: MacAddr,
     gateway_mac: MacAddr,
     dest: IpCidr,
     dir: Direction,
-    vpc_mappings: Arc<VpcMappings>,
+    vpc_meta: &Arc<VpcMeta>,
 ) -> Rule<Finalized> {
     let (cidr_in_pred, cidr_out_pred) = match dest {
         IpCidr::Ip4(v4) => (
@@ -48,7 +50,7 @@ fn make_holepunch_rule(
             cidr_in.finalize()
         }
         Direction::Out => {
-            let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
+            let vpc_meta = vpc_meta.clone();
             let mut cidr_out = Rule::new(1000, Action::Meta(vpc_meta));
             cidr_out.add_predicate(Predicate::InnerEtherSrc(vec![
                 EtherAddrMatch::Exact(guest_mac),
@@ -68,15 +70,7 @@ pub fn allow_cidr(
     dir: Direction,
     vpc_mappings: Arc<VpcMappings>,
 ) -> Result<NoResp, OpteError> {
-    let rule = make_holepunch_rule(
-        port.mac_addr(),
-        port.network().cfg.gateway_mac,
-        dest,
-        dir,
-        vpc_mappings,
-    );
-    port.add_rule(NAME, dir, rule)?;
-    Ok(NoResp::default())
+    modify_cidr(port, dest, dir, vpc_mappings, true).map(|_| NoResp::default())
 }
 
 /// Prevents a guest from sending/receiving traffic on a CIDR block
@@ -87,22 +81,70 @@ pub fn remove_cidr(
     dir: Direction,
     vpc_mappings: Arc<VpcMappings>,
 ) -> Result<RemoveCidrResp, OpteError> {
-    let rule = make_holepunch_rule(
-        port.mac_addr(),
-        port.network().cfg.gateway_mac,
-        dest,
-        dir,
-        vpc_mappings,
-    );
+    modify_cidr(port, dest, dir, vpc_mappings, false).map(|changed| {
+        if changed {
+            RemoveCidrResp::Ok(dest)
+        } else {
+            RemoveCidrResp::NotFound
+        }
+    })
+}
 
-    let maybe_id = port.find_rule(NAME, dir, &rule)?;
-    if let Some(id) = maybe_id {
-        port.remove_rule(NAME, dir, id)?;
+fn modify_cidr(
+    port: &Port<VpcNetwork>,
+    dest: IpCidr,
+    dir: Direction,
+    vpc_mappings: Arc<VpcMappings>,
+    allow: bool,
+) -> Result<bool, OpteError> {
+    let mut existing = false;
+    let mut remove = false;
+
+    match (&port.network().cfg.ip_cfg, dest) {
+        (IpCfg::Ipv4(ipv4), IpCidr::Ip4(ipv4_cidr))
+        | (IpCfg::DualStack { ipv4, .. }, IpCidr::Ip4(ipv4_cidr)) => {
+            ipv4.transit_ips.update(|v| {
+                let mut new = v.clone();
+                let el = new.entry(ipv4_cidr);
+                existing = matches!(el, Entry::Occupied(_));
+                if allow || existing {
+                    let el = el.or_default();
+                    match dir {
+                        Direction::In => el.allow_in = allow,
+                        Direction::Out => el.allow_out = allow,
+                    }
+                    remove = !allow && !el.allow_in && !el.allow_out;
+                }
+                if remove {
+                    new.remove(&ipv4_cidr);
+                }
+                Some(new)
+            });
+        }
+        (IpCfg::Ipv6(ipv6), IpCidr::Ip6(ipv6_cidr))
+        | (IpCfg::DualStack { ipv6, .. }, IpCidr::Ip6(ipv6_cidr)) => {
+            ipv6.transit_ips.update(|v| {
+                let mut new = v.clone();
+                let el = new.entry(ipv6_cidr);
+                existing = matches!(el, Entry::Occupied(_));
+                if allow || existing {
+                    let el = el.or_default();
+                    match dir {
+                        Direction::In => el.allow_in = allow,
+                        Direction::Out => el.allow_out = allow,
+                    }
+                    remove = !allow && !el.allow_in && !el.allow_out;
+                }
+                if remove {
+                    new.remove(&ipv6_cidr);
+                }
+                Some(new)
+            });
+        }
+        _ => return Err(OpteError::InvalidIpCfg),
     }
 
-    Ok(if maybe_id.is_none() {
-        RemoveCidrResp::NotFound
-    } else {
-        RemoveCidrResp::Ok(dest)
-    })
+    super::set_gateway_rules(port, vpc_mappings)?;
+
+    Ok(existing)
 }

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! xde - A mac provider for OPTE.
 //!
@@ -277,11 +277,12 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
-use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DetachSubnetResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
+use oxide_vpc::api::InternetGatewayMap;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::McastForwardingEntry;
 use oxide_vpc::api::McastSubscribeReq;
@@ -593,8 +594,8 @@ pub struct XdeDev {
     // could setup ports for any number of network implementations.
     // However, that's not where things are today.
     pub port: Arc<Port<VpcNetwork>>,
-    vpc_cfg: VpcCfg,
     port_v2p: Arc<overlay::Virt2Phys>,
+    port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
     // Pass the packets through to the underlay devices, skipping
     // opte-core processing.
@@ -630,6 +631,10 @@ impl XdeDev {
         if let Some(pkt) = pkt.unwrap_mblk() {
             unsafe { mac::mac_rx(self.mh, ptr::null_mut(), pkt.as_ptr()) }
         }
+    }
+
+    pub fn vpc_cfg(&self) -> &VpcCfg {
+        &self.port.network().cfg
     }
 }
 
@@ -1024,6 +1029,16 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::AttachSubnet => {
+            let resp = attach_subnet_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DetachSubnet => {
+            let resp = detach_subnet_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::SetMcastForwarding => {
             let resp = set_mcast_forwarding_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -1160,11 +1175,10 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             port_v2p.clone(),
             state.v2b.clone(),
             state.ectx.clone(),
-            &req.dhcp,
         )?,
         port_v2p,
         vni: cfg.vni,
-        vpc_cfg: cfg,
+        port_igw_map: KMutex::new(None),
         passthrough: req.passthrough,
         u1,
         u2,
@@ -1352,7 +1366,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     }
 
     // Remove the VPC mappings for this port.
-    let cfg = &xde.vpc_cfg;
+    let cfg = xde.vpc_cfg();
     let phys_net =
         PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
     match cfg.ip_cfg {
@@ -3140,7 +3154,6 @@ fn new_port(
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
-    dhcp_cfg: &DhcpCfg,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
     let name_cstr = match CString::new(name.as_str()) {
@@ -3157,7 +3170,7 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE, dhcp_cfg)?;
+    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
     overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
@@ -4205,7 +4218,13 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    nat::set_nat_rules(&dev.vpc_cfg, &dev.port, req)?;
+    {
+        let mut igw_map_lock = dev.port_igw_map.lock();
+        *igw_map_lock = req.inet_gw_map.clone();
+
+        nat::set_external_ips(&dev.port, req)?;
+    }
+
     Ok(NoResp::default())
 }
 
@@ -4237,26 +4256,55 @@ fn remove_cidr_hdlr(
 }
 
 #[unsafe(no_mangle)]
+fn attach_subnet_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: oxide_vpc::api::AttachSubnetReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let igw_map_lock = dev.port_igw_map.lock();
+    nat::attach_subnet(&dev.port, igw_map_lock.as_ref(), &state.vpc_map, req)?;
+
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn detach_subnet_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<DetachSubnetResp, OpteError> {
+    let req: oxide_vpc::api::DetachSubnetReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let igw_map_lock = dev.port_igw_map.lock();
+    nat::detach_subnet(&dev.port, igw_map_lock.as_ref(), &state.vpc_map, req)
+}
+
+#[unsafe(no_mangle)]
 fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let mut resp = ListPortsResp { ports: vec![] };
     let state = get_xde_state();
     let devs = state.devs.read();
     for dev in devs.iter() {
-        let ipv4_state =
-            dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());
-        let ipv6_state =
-            dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.external_ips.load());
+        let cfg = dev.vpc_cfg();
+        let ipv4_state = cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());
+        let ipv6_state = cfg.ipv6_cfg().map(|cfg| cfg.external_ips.load());
         resp.ports.push(PortInfo {
             name: dev.port.name().to_string(),
             mac_addr: dev.port.mac_addr(),
-            ip4_addr: dev.vpc_cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
+            ip4_addr: cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
             ephemeral_ip4_addr: ipv4_state
                 .as_ref()
                 .and_then(|cfg| cfg.ephemeral_ip),
             floating_ip4_addrs: ipv4_state
                 .as_ref()
                 .map(|cfg| cfg.floating_ips.clone()),
-            ip6_addr: dev.vpc_cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
+            ip6_addr: cfg.ipv6_cfg().map(|cfg| cfg.private_ip),
             ephemeral_ip6_addr: ipv6_state
                 .as_ref()
                 .and_then(|cfg| cfg.ephemeral_ip),

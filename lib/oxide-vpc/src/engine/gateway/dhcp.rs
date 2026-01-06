@@ -2,31 +2,26 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The DHCP implementation of the Virtual Gateway.
 
+use super::BuildCtx;
 use crate::cfg::Ipv4Cfg;
-use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
-use opte::api::DhcpCfg;
 use opte::api::DhcpReplyType;
-use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4PrefixLen;
 use opte::api::OpteError;
 use opte::api::SubnetRouterPair;
 use opte::engine::dhcp::DhcpAction;
 use opte::engine::ip::v4::Ipv4Cidr;
-use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub fn setup(
-    layer: &mut Layer,
-    cfg: &VpcCfg,
+pub(crate) fn setup(
+    ctx: &mut BuildCtx,
     ip_cfg: &Ipv4Cfg,
-    dhcp_cfg: DhcpCfg,
 ) -> Result<(), OpteError> {
     // All guest interfaces live on a `/32`-network in the Oxide VPC;
     // restricting the L2 domain to two nodes: the guest NIC and the
@@ -65,35 +60,36 @@ pub fn setup(
     );
 
     let offer = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.guest_mac,
+        client_mac: ctx.cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gateway_mac,
+        gw_mac: ctx.cfg.gateway_mac,
         gw_ip: ip_cfg.gateway_ip,
         reply_type: DhcpReplyType::Offer,
         re1,
         re2: Some(re2),
         re3: None,
-        dhcp_cfg: dhcp_cfg.clone(),
+        dhcp_cfg: ctx.cfg.dhcp.clone(),
     }));
 
     let ack = Action::Hairpin(Arc::new(DhcpAction {
-        client_mac: cfg.guest_mac,
+        client_mac: ctx.cfg.guest_mac,
         client_ip: ip_cfg.private_ip,
         subnet_prefix_len: Ipv4PrefixLen::NETMASK_ALL,
-        gw_mac: cfg.gateway_mac,
+        gw_mac: ctx.cfg.gateway_mac,
         gw_ip: ip_cfg.gateway_ip,
         reply_type: DhcpReplyType::Ack,
         re1,
         re2: Some(re2),
         re3: None,
-        dhcp_cfg,
+        dhcp_cfg: ctx.cfg.dhcp.clone(),
     }));
 
     let discover_rule = Rule::new(1, offer);
-    layer.add_rule(Direction::Out, discover_rule.finalize());
-
     let request_rule = Rule::new(1, ack);
-    layer.add_rule(Direction::Out, request_rule.finalize());
+
+    ctx.out_rules.push(discover_rule.finalize());
+    ctx.out_rules.push(request_rule.finalize());
+
     Ok(())
 }

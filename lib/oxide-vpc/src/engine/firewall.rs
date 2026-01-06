@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide VPC firewall.
 //!
@@ -18,9 +18,8 @@ use crate::api::Ports;
 pub use crate::api::ProtoFilter;
 use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
-use crate::engine::overlay::ACTION_META_VNI;
+use crate::engine::overlay::VniTag;
 use alloc::collections::BTreeSet;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use opte::api::Direction;
@@ -236,10 +235,9 @@ impl Address {
                 Predicate::InnerSrcIp6(vec![Ipv6AddrMatch::Prefix(ip6_sub)]),
             ),
 
-            (_, Address::Vni(vni)) => Some(Predicate::Meta(
-                ACTION_META_VNI.to_string(),
-                vni.to_string(),
-            )),
+            (_, Address::Vni(vni)) => {
+                Some(Predicate::from_action_meta(VniTag(vni)))
+            }
         }
     }
 }

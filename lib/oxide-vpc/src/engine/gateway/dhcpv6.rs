@@ -2,28 +2,21 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The DHCPv6 implementation of the Virtual Gateway.
 
-use crate::cfg::VpcCfg;
+use super::BuildCtx;
 use alloc::sync::Arc;
-use opte::api::DhcpCfg;
-use opte::api::Direction;
 use opte::api::OpteError;
 use opte::engine::dhcpv6::AddressInfo;
 use opte::engine::dhcpv6::Dhcpv6Action;
 use opte::engine::dhcpv6::LeasedAddress;
-use opte::engine::layer::Layer;
 use opte::engine::rule::Action;
 use opte::engine::rule::Rule;
 
-pub fn setup(
-    layer: &mut Layer,
-    cfg: &VpcCfg,
-    dhcp_cfg: DhcpCfg,
-) -> Result<(), OpteError> {
-    let ip_cfg = match cfg.ipv6_cfg() {
+pub(crate) fn setup(ctx: &mut BuildCtx) -> Result<(), OpteError> {
+    let ip_cfg = match ctx.cfg.ipv6_cfg() {
         None => return Ok(()),
         Some(ip_cfg) => ip_cfg,
     };
@@ -35,15 +28,14 @@ pub fn setup(
         renew: u32::MAX,
     };
     let action = Dhcpv6Action {
-        client_mac: cfg.guest_mac,
-        server_mac: cfg.gateway_mac,
+        client_mac: ctx.cfg.guest_mac,
+        server_mac: ctx.cfg.gateway_mac,
         addrs,
         sntp_servers: vec![],
-        dhcp_cfg,
+        dhcp_cfg: ctx.cfg.dhcp.clone(),
     };
 
     let server = Action::Hairpin(Arc::new(action));
-    let rule = Rule::new(1, server);
-    layer.add_rule(Direction::Out, rule.finalize());
+    ctx.out_rules.push(Rule::new(1, server).finalize());
     Ok(())
 }

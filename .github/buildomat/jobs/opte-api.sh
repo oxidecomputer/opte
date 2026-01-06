@@ -28,7 +28,7 @@ header "analyze std"
 ptime -m cargo clippy --all-targets
 
 header "analyze no_std"
-ptime -m cargo clippy --no-default-features --all-targets
+ptime -m cargo clippy --no-default-features --all-targets -- --deny warnings
 
 header "test"
 ptime -m cargo test

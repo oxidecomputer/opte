@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide Network VPC Router.
 //!
@@ -68,17 +68,6 @@ pub enum RouterTargetInternal {
 }
 
 impl RouterTargetInternal {
-    pub const IP_KEY: &'static str = "router-target-ip";
-    pub const GENERIC_META: &'static str = "ig";
-
-    pub fn generic_meta(&self) -> Cow<'static, str> {
-        Self::GENERIC_META.into()
-    }
-
-    pub fn ip_key(&self) -> Cow<'static, str> {
-        Self::IP_KEY.into()
-    }
-
     pub fn class(&self) -> RouterTargetClass {
         match self {
             RouterTargetInternal::InternetGateway(_) => {
@@ -487,13 +476,8 @@ impl MetaAction for RouterAction {
         _flow_id: &InnerFlowId,
         meta: &mut ActionMeta,
     ) -> ModMetaResult {
-        // TODO: I don't think we need IP_KEY.
-        if let RouterTargetInternal::InternetGateway(_) = self.target {
-            meta.insert(self.target.key(), self.target.as_meta());
-        }
-        meta.insert(self.target.ip_key(), self.target.as_meta());
-        let rt_class = self.target.class();
-        meta.insert(rt_class.key(), rt_class.as_meta());
+        meta.insert_typed(&self.target);
+        meta.insert_typed(&self.target.class());
         Ok(AllowOrDeny::Allow(()))
     }
 }
