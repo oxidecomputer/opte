@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use anyhow::Result;
 use anyhow::anyhow;
@@ -44,6 +44,7 @@ use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
 use rand::Rng;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::process::Child;
 use std::process::Command;
@@ -300,14 +301,17 @@ impl OptePort {
                     ephemeral_ip: None,
                     floating_ips: vec![],
                 },
+                attached_subnets: BTreeMap::default(),
+                transit_ips: BTreeMap::default(),
             }),
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
             vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
+            dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;
+        adm.create_xde(name, cfg.clone(), false)?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -337,6 +341,8 @@ impl OptePort {
                         ephemeral_ip: None,
                         floating_ips: vec![],
                     },
+                    attached_subnets: BTreeMap::default(),
+                    transit_ips: BTreeMap::default(),
                 },
                 ipv6: Ipv6Cfg {
                     vpc_subnet: OVERLAY_NET_V6.parse().unwrap(),
@@ -350,15 +356,18 @@ impl OptePort {
                         ephemeral_ip: None,
                         floating_ips: vec![],
                     },
+                    attached_subnets: BTreeMap::default(),
+                    transit_ips: BTreeMap::default(),
                 },
             },
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
             vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
+            dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), DhcpCfg::default(), false)?;
+        adm.create_xde(name, cfg.clone(), false)?;
         Ok(OptePort {
             name: name.into(),
             cfg,

@@ -1,9 +1,18 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2026 Oxide Computer Company
+
 //! Reconfigurable, internal configuration built from `oxide_vpc::api`.
 
 use crate::api;
+use crate::api::AttachedSubnetConfig;
 use crate::api::ExternalIpCfg;
 #[cfg(any(feature = "test-help", test))]
 use crate::api::PhysNet;
+use crate::api::TransitIpConfig;
+use alloc::collections::BTreeMap;
 use opte::api::*;
 use opte::dynamic::Dynamic;
 
@@ -25,6 +34,13 @@ pub struct Ipv4Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: Dynamic<ExternalIpCfg<Ipv4Addr>>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: Dynamic<BTreeMap<Ipv4Cidr, AttachedSubnetConfig>>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: Dynamic<BTreeMap<Ipv4Cidr, TransitIpConfig>>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -50,6 +66,13 @@ pub struct Ipv6Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: Dynamic<ExternalIpCfg<Ipv6Addr>>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: Dynamic<BTreeMap<Ipv6Cidr, AttachedSubnetConfig>>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: Dynamic<BTreeMap<Ipv6Cidr, TransitIpConfig>>,
 }
 
 /// The IP configuration of a VPC guest.
@@ -84,6 +107,9 @@ pub struct VpcCfg {
     /// The host (sled) IPv6 address. All guests on the same sled are
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
+
+    /// Configuration for DHCP responses created by OPTE.
+    pub dhcp: DhcpCfg,
 }
 
 impl VpcCfg {
@@ -184,6 +210,7 @@ impl From<api::VpcCfg> for VpcCfg {
             gateway_mac: value.gateway_mac,
             vni: value.vni,
             phys_ip: value.phys_ip,
+            dhcp: value.dhcp,
         }
     }
 }
@@ -207,6 +234,8 @@ impl From<api::Ipv4Cfg> for Ipv4Cfg {
             private_ip: value.private_ip,
             gateway_ip: value.gateway_ip,
             external_ips: value.external_ips.into(),
+            attached_subnets: value.attached_subnets.into(),
+            transit_ips: value.transit_ips.into(),
         }
     }
 }
@@ -218,6 +247,8 @@ impl From<api::Ipv6Cfg> for Ipv6Cfg {
             private_ip: value.private_ip,
             gateway_ip: value.gateway_ip,
             external_ips: value.external_ips.into(),
+            attached_subnets: value.attached_subnets.into(),
+            transit_ips: value.transit_ips.into(),
         }
     }
 }

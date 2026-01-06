@@ -31,7 +31,7 @@ RUSTDOCFLAGS="-D warnings" ptime -m \
 	    cargo +$NIGHTLY doc --no-default-features --features=api,std,engine,kernel
 
 header "analyze std + api + usdt"
-ptime -m cargo clippy --features usdt --all-targets
+ptime -m cargo clippy --features usdt --all-targets -- --deny warnings
 
 header "analyze no_std + engine + kernel"
 ptime -m cargo +$NIGHTLY clippy --no-default-features --features engine,kernel

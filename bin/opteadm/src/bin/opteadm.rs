@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use anyhow::Context;
 use clap::Args;
@@ -70,6 +70,7 @@ use oxide_vpc::print::print_mcast_fwd;
 use oxide_vpc::print::print_mcast_subs;
 use oxide_vpc::print::print_v2b;
 use oxide_vpc::print::print_v2p;
+use std::collections::BTreeMap;
 use std::io;
 use std::io::Write;
 use std::str::FromStr;
@@ -402,6 +403,36 @@ enum Command {
         /// inbound or outbound traffic.
         #[arg(long = "dir")]
         direction: Option<Direction>,
+    },
+
+    /// Give a guest ownership of a given CIDR block.
+    ///
+    /// This is equivalent to a bidirectional `AllowCidr`, with an exemption
+    /// from NAT if the subnet is marked as `external`.
+    ///
+    /// Repeated calls on any given `prefix` will update its configuration.
+    AttachSubnet {
+        /// The OPTE port to configure.
+        #[arg(short)]
+        port: String,
+
+        /// The subnet to attach.
+        prefix: IpCidr,
+
+        /// Marks the subnet as a block of external IPs for which in/outbound
+        /// NAT should not be performed.
+        #[arg(long, short)]
+        external: bool,
+    },
+
+    /// Rescind a guest's ownership of a given CIDR block.
+    DetachSubnet {
+        /// The OPTE port to configure.
+        #[arg(short)]
+        port: String,
+
+        /// The subnet to detach.
+        prefix: IpCidr,
     },
 }
 
@@ -805,6 +836,8 @@ fn main() -> anyhow::Result<()> {
                         private_ip,
                         gateway_ip,
                         external_ips,
+                        attached_subnets: BTreeMap::new(),
+                        transit_ips: BTreeMap::new(),
                     })
                 }
                 IpAddr::Ip6(private_ip) => {
@@ -823,6 +856,8 @@ fn main() -> anyhow::Result<()> {
                         private_ip,
                         gateway_ip,
                         external_ips,
+                        attached_subnets: BTreeMap::new(),
+                        transit_ips: BTreeMap::new(),
                     })
                 }
             };
@@ -833,9 +868,10 @@ fn main() -> anyhow::Result<()> {
                 gateway_mac,
                 vni: vpc_vni,
                 phys_ip: src_underlay_addr,
+                dhcp: dhcp.into(),
             };
 
-            hdl.create_xde(&name, cfg, dhcp.into(), passthrough)?;
+            hdl.create_xde(&name, cfg, passthrough)?;
         }
 
         Command::DeleteXde { name } => {
@@ -1053,6 +1089,14 @@ fn main() -> anyhow::Result<()> {
                         });
                 })?;
             }
+        }
+
+        Command::AttachSubnet { port, prefix, external } => {
+            hdl.attach_subnet(&port, prefix, external)?;
+        }
+
+        Command::DetachSubnet { port, prefix } => {
+            hdl.detach_subnet(&port, prefix)?;
         }
     }
 

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use opte::api::API_VERSION;
 use opte::api::ClearLftReq;
@@ -27,6 +27,8 @@ use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::AllowCidrReq;
+use oxide_vpc::api::AttachSubnetReq;
+use oxide_vpc::api::AttachedSubnetConfig;
 use oxide_vpc::api::ClearMcast2PhysReq;
 use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
@@ -35,7 +37,8 @@ use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
-use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DetachSubnetReq;
+use oxide_vpc::api::DetachSubnetResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
@@ -123,7 +126,6 @@ impl OpteHdl {
         &self,
         name: &str,
         cfg: VpcCfg,
-        dhcp: DhcpCfg,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         use libnet::link;
@@ -136,7 +138,7 @@ impl OpteHdl {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq { xde_devname, linkid, cfg, dhcp, passthrough };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
 
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
@@ -392,6 +394,37 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
+    }
+
+    pub fn attach_subnet(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+        is_external: bool,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AttachSubnet;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&AttachSubnetReq {
+                cidr,
+                port_name: port_name.into(),
+                cfg: AttachedSubnetConfig { is_external },
+            }),
+        )
+    }
+
+    pub fn detach_subnet(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+    ) -> Result<DetachSubnetResp, Error> {
+        let cmd = OpteCmd::DetachSubnet;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&DetachSubnetReq { cidr, port_name: port_name.into() }),
         )
     }
 

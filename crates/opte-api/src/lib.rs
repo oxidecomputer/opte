@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 #![no_std]
 #![deny(unreachable_patterns)]
@@ -51,7 +51,7 @@ pub use ulp::*;
 ///
 /// We rely on CI and the check-api-version.sh script to verify that
 /// this number is incremented anytime the oxide-api code changes.
-pub const API_VERSION: u64 = 38;
+pub const API_VERSION: u64 = 39;
 
 /// Major version of the OPTE package.
 pub const MAJOR_VERSION: u64 = 0;
