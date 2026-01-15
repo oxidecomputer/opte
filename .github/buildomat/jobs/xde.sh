@@ -113,7 +113,7 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 header "build xde integration tests"
 pushd xde-tests
 cargo +$NIGHTLY fmt -- --check
-cargo clippy --all-targets
+cargo clippy --all-targets -- --deny warnings
 cargo build --test loopback
 loopback_test=$(
     cargo build -q --test loopback --message-format=json |\

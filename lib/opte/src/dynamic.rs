@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! A KRwLock-based wrapper for dynamically updateable resources (e.g., config),
 //! and for memoizing the outputs generated from those resources.
@@ -47,6 +47,22 @@ impl<T> Dynamic<T> {
         let mut inner = self.0.inner.write();
         *inner = value.into();
         _ = self.0.epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Conditionally update `self`, holding exclusive access on the inner
+    /// value.
+    ///
+    /// `f(...)` should return `Some(val)` if an update should be applied.
+    /// Returns `true` if `f(...)` returned `Some`.
+    pub fn update(&self, f: impl FnOnce(&T) -> Option<T>) -> bool {
+        let mut inner = self.0.inner.write();
+        if let Some(new_val) = f(&inner) {
+            *inner = new_val.into();
+            _ = self.0.epoch.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn load(&self) -> Snapshot<T> {
