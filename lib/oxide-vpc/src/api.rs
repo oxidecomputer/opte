@@ -792,14 +792,29 @@ pub enum DelRouterEntryResp {
 /// currently. The VNI in NextHopV6 must be 77 - other values are rejected.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetMcastForwardingReq {
-    /// The underlay IPv6 multicast address (outer IPv6 dst in transmitted packets)
-    /// Must be admin-scoped ff04::/16
+    /// The underlay IPv6 multicast address (outer IPv6 dst in transmitted packets).
+    /// Must be admin-scoped ff04::/16.
     pub underlay: MulticastUnderlay,
-    /// Switch endpoints and Tx-only replication instructions.
-    /// Each NextHopV6.addr is the unicast IPv6 of a switch (for routing).
-    /// The Replication is a Tx-only instruction indicating which port groups
-    /// the switch should use.
-    pub next_hops: Vec<(NextHopV6, Replication)>,
+    /// Switch endpoints with replication instructions and aggregated source filters.
+    pub next_hops: Vec<McastForwardingNextHop>,
+}
+
+/// A forwarding entry for a single next hop with its aggregated source filter.
+///
+/// The source filter is the union of all subscriber filters on the destination
+/// sled. Omicron computes this aggregation. OPTE checks the filter before
+/// forwarding to avoid sending packets to sleds where all subscribers would
+/// filter them.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct McastForwardingNextHop {
+    /// The unicast IPv6 address of the switch endpoint (for routing).
+    pub next_hop: NextHopV6,
+    /// Tx-only instruction for switch port group replication.
+    pub replication: Replication,
+    /// Aggregated source filter for this destination sled.
+    /// Default (Exclude with empty sources) means accept any source.
+    #[serde(default)]
+    pub source_filter: SourceFilter,
 }
 
 /// Clear multicast forwarding entries for an underlay multicast group.
@@ -823,8 +838,8 @@ impl CmdOk for DumpMcastForwardingResp {}
 pub struct McastForwardingEntry {
     /// The underlay IPv6 multicast address (admin-scoped ff04::/16)
     pub underlay: MulticastUnderlay,
-    /// The next hops (underlay IPv6 addresses) with Tx-only replication instructions
-    pub next_hops: Vec<(NextHopV6, Replication)>,
+    /// The next hops with replication instructions and source filters
+    pub next_hops: Vec<McastForwardingNextHop>,
 }
 
 impl opte::api::cmd::CmdOk for DelRouterEntryResp {}
@@ -842,17 +857,100 @@ impl CmdOk for DumpMcastSubscriptionsResp {}
 pub struct McastSubscriptionEntry {
     /// The underlay IPv6 multicast address (admin-scoped ff04::/16, subscription key)
     pub underlay: MulticastUnderlay,
-    /// Port names subscribed to this group on this sled
-    pub ports: Vec<String>,
+    /// Port subscriptions with their source filters
+    pub subscribers: Vec<McastSubscriberEntry>,
+}
+
+impl McastSubscriptionEntry {
+    /// Returns true if the given port name is subscribed to this group.
+    pub fn has_port(&self, name: &str) -> bool {
+        self.subscribers.iter().any(|s| s.port == name)
+    }
+}
+
+/// A port's subscription to a multicast group with its source filter.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastSubscriberEntry {
+    /// The port name
+    pub port: String,
+    /// The source filter for this port's subscription
+    pub filter: SourceFilter,
+}
+
+/// Filter mode for multicast source filtering per IGMPv3/MLDv2 semantics.
+///
+/// Determines how the source list is interpreted for a (port, group) subscription.
+///
+/// See [RFD 488] for Oxide multicast architecture and [RFC 3376]/[RFC 3810]
+/// for protocol details.
+///
+/// [RFD 488]: https://rfd.shared.oxide.computer/rfd/488
+/// [RFC 3376]: https://www.rfc-editor.org/rfc/rfc3376
+/// [RFC 3810]: https://www.rfc-editor.org/rfc/rfc3810
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq,
+)]
+#[repr(u8)]
+pub enum FilterMode {
+    /// Accept packets only from sources in the list.
+    /// Empty list means no sources are accepted.
+    Include = 0,
+    /// Accept packets from any source except those in the list.
+    /// Empty list means all sources are accepted (*, G).
+    #[default]
+    Exclude = 1,
+}
+
+/// Per-member source filter for multicast subscriptions.
+///
+/// Each port subscribed to a multicast group can have its own source filter,
+/// allowing fine-grained control over which sources are accepted:
+/// - `EXCLUDE()`: accept any source (*, G)
+/// - `EXCLUDE(S1, S2)`: accept any except listed
+/// - `INCLUDE(S1, S2)`: accept only listed sources
+/// - `INCLUDE()`: accept nothing
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SourceFilter {
+    pub mode: FilterMode,
+    pub sources: BTreeSet<IpAddr>,
+}
+
+impl SourceFilter {
+    /// Returns true if this filter allows packets from the given source.
+    pub fn allows(&self, src: IpAddr) -> bool {
+        match self.mode {
+            FilterMode::Include => self.sources.contains(&src),
+            FilterMode::Exclude => {
+                // Fast path for (*, G) subscriptions: EXCLUDE() with empty
+                // sources is the default and most common case encountered.
+                // Checking is_empty() avoids the BTreeSet lookup on every
+                // packet.
+                self.sources.is_empty() || !self.sources.contains(&src)
+            }
+        }
+    }
+
+    /// Returns true if this filter accepts any source (*, G).
+    pub fn accepts_any(&self) -> bool {
+        matches!(self.mode, FilterMode::Exclude) && self.sources.is_empty()
+    }
 }
 
 /// Subscribe a port to a multicast group.
+///
+/// The group address must be a valid IP multicast address (IPv4 in
+/// 224.0.0.0/4 or IPv6 in ff00::/8). Non-multicast addresses are
+/// rejected. Non-IP multicast frames (L2-only) are not delivered.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct McastSubscribeReq {
     /// The port name to subscribe
     pub port_name: String,
     /// The multicast group address
     pub group: IpAddr,
+    /// Source filter for this subscription. Defaults to Exclude with empty
+    /// sources (accept any source) if not specified.
+    #[serde(default)]
+    pub filter: SourceFilter,
 }
 
 /// Unsubscribe a port from a multicast group.

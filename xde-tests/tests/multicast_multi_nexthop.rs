@@ -16,9 +16,11 @@ use opte_test_utils::geneve_verify;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
@@ -56,8 +58,16 @@ fn test_multicast_multi_nexthop_fanout() -> Result<()> {
     let nexthop2: oxide_vpc::api::Ipv6Addr = "fd77::2".parse().unwrap();
 
     mcast.set_forwarding(vec![
-        (NextHopV6::new(nexthop1, vni), Replication::External),
-        (NextHopV6::new(nexthop2, vni), Replication::Underlay),
+        McastForwardingNextHop {
+            next_hop: NextHopV6::new(nexthop1, vni),
+            replication: Replication::External,
+            source_filter: SourceFilter::default(),
+        },
+        McastForwardingNextHop {
+            next_hop: NextHopV6::new(nexthop2, vni),
+            replication: Replication::Underlay,
+            source_filter: SourceFilter::default(),
+        },
     ])?;
 
     // Allow IPv4 multicast traffic (224.0.0.0/4) via Multicast target
@@ -88,10 +98,10 @@ fn test_multicast_multi_nexthop_fanout() -> Result<()> {
 
     // Verify External replication next hop is present
     assert!(
-        entry.next_hops.iter().any(|(nexthop, rep)| {
-            *rep == Replication::External
-                && nexthop.addr == nexthop1
-                && nexthop.vni == vni
+        entry.next_hops.iter().any(|hop| {
+            hop.replication == Replication::External
+                && hop.next_hop.addr == nexthop1
+                && hop.next_hop.vni == vni
         }),
         "expected External replication to {nexthop1:?} in forwarding table; got: {:?}",
         entry.next_hops
@@ -99,10 +109,10 @@ fn test_multicast_multi_nexthop_fanout() -> Result<()> {
 
     // Verify Underlay replication next hop is present
     assert!(
-        entry.next_hops.iter().any(|(nexthop, rep)| {
-            *rep == Replication::Underlay
-                && nexthop.addr == nexthop2
-                && nexthop.vni == vni
+        entry.next_hops.iter().any(|hop| {
+            hop.replication == Replication::Underlay
+                && hop.next_hop.addr == nexthop2
+                && hop.next_hop.vni == vni
         }),
         "expected Underlay replication to {nexthop2:?} in forwarding table; got: {:?}",
         entry.next_hops

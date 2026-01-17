@@ -285,7 +285,9 @@ use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::InternetGatewayMap;
 use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::McastForwardingEntry;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
+use oxide_vpc::api::McastSubscriberEntry;
 use oxide_vpc::api::McastSubscriptionEntry;
 use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
@@ -300,6 +302,7 @@ use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::cfg::IpCfg;
 use oxide_vpc::cfg::VpcCfg;
 use oxide_vpc::engine::VpcNetwork;
@@ -317,9 +320,14 @@ use oxide_vpc::engine::router;
 const ETHERNET_MTU: u16 = 1500;
 
 // Type alias for multicast forwarding table:
-// Maps IPv6 destination addresses to their next hop replication entries.
-type McastForwardingTable =
-    BTreeMap<MulticastUnderlay, BTreeMap<NextHopV6, Replication>>;
+// Maps underlay multicast addresses to next hops with replication and source filters.
+// The source filter is the aggregated filter for the destination sled (union of
+// all subscriber filters on that sled). Packets are only forwarded if the
+// aggregated filter allows the source.
+type McastForwardingTable = BTreeMap<
+    MulticastUnderlay,
+    BTreeMap<NextHopV6, (Replication, SourceFilter)>,
+>;
 
 // Entry limits for the various flow tables.
 const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
@@ -426,9 +434,31 @@ unsafe extern "C" {
     // Multicast dataplane problem probes
     pub safe fn __dtrace_probe_mcast__tx__pullup__fail(len: uintptr_t);
     pub safe fn __dtrace_probe_mcast__rx__pullup__fail(len: uintptr_t);
+    /// Fires when a multicast Tx packet is dropped because no inner IP header
+    /// was found (non-IP frames cannot be source-filtered).
+    pub safe fn __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr: uintptr_t);
     pub safe fn __dtrace_probe_mcast__no__fwd__entry(
         underlay: *const oxide_vpc::api::Ipv6Addr,
         vni: uintptr_t,
+    );
+    /// Fires when a multicast packet is blocked by source filtering.
+    pub safe fn __dtrace_probe_mcast__source__filtered(
+        af: uintptr_t,        // AF_INET or AF_INET6
+        inner_src: uintptr_t, // source IP that was blocked
+        inner_dst: uintptr_t, // multicast group
+        vni: uintptr_t,
+        port: uintptr_t, // port name that filtered the packet
+        filter_mode: uintptr_t, // 0 = Include, 1 = Exclude
+    );
+    /// Fires when a multicast packet is not forwarded to a next hop because
+    /// the aggregated source filter for that sled rejected the source.
+    pub safe fn __dtrace_probe_mcast__fwd__source__filtered(
+        af: uintptr_t,        // AF_INET or AF_INET6
+        inner_src: uintptr_t, // source IP that was blocked
+        inner_dst: uintptr_t, // multicast group
+        vni: uintptr_t,
+        next_hop: uintptr_t, // next hop address that was skipped
+        filter_mode: uintptr_t, // 0 = Include, 1 = Exclude
     );
 }
 
@@ -2150,6 +2180,30 @@ fn guest_loopback(
     }
 }
 
+/// Extract AF constant and address pointer from a single address for DTrace probes.
+#[inline]
+fn dtrace_addr(addr: &oxide_vpc::api::IpAddr) -> (usize, uintptr_t) {
+    match addr {
+        oxide_vpc::api::IpAddr::Ip4(v4) => {
+            (AF_INET as usize, v4 as *const _ as uintptr_t)
+        }
+        oxide_vpc::api::IpAddr::Ip6(v6) => {
+            (AF_INET6 as usize, v6 as *const _ as uintptr_t)
+        }
+    }
+}
+
+/// Extract AF constant and address pointers from a src/dst pair for DTrace probes.
+#[inline]
+fn dtrace_addrs(
+    src: &oxide_vpc::api::IpAddr,
+    dst: &oxide_vpc::api::IpAddr,
+) -> (usize, uintptr_t, uintptr_t) {
+    let (af, src_ptr) = dtrace_addr(src);
+    let (_, dst_ptr) = dtrace_addr(dst);
+    (af, src_ptr, dst_ptr)
+}
+
 /// Locate the Oxide Multicast Geneve option and return the offset to its body.
 ///
 /// Walks through Geneve options starting at `geneve_offset + 8` to find the
@@ -2221,6 +2275,7 @@ fn update_mcast_replication(
 }
 
 struct MulticastTxContext<'a> {
+    inner_src: oxide_vpc::api::IpAddr, // Inner/overlay source IP (for source filtering)
     inner_dst: oxide_vpc::api::IpAddr, // Inner/overlay destination IP (for subscriptions)
     underlay_dst: Ipv6Addr, // Outer/underlay destination IP (for forwarding lookup)
     vni: Vni,
@@ -2233,6 +2288,7 @@ struct MulticastTxContext<'a> {
 }
 
 struct MulticastRxContext<'a> {
+    inner_src: oxide_vpc::api::IpAddr, // Inner/overlay source IP (for source filtering)
     inner_dst: oxide_vpc::api::IpAddr, // Inner/overlay destination IP (for subscriptions)
     underlay_dst: Ipv6Addr, // Outer/underlay destination IP (for forwarding lookup)
     vni: Vni,
@@ -2261,14 +2317,7 @@ fn handle_mcast_tx<'a>(
     cpu_mcast_fwd: &'a McastForwardingTable,
 ) {
     // DTrace probe: multicast Tx entry
-    let (af, addr_ptr) = match &ctx.inner_dst {
-        oxide_vpc::api::IpAddr::Ip4(v4) => {
-            (AF_INET as usize, AsRef::<[u8]>::as_ref(v4).as_ptr() as uintptr_t)
-        }
-        oxide_vpc::api::IpAddr::Ip6(v6) => {
-            (AF_INET6 as usize, AsRef::<[u8]>::as_ref(v6).as_ptr() as uintptr_t)
-        }
-    };
+    let (af, addr_ptr) = dtrace_addr(&ctx.inner_dst);
     __dtrace_probe_mcast__tx(af, addr_ptr, ctx.vni.as_u32() as uintptr_t);
 
     // Compute packet offsets once (used for both local delivery and next hop forwarding)
@@ -2287,13 +2336,36 @@ fn handle_mcast_tx<'a>(
         oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
 
-    if let Some(listeners) = devs.mcast_listeners(&group_key) {
+    if let Some(subscribers) = devs.mcast_subscribers(&group_key) {
         let my_key = VniMac::new(ctx.vni, src_dev.port.mac_addr());
-        for el in listeners {
+        for (key, filter) in subscribers {
             // Skip delivering to self
-            if my_key == *el {
+            if my_key == *key {
                 continue;
             }
+
+            let Some(dev) = devs.get_by_key(*key) else {
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_tx_stale_local().incr(1);
+                continue;
+            };
+
+            if !filter.allows(ctx.inner_src) {
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_tx_source_filtered().incr(1);
+                let (af, src_ptr, dst_ptr) =
+                    dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
+                __dtrace_probe_mcast__source__filtered(
+                    af,
+                    src_ptr,
+                    dst_ptr,
+                    ctx.vni.as_u32() as uintptr_t,
+                    dev.port.name_cstr().as_ptr() as uintptr_t,
+                    filter.mode as uintptr_t,
+                );
+                continue;
+            }
+
             // Note: The inner destination MAC is already set to the multicast MAC by
             // OPTE's `EncapAction` transformation. No manual rewrite needed for Tx path.
             let Ok(my_pkt) = ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
@@ -2308,34 +2380,17 @@ fn handle_mcast_tx<'a>(
                 continue;
             };
 
-            match devs.get_by_key(*el) {
-                Some(dev) => {
-                    // DTrace probe: local delivery
-                    let (af, addr_ptr) = match &ctx.inner_dst {
-                        oxide_vpc::api::IpAddr::Ip4(v4) => (
-                            AF_INET as usize,
-                            AsRef::<[u8]>::as_ref(v4).as_ptr() as uintptr_t,
-                        ),
-                        oxide_vpc::api::IpAddr::Ip6(v6) => (
-                            AF_INET6 as usize,
-                            AsRef::<[u8]>::as_ref(v6).as_ptr() as uintptr_t,
-                        ),
-                    };
-                    __dtrace_probe_mcast__local__delivery(
-                        af,
-                        addr_ptr,
-                        ctx.vni.as_u32() as uintptr_t,
-                        dev.port.name_cstr().as_ptr() as uintptr_t,
-                    );
-                    guest_loopback(src_dev, dev, *el, my_pkt, postbox);
-                    let xde = get_xde_state();
-                    xde.stats.vals.mcast_tx_local().incr(1);
-                }
-                None => {
-                    let xde = get_xde_state();
-                    xde.stats.vals.mcast_tx_stale_local().incr(1);
-                }
-            }
+            // DTrace probe: local delivery
+            let (af, addr_ptr) = dtrace_addr(&ctx.inner_dst);
+            __dtrace_probe_mcast__local__delivery(
+                af,
+                addr_ptr,
+                ctx.vni.as_u32() as uintptr_t,
+                dev.port.name_cstr().as_ptr() as uintptr_t,
+            );
+            guest_loopback(src_dev, dev, *key, my_pkt, postbox);
+            let xde = get_xde_state();
+            xde.stats.vals.mcast_tx_local().incr(1);
         }
     }
 
@@ -2361,7 +2416,28 @@ fn handle_mcast_tx<'a>(
 
     if let Some(next_hops) = cpu_mcast_fwd.get(&underlay_key) {
         // We found forwarding entries, replicate to each next hop
-        for (next_hop, replication) in next_hops.iter() {
+        for (next_hop, (replication, source_filter)) in next_hops.iter() {
+            // Check aggregated source filter before forwarding.
+            // This filter is the union of all subscriber filters on the
+            // destination sled. If no subscriber would accept this source,
+            // skip forwarding to avoid sending packets across the network
+            // just to have them filtered at the destination.
+            if !source_filter.allows(ctx.inner_src) {
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
+                let (af, src_ptr, dst_ptr) =
+                    dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
+                __dtrace_probe_mcast__fwd__source__filtered(
+                    af,
+                    src_ptr,
+                    dst_ptr,
+                    ctx.vni.as_u32() as uintptr_t,
+                    &next_hop.addr as *const _ as uintptr_t,
+                    source_filter.mode as uintptr_t,
+                );
+                continue;
+            }
+
             // Clone packet with headers using pullup
             let Ok(mut fwd_pkt) =
                 ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
@@ -2512,14 +2588,7 @@ fn handle_mcast_rx(
     postbox: &mut Postbox,
 ) {
     // DTrace probe: multicast Rx entry
-    let (af, addr_ptr) = match &ctx.inner_dst {
-        oxide_vpc::api::IpAddr::Ip4(v4) => {
-            (AF_INET as usize, v4 as *const _ as uintptr_t)
-        }
-        oxide_vpc::api::IpAddr::Ip6(v6) => {
-            (AF_INET6 as usize, v6 as *const _ as uintptr_t)
-        }
-    };
+    let (af, addr_ptr) = dtrace_addr(&ctx.inner_dst);
     __dtrace_probe_mcast__rx(af, addr_ptr, ctx.vni.as_u32() as uintptr_t);
 
     // Subscription is keyed by underlay (outer) IPv6 multicast address.
@@ -2546,10 +2615,32 @@ fn handle_mcast_rx(
         return;
     };
 
-    // Deliver to all local subscribers. VNI validation and VPC isolation
-    // are handled by OPTE's inbound overlay layer.
-    if let Some(ports) = devs.mcast_listeners(&group_key) {
-        for el in ports {
+    // Deliver to local subscribers that accept this source.
+    // VNI validation and VPC isolation are handled by OPTE's inbound overlay layer.
+    if let Some(subscribers) = devs.mcast_subscribers(&group_key) {
+        for (key, filter) in subscribers {
+            let Some(dev) = devs.get_by_key(*key) else {
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_rx_stale_local().incr(1);
+                continue;
+            };
+
+            if !filter.allows(ctx.inner_src) {
+                let xde = get_xde_state();
+                xde.stats.vals.mcast_rx_source_filtered().incr(1);
+                let (af, src_ptr, dst_ptr) =
+                    dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
+                __dtrace_probe_mcast__source__filtered(
+                    af,
+                    src_ptr,
+                    dst_ptr,
+                    ctx.vni.as_u32() as uintptr_t,
+                    dev.port.name_cstr().as_ptr() as uintptr_t,
+                    filter.mode as uintptr_t,
+                );
+                continue;
+            }
+
             let Ok(mut my_pkt) =
                 ctx.pkt.pullup(NonZeroUsize::new(ctx.pullup_len))
             else {
@@ -2577,32 +2668,17 @@ fn handle_mcast_rx(
             my_pkt[ctx.inner_eth_off..][..ETHER_ADDR_LEN]
                 .copy_from_slice(&expected_mac);
 
-            match devs.get_by_key(*el) {
-                Some(dev) => {
-                    // DTrace probe: Rx local delivery
-                    let (af, addr_ptr) = match &ctx.inner_dst {
-                        oxide_vpc::api::IpAddr::Ip4(v4) => {
-                            (AF_INET as usize, v4 as *const _ as uintptr_t)
-                        }
-                        oxide_vpc::api::IpAddr::Ip6(v6) => {
-                            (AF_INET6 as usize, v6 as *const _ as uintptr_t)
-                        }
-                    };
-                    __dtrace_probe_mcast__local__delivery(
-                        af,
-                        addr_ptr,
-                        ctx.vni.as_u32() as uintptr_t,
-                        dev.port.name_cstr().as_ptr() as uintptr_t,
-                    );
-                    xde_rx_one_direct(stream, dev, *el, my_pkt, postbox);
-                    let xde = get_xde_state();
-                    xde.stats.vals.mcast_rx_local().incr(1);
-                }
-                None => {
-                    let xde = get_xde_state();
-                    xde.stats.vals.mcast_rx_stale_local().incr(1);
-                }
-            }
+            // DTrace probe: Rx local delivery
+            let (af, addr_ptr) = dtrace_addr(&ctx.inner_dst);
+            __dtrace_probe_mcast__local__delivery(
+                af,
+                addr_ptr,
+                ctx.vni.as_u32() as uintptr_t,
+                dev.port.name_cstr().as_ptr() as uintptr_t,
+            );
+            xde_rx_one_direct(stream, dev, *key, my_pkt, postbox);
+            let xde = get_xde_state();
+            xde.stats.vals.mcast_rx_local().incr(1);
         }
     } else {
         // No subscription entry found for this multicast group
@@ -2731,15 +2807,17 @@ fn xde_mc_tx_one<'a>(
 
     let meta = parsed_pkt.meta();
 
-    // Extract inner destination IP for potential multicast processing
-    let inner_dst_ip = match &meta.inner_l3 {
-        Some(ValidL3::Ipv4(v4)) => {
-            Some(oxide_vpc::api::IpAddr::from(v4.destination()))
-        }
-        Some(ValidL3::Ipv6(v6)) => {
-            Some(oxide_vpc::api::IpAddr::from(v6.destination()))
-        }
-        None => None,
+    // Extract inner source and destination IPs for potential multicast processing
+    let (inner_src_ip, inner_dst_ip) = match &meta.inner_l3 {
+        Some(ValidL3::Ipv4(v4)) => (
+            Some(oxide_vpc::api::IpAddr::from(v4.source())),
+            Some(oxide_vpc::api::IpAddr::from(v4.destination())),
+        ),
+        Some(ValidL3::Ipv6(v6)) => (
+            Some(oxide_vpc::api::IpAddr::from(v6.source())),
+            Some(oxide_vpc::api::IpAddr::from(v6.destination())),
+        ),
+        None => (None, None),
     };
 
     let Ok(non_eth_payl_bytes) =
@@ -2865,7 +2943,21 @@ fn xde_mc_tx_one<'a>(
             // ff0x:: address (via M2P table).
             if ip6_dst.is_multicast() {
                 // This is a multicast packet, so we determine the inner
-                // destination from the packet contents or use a fallback
+                // source and destination from the packet contents or use a fallback
+                let inner_src = match inner_src_ip {
+                    Some(ip) => ip,
+                    None => {
+                        // No inner L3 header. Multicast source filtering requires
+                        // an IP source address; drop non-IP frames.
+                        opte::engine::dbg!(
+                            "mcast Tx: no inner L3 for source filtering"
+                        );
+                        let xde = get_xde_state();
+                        xde.stats.vals.mcast_tx_no_inner_ip().incr(1);
+                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
+                        return;
+                    }
+                };
                 let inner_dst = inner_dst_ip.unwrap_or_else(|| {
                     // Fallback: derive from outer IPv6 multicast address
                     // For IPv4 multicast mapped to IPv6, the last 4 bytes
@@ -2893,6 +2985,7 @@ fn xde_mc_tx_one<'a>(
                     mcast_fwd.get_or_insert_with(|| src_dev.mcast_fwd.read());
                 handle_mcast_tx(
                     MulticastTxContext {
+                        inner_src,
                         inner_dst,
                         underlay_dst: ip6_dst,
                         vni,
@@ -3353,7 +3446,7 @@ fn xde_rx_one(
         );
         let vni = meta.outer_encap.vni();
 
-        // Compute inner Ethernet offset and extract inner destination IP for multicast processing
+        // Compute inner Ethernet offset and extract inner src/dst IP for multicast processing
         let inner_eth_off = (
             &meta.outer_eth,
             &meta.outer_v6,
@@ -3361,9 +3454,15 @@ fn xde_rx_one(
             &meta.outer_encap,
         )
             .packet_length();
-        let inner_dst = match &meta.inner_l3 {
-            ValidL3::Ipv4(v4) => oxide_vpc::api::IpAddr::from(v4.destination()),
-            ValidL3::Ipv6(v6) => oxide_vpc::api::IpAddr::from(v6.destination()),
+        let (inner_src, inner_dst) = match &meta.inner_l3 {
+            ValidL3::Ipv4(v4) => (
+                oxide_vpc::api::IpAddr::from(v4.source()),
+                oxide_vpc::api::IpAddr::from(v4.destination()),
+            ),
+            ValidL3::Ipv6(v6) => (
+                oxide_vpc::api::IpAddr::from(v6.source()),
+                oxide_vpc::api::IpAddr::from(v6.destination()),
+            ),
         };
 
         // Drop the parsed packet before calling handle_mcast_rx
@@ -3373,6 +3472,7 @@ fn xde_rx_one(
         // (leaf node)
         handle_mcast_rx(
             MulticastRxContext {
+                inner_src,
                 inner_dst,
                 underlay_dst: ip6_dst,
                 vni,
@@ -3703,15 +3803,7 @@ fn set_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     state.m2p.set(req.group, underlay);
 
     // DTrace: multicast map set
-    let (af, group_ptr): (usize, uintptr_t) = match req.group {
-        oxide_vpc::api::IpAddr::Ip4(v4) => {
-            (AF_INET as usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
-        }
-        oxide_vpc::api::IpAddr::Ip6(v6) => (
-            AF_INET6 as usize,
-            AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t,
-        ),
-    };
+    let (af, group_ptr) = dtrace_addr(&req.group);
     __dtrace_probe_mcast__map__set(
         af as uintptr_t,
         group_ptr,
@@ -3734,15 +3826,7 @@ fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     state.m2p.remove(&req.group);
 
     // DTrace: multicast map clear
-    let (af, group_ptr): (usize, uintptr_t) = match req.group {
-        oxide_vpc::api::IpAddr::Ip4(v4) => {
-            (AF_INET as usize, AsRef::<[u8]>::as_ref(&v4).as_ptr() as uintptr_t)
-        }
-        oxide_vpc::api::IpAddr::Ip6(v6) => (
-            AF_INET6 as usize,
-            AsRef::<[u8]>::as_ref(&v6).as_ptr() as uintptr_t,
-        ),
-    };
+    let (af, group_ptr) = dtrace_addr(&req.group);
     __dtrace_probe_mcast__map__clear(
         af as uintptr_t,
         group_ptr,
@@ -3787,25 +3871,25 @@ fn set_mcast_forwarding_hdlr(
     // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication modes.
     // NextHopV6.addr must be unicast (switch address for routing).
     // The packet will be sent to the multicast address (req.underlay).
-    for (next_hop, _rep) in &req.next_hops {
-        if next_hop.vni.as_u32() != DEFAULT_MULTICAST_VNI {
+    for entry in &req.next_hops {
+        if entry.next_hop.vni.as_u32() != DEFAULT_MULTICAST_VNI {
             return Err(OpteError::System {
                 errno: EINVAL,
                 msg: format!(
                     "multicast next hop VNI must be DEFAULT_MULTICAST_VNI ({DEFAULT_MULTICAST_VNI}), got: {}",
-                    next_hop.vni.as_u32()
+                    entry.next_hop.vni.as_u32()
                 ),
             });
         }
 
         // NextHopV6.addr must be unicast (the switch endpoint for routing).
         // The actual packet destination is the multicast address (req.underlay).
-        if next_hop.addr.is_multicast() {
+        if entry.next_hop.addr.is_multicast() {
             return Err(OpteError::System {
                 errno: EINVAL,
                 msg: format!(
                     "NextHopV6.addr must be unicast (switch address), got multicast: {}",
-                    next_hop.addr
+                    entry.next_hop.addr
                 ),
             });
         }
@@ -3821,10 +3905,13 @@ fn set_mcast_forwarding_hdlr(
         // Get or create the next hop map for this underlay address
         let next_hop_map = mcast_fwd.entry(underlay).or_default();
 
-        // Insert/update next hops: same next hop addr → replace replication mode,
+        // Insert/update next hops: same next hop addr → replace entry,
         // different next hop addr → add new entry (like `swadm route add`)
-        for (next_hop, rep) in req.next_hops {
-            next_hop_map.insert(next_hop, rep);
+        for entry in req.next_hops {
+            next_hop_map.insert(
+                entry.next_hop,
+                (entry.replication, entry.source_filter),
+            );
         }
     }
 
@@ -3902,7 +3989,11 @@ fn dump_mcast_forwarding_hdlr() -> Result<DumpMcastForwardingResp, OpteError> {
             underlay: *underlay,
             next_hops: next_hops
                 .iter()
-                .map(|(next_hop, rep)| (*next_hop, *rep))
+                .map(|(next_hop, (rep, filter))| McastForwardingNextHop {
+                    next_hop: *next_hop,
+                    replication: *rep,
+                    source_filter: filter.clone(),
+                })
                 .collect(),
         })
         .collect();
@@ -3918,8 +4009,12 @@ fn dump_mcast_subscriptions_hdlr()
 
     let mut entries: alloc::vec::Vec<McastSubscriptionEntry> =
         alloc::vec::Vec::new();
-    for (underlay, ports) in devs.dump_mcast_subscriptions().into_iter() {
-        entries.push(McastSubscriptionEntry { underlay, ports });
+    for (underlay, subs) in devs.dump_mcast_subscriptions().into_iter() {
+        let subscribers = subs
+            .into_iter()
+            .map(|(port, filter)| McastSubscriberEntry { port, filter })
+            .collect();
+        entries.push(McastSubscriptionEntry { underlay, subscribers });
     }
 
     Ok(DumpMcastSubscriptionsResp { entries })
@@ -3942,6 +4037,25 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
                 "IP address {} is not a multicast address",
                 req.group
             )));
+        }
+
+        // Validate source filter: sources must contain valid unicast addresses
+        for src in &req.filter.sources {
+            if src.is_multicast() {
+                return Err(OpteError::BadState(format!(
+                    "source filter address {src} is multicast"
+                )));
+            }
+
+            if src.is_unspecified()
+                || src.is_loopback()
+                || src.is_broadcast()
+                || src.is_link_local()
+            {
+                return Err(OpteError::BadState(format!(
+                    "source filter address {src} is a special-use address"
+                )));
+            }
         }
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
@@ -3974,7 +4088,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
             }
         };
 
-        devs.mcast_subscribe(&req.port_name, group_key)?;
+        devs.mcast_subscribe(&req.port_name, group_key, req.filter.clone())?;
 
         // DTrace: subscribe
         let (af, group_ptr): (usize, uintptr_t) = (
