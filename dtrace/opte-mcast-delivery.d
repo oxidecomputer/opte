@@ -12,11 +12,12 @@
 #include "common.h"
 
 /* Local print formats (avoid colliding with common.h FLOW_FMT macros) */
-#define	M_HDR_FMT     "%-12s %-6s %-39s %-39s\n"
-#define	M_LINE_FMT    "%-12s %-6u %-39s %-39s\n"
-#define	M_FWD_HDR_FMT "%-12s %-6s %-39s %-39s\n"
+#define	M_HDR_FMT      "%-12s %-6s %-39s %-39s\n"
+#define	M_LINE_FMT     "%-12s %-6u %-39s %-39s\n"
+#define	M_FWD_HDR_FMT  "%-12s %-6s %-39s %-39s\n"
 #define	M_FWD_LINE_FMT "%-12s %-6u %-39s %-39s\n"
-#define	DBG_LINE_FMT  "%-20s %-30s %s\n"
+#define	M_FILT_FMT     "%-12s %-6u %-39s %-39s src=%-15s mode=%s\n"
+#define	DBG_LINE_FMT   "%-20s %-30s %s\n"
 
 /* Macro to reduce code duplication for group address formatting */
 #define MCAST_GROUP_STR(af, ptr) \
@@ -390,6 +391,84 @@ mcast-rx-pullup-fail
 	printf(M_LINE_FMT, "RX_FAIL", 0, "-", "-");
 }
 
+mcast-tx-no-inner-ip {
+	/* arg0=mblk_addr */
+
+	/* Always track aggregations */
+	@by_event["TX_NO_IP"] = count();
+}
+
+mcast-tx-no-inner-ip
+/!suppress_output/
+{
+	printf(M_LINE_FMT, "TX_NO_IP", 0, "-", "-");
+}
+
+mcast-source-filtered {
+	/* arg0=af, arg1=inner_src, arg2=inner_dst, arg3=vni, arg4=port, arg5=filter_mode */
+	this->af = arg0;
+	this->src_ptr = arg1;
+	this->dst_ptr = arg2;
+	this->vni = arg3;
+	this->port = stringof(arg4);
+	this->filter_mode = arg5;
+	this->src_str = MCAST_GROUP_STR(this->af, this->src_ptr);
+	this->dst_str = MCAST_GROUP_STR(this->af, this->dst_ptr);
+	this->mode_str = this->filter_mode == 0 ? "INCLUDE" : "EXCLUDE";
+
+	/* Always track aggregations */
+	@by_event["FILTERED"] = count();
+	@by_vni["FILTERED", this->vni] = count();
+	@by_port[this->port] = count();
+	@filtered_by_mode[this->mode_str] = count();
+}
+
+mcast-source-filtered
+/!suppress_output/
+{
+	if (num >= HEADER_REPRINT_INTERVAL) {
+		printf(M_HDR_FMT, "EVENT", "VNI", "GROUP", "PORT/NEXTHOP");
+		num = 0;
+	}
+
+	printf(M_FILT_FMT, "FILTERED", this->vni, this->dst_str, this->port,
+		this->src_str, this->mode_str);
+	num++;
+}
+
+mcast-fwd-source-filtered {
+	/* arg0=af, arg1=inner_src, arg2=inner_dst, arg3=vni, arg4=next_hop, arg5=filter_mode */
+	this->af = arg0;
+	this->src_ptr = arg1;
+	this->dst_ptr = arg2;
+	this->vni = arg3;
+	this->next_hop = (in6_addr_t *)arg4;
+	this->filter_mode = arg5;
+	this->src_str = MCAST_GROUP_STR(this->af, this->src_ptr);
+	this->dst_str = MCAST_GROUP_STR(this->af, this->dst_ptr);
+	this->next_hop_str = inet_ntoa6(this->next_hop);
+	this->mode_str = this->filter_mode == 0 ? "INCLUDE" : "EXCLUDE";
+
+	/* Always track aggregations */
+	@by_event["FWD_FILT"] = count();
+	@by_vni["FWD_FILT", this->vni] = count();
+	@by_nexthop_unicast[this->next_hop_str] = count();
+	@filtered_by_mode[this->mode_str] = count();
+}
+
+mcast-fwd-source-filtered
+/!suppress_output/
+{
+	if (num >= HEADER_REPRINT_INTERVAL) {
+		printf(M_FWD_HDR_FMT, "EVENT", "VNI", "UNDERLAY_MCAST", "ROUTE_UNICAST");
+		num = 0;
+	}
+
+	printf(M_FILT_FMT, "FWD_FILT", this->vni, this->dst_str, this->next_hop_str,
+		this->src_str, this->mode_str);
+	num++;
+}
+
 mcast-no-fwd-entry {
 	/* arg0=underlay_ptr, arg1=vni */
 	this->underlay = (in6_addr_t *)arg0;
@@ -422,6 +501,8 @@ END
 	printa(@by_port);
 	printf("\nForwarding by unicast next hop (routing address):\n");
 	printa(@by_nexthop_unicast);
+	printf("\nSource filtering by mode:\n");
+	printa(@filtered_by_mode);
 	printf("\nConfig ops:\n");
 	printa(@cfg_counts);
 }

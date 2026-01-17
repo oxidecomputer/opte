@@ -30,9 +30,11 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
@@ -81,10 +83,11 @@ fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
     // Set up Tx forwarding with `Replication::External` mode.
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic via Multicast target
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
@@ -111,14 +114,14 @@ fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0),
+        s_entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
     assert!(
-        !s_entry.ports.contains(&p1) && !s_entry.ports.contains(&p2),
+        !s_entry.has_port(&p1) && !s_entry.has_port(&p2),
         "expected {p1} and {p2} not to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on nodes B and C to verify no delivery (not subscribed)
@@ -224,11 +227,9 @@ fn test_multicast_tx_same_sled_only() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected {p0}, {p1}, {p2} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Verify no forwarding entries exist
@@ -314,10 +315,11 @@ fn test_multicast_underlay_replication_no_local_subscribers() -> Result<()> {
     // Set up Tx forwarding with `Replication::Underlay` mode.
     // Tx behavior: forward to underlay with multicast encapsulation.
     // Rx behavior: same-sled delivery to subscribers (none in this test).
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Underlay,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic via Multicast target.
     //
@@ -432,10 +434,11 @@ fn test_multicast_external_replication_no_local_subscribers() -> Result<()> {
     // Tx behavior: forward to underlay with `Replication::External` flag for
     // boundary switch replication.
     // Rx behavior: same-sled delivery to subscribers (none in this test).
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic via Multicast target
     //
@@ -535,10 +538,11 @@ fn test_multicast_both_replication() -> Result<()> {
     // (to front panel) & `Replication::Underlay` (sled-to-sled multicast).
     // Rx behavior: same-sled delivery occurs independently, driven purely by
     // port subscriptions (not the `Replication` mode).
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Both,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Both,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic via Multicast target and subscribe to the group
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
@@ -561,11 +565,9 @@ fn test_multicast_both_replication() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected {p0}, {p1}, {p2} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on nodes B and C (same-sled delivery) and underlay
@@ -653,11 +655,9 @@ fn test_multicast_sender_self_exclusion() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected all 3 ports subscribed (including sender A); got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on ALL nodes (A, B, C)
@@ -718,10 +718,11 @@ fn test_partial_unsubscribe() -> Result<()> {
     // underlay egress; the actual packet destination is the multicast address.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
@@ -743,11 +744,9 @@ fn test_partial_unsubscribe() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast subscription entry");
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected all 3 ports subscribed initially; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Send packet and verify B and C receive (A is sender, won't receive its own)
@@ -786,14 +785,14 @@ fn test_partial_unsubscribe() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("subscription entry should still exist");
     assert!(
-        s_entry2.ports.contains(&p0) && s_entry2.ports.contains(&p2),
+        s_entry2.has_port(&p0) && s_entry2.has_port(&p2),
         "expected p0 and p2 to remain subscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
     assert!(
-        !s_entry2.ports.contains(&p1),
+        !s_entry2.has_port(&p1),
         "expected p1 to be unsubscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
 
     // Verify forwarding table unchanged (forwarding is independent of local subs)
@@ -804,10 +803,10 @@ fn test_partial_unsubscribe() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("forwarding entry should still exist");
     assert!(
-        fwd_entry.next_hops.iter().any(|(nexthop, rep)| {
-            *rep == Replication::External
-                && nexthop.addr == fake_switch_addr
-                && nexthop.vni == vni
+        fwd_entry.next_hops.iter().any(|hop| {
+            hop.replication == Replication::External
+                && hop.next_hop.addr == fake_switch_addr
+                && hop.next_hop.vni == vni
         }),
         "forwarding table should be unchanged"
     );

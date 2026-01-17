@@ -532,7 +532,7 @@ mod test {
 
         // Build a minimal packet with just one Multicast option
         #[rustfmt::skip]
-        let buf = vec![
+        let buf = [
             // UDP source
             0x1E, 0x61,
             // UDP dest

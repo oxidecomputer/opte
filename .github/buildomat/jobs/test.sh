@@ -95,6 +95,9 @@ pfexec /input/xde/work/test/multicast_multi_sub --nocapture --test-threads=1
 pfexec chmod +x /input/xde/work/test/multicast_validation
 pfexec /input/xde/work/test/multicast_validation --nocapture --test-threads=1
 
+pfexec chmod +x /input/xde/work/test/multicast_source_filter
+pfexec /input/xde/work/test/multicast_source_filter --nocapture --test-threads=1
+
 banner "teardown"
 # Ensure full driver teardown is exercised after tests complete
 pfexec rem_drv xde
