@@ -89,6 +89,10 @@ pub struct XdeStats {
     /// The number of multicast Rx packets dropped because the inner destination
     /// IP address is not multicast (malformed packet).
     mcast_rx_bad_inner_dst: KStatU64,
+    /// The number of multicast Tx packets blocked by source filtering.
+    mcast_tx_source_filtered: KStatU64,
+    /// The number of multicast Rx packets blocked by source filtering.
+    mcast_rx_source_filtered: KStatU64,
 }
 
 impl XdeStats {
@@ -134,6 +138,14 @@ impl XdeStats {
 
     pub fn mcast_rx_bad_inner_dst(&self) -> &KStatU64 {
         &self.mcast_rx_bad_inner_dst
+    }
+
+    pub fn mcast_tx_source_filtered(&self) -> &KStatU64 {
+        &self.mcast_tx_source_filtered
+    }
+
+    pub fn mcast_rx_source_filtered(&self) -> &KStatU64 {
+        &self.mcast_rx_source_filtered
     }
 
     pub fn parse_error(&self, dir: Direction, err: &ParseError) {

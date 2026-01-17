@@ -13,9 +13,11 @@ use crate::api::DumpMcastForwardingResp;
 use crate::api::DumpMcastSubscriptionsResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
+use crate::api::FilterMode;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
+use crate::api::SourceFilter;
 use opte::api::IpCidr;
 use opte::api::Vni;
 use opte::print::*;
@@ -175,7 +177,7 @@ pub fn print_mcast_fwd_into(
 
 /// Print the header for the [`print_mcast_subs()`] output.
 fn print_mcast_subs_header(t: &mut impl Write) -> std::io::Result<()> {
-    writeln!(t, "UNDERLAY GROUP\tSUBSCRIBED PORTS")
+    writeln!(t, "UNDERLAY GROUP\tPORT\tFILTER")
 }
 
 /// Print a [`DumpMcastSubscriptionsResp`].
@@ -198,9 +200,50 @@ pub fn print_mcast_subs_into(
     write_hr(&mut t)?;
 
     for entry in &resp.entries {
-        let ports = entry.ports.join(", ");
-        writeln!(t, "{}\t{ports}", entry.underlay)?;
+        for sub in &entry.subscribers {
+            write!(t, "{}\t{}\t", entry.underlay, sub.port)?;
+            write_source_filter(&mut t, &sub.filter)?;
+            writeln!(t)?;
+        }
     }
     writeln!(t)?;
     t.flush()
+}
+
+/// Write a source filter to the given writer.
+///
+/// Uses notation inspired by RFC 3376 (IGMPv3) and RFC 3810 (MLDv2):
+/// - `INCLUDE(S1, S2)` - accept only from listed sources
+/// - `EXCLUDE(S1, S2)` - accept from all except listed sources
+/// - `EXCLUDE()` - accept any source (*, G)
+/// - `INCLUDE()` - accept nothing
+///
+/// See <https://www.rfc-editor.org/rfc/rfc3376> (IGMPv3) and
+/// <https://www.rfc-editor.org/rfc/rfc3810> (MLDv2).
+fn write_source_filter(
+    t: &mut impl Write,
+    filter: &SourceFilter,
+) -> std::io::Result<()> {
+    let mode = match filter.mode {
+        FilterMode::Include => "INCLUDE",
+        FilterMode::Exclude => "EXCLUDE",
+    };
+    if filter.sources.is_empty() {
+        if matches!(filter.mode, FilterMode::Exclude) {
+            write!(t, "{mode}() (any)")
+        } else {
+            write!(t, "{mode}() (none)")
+        }
+    } else {
+        write!(t, "{mode}(")?;
+        let mut first = true;
+        for s in &filter.sources {
+            if !first {
+                write!(t, ", ")?;
+            }
+            write!(t, "{s}")?;
+            first = false;
+        }
+        write!(t, ")")
+    }
 }

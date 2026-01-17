@@ -808,8 +808,77 @@ impl CmdOk for DumpMcastSubscriptionsResp {}
 pub struct McastSubscriptionEntry {
     /// The underlay IPv6 multicast address (admin-scoped ff04::/16, subscription key)
     pub underlay: MulticastUnderlay,
-    /// Port names subscribed to this group on this sled
-    pub ports: Vec<String>,
+    /// Port subscriptions with their source filters
+    pub subscribers: Vec<McastSubscriberEntry>,
+}
+
+impl McastSubscriptionEntry {
+    /// Returns true if the given port name is subscribed to this group.
+    pub fn has_port(&self, name: &str) -> bool {
+        self.subscribers.iter().any(|s| s.port == name)
+    }
+}
+
+/// A port's subscription to a multicast group with its source filter.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McastSubscriberEntry {
+    /// The port name
+    pub port: String,
+    /// The source filter for this port's subscription
+    pub filter: SourceFilter,
+}
+
+/// Filter mode for multicast source filtering per IGMPv3/MLDv2 semantics.
+///
+/// Determines how the source list is interpreted for a (port, group) subscription.
+///
+/// See [RFD 488] for Oxide multicast architecture and [RFC 3376]/[RFC 3810]
+/// for protocol details.
+///
+/// [RFD 488]: https://rfd.shared.oxide.computer/rfd/488
+/// [RFC 3376]: https://www.rfc-editor.org/rfc/rfc3376
+/// [RFC 3810]: https://www.rfc-editor.org/rfc/rfc3810
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq,
+)]
+#[repr(u8)]
+pub enum FilterMode {
+    /// Accept packets only from sources in the list.
+    /// Empty list means no sources are accepted.
+    Include = 0,
+    /// Accept packets from any source except those in the list.
+    /// Empty list means all sources are accepted (*, G).
+    #[default]
+    Exclude = 1,
+}
+
+/// Per-member source filter for multicast subscriptions.
+///
+/// Each port subscribed to a multicast group can have its own source filter,
+/// allowing fine-grained control over which sources are accepted:
+/// - `EXCLUDE()`: accept any source (*, G)
+/// - `EXCLUDE(S1, S2)`: accept any except listed
+/// - `INCLUDE(S1, S2)`: accept only listed sources
+/// - `INCLUDE()`: accept nothing
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SourceFilter {
+    pub mode: FilterMode,
+    pub sources: BTreeSet<IpAddr>,
+}
+
+impl SourceFilter {
+    /// Returns true if this filter allows packets from the given source.
+    pub fn allows(&self, src: IpAddr) -> bool {
+        match self.mode {
+            FilterMode::Include => self.sources.contains(&src),
+            FilterMode::Exclude => !self.sources.contains(&src),
+        }
+    }
+
+    /// Returns true if this filter accepts any source (*, G).
+    pub fn accepts_any(&self) -> bool {
+        matches!(self.mode, FilterMode::Exclude) && self.sources.is_empty()
+    }
 }
 
 /// Subscribe a port to a multicast group.
@@ -819,6 +888,10 @@ pub struct McastSubscribeReq {
     pub port_name: String,
     /// The multicast group address
     pub group: IpAddr,
+    /// Source filter for this subscription. Defaults to Exclude with empty
+    /// sources (accept any source) if not specified.
+    #[serde(default)]
+    pub filter: SourceFilter,
 }
 
 /// Unsubscribe a port from a multicast group.

@@ -105,9 +105,9 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
     let p0 = topol.nodes[0].port.name().to_string();
     let p1 = topol.nodes[1].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0) && s_entry.ports.contains(&p1),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1),
         "expected both {p0} and {p1} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Assert forwarding table contains expected next hop + replication
@@ -181,9 +181,9 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast subscription entry after unsubscribe");
     assert!(
-        !s_entry2.ports.contains(&p1),
+        !s_entry2.has_port(&p1),
         "expected {p1} to be unsubscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
 
     let mut snoop2 = SnoopGuard::start(&dev_name_b, &filter)?;

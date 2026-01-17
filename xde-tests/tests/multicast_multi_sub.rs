@@ -111,14 +111,14 @@ fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0),
+        s_entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
     assert!(
-        !s_entry.ports.contains(&p1) && !s_entry.ports.contains(&p2),
+        !s_entry.has_port(&p1) && !s_entry.has_port(&p2),
         "expected {p1} and {p2} not to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on nodes B and C to verify no delivery (not subscribed)
@@ -224,11 +224,9 @@ fn test_multicast_tx_same_sled_only() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected {p0}, {p1}, {p2} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Verify no forwarding entries exist
@@ -561,11 +559,9 @@ fn test_multicast_both_replication() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected {p0}, {p1}, {p2} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on nodes B and C (same-sled delivery) and underlay
@@ -653,11 +649,9 @@ fn test_multicast_sender_self_exclusion() -> Result<()> {
     let p1 = topol.nodes[1].port.name().to_string();
     let p2 = topol.nodes[2].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected all 3 ports subscribed (including sender A); got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Start snoops on ALL nodes (A, B, C)
@@ -743,11 +737,9 @@ fn test_partial_unsubscribe() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast subscription entry");
     assert!(
-        s_entry.ports.contains(&p0)
-            && s_entry.ports.contains(&p1)
-            && s_entry.ports.contains(&p2),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1) && s_entry.has_port(&p2),
         "expected all 3 ports subscribed initially; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Send packet and verify B and C receive (A is sender, won't receive its own)
@@ -786,14 +778,14 @@ fn test_partial_unsubscribe() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("subscription entry should still exist");
     assert!(
-        s_entry2.ports.contains(&p0) && s_entry2.ports.contains(&p2),
+        s_entry2.has_port(&p0) && s_entry2.has_port(&p2),
         "expected p0 and p2 to remain subscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
     assert!(
-        !s_entry2.ports.contains(&p1),
+        !s_entry2.has_port(&p1),
         "expected p1 to be unsubscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
 
     // Verify forwarding table unchanged (forwarding is independent of local subs)

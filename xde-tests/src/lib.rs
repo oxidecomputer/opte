@@ -40,6 +40,7 @@ use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
 use rand::Rng;
@@ -429,13 +430,24 @@ impl OptePort {
         &self.name
     }
 
-    /// Subscribe this port to a multicast group.
+    /// Subscribe this port to a multicast group (accepting any source).
     /// Automatically tracks the subscription for cleanup on drop.
     pub fn subscribe_multicast(&self, group: IpAddr) -> Result<()> {
+        self.subscribe_multicast_filtered(group, SourceFilter::default())
+    }
+
+    /// Subscribe this port to a multicast group with source filtering.
+    /// Automatically tracks the subscription for cleanup on drop.
+    pub fn subscribe_multicast_filtered(
+        &self,
+        group: IpAddr,
+        filter: SourceFilter,
+    ) -> Result<()> {
         let adm = OpteHdl::open()?;
         adm.mcast_subscribe(&McastSubscribeReq {
             port_name: self.name.clone(),
             group,
+            filter,
         })?;
         self.mcast_subscriptions.borrow_mut().push(group);
         Ok(())

@@ -27,6 +27,7 @@ use oxide_vpc::api::McastUnsubscribeReq;
 use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
@@ -81,9 +82,9 @@ fn test_subscribe_ff04_direct_without_m2p() -> Result<()> {
         .expect("missing multicast subscription entry for ff04 group");
     let p0 = topol.nodes[0].port.name().to_string();
     assert!(
-        entry.ports.contains(&p0),
+        entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     Ok(())
@@ -97,6 +98,7 @@ fn test_subscribe_nonexistent_port() -> Result<()> {
     let res = hdl.mcast_subscribe(&McastSubscribeReq {
         port_name: "this_port_does_not_exist_anywhere".to_string(),
         group: mcast_group.into(),
+        filter: SourceFilter::default(),
     });
 
     assert!(
@@ -116,6 +118,7 @@ fn test_subscribe_unicast_ip_as_group() -> Result<()> {
     let res = hdl.mcast_subscribe(&McastSubscribeReq {
         port_name: topol.nodes[0].port.name().to_string(),
         group: unicast_ip.into(),
+        filter: SourceFilter::default(),
     });
 
     let err = res.expect_err("Expected error when subscribing to unicast IP");
@@ -177,9 +180,9 @@ fn test_double_subscribe() -> Result<()> {
         .expect("missing multicast subscription entry for group");
     let p1 = topol.nodes[1].port.name().to_string();
     assert!(
-        entry.ports.contains(&p1),
+        entry.has_port(&p1),
         "expected {p1} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     let filter =
@@ -538,19 +541,19 @@ fn test_unsubscribe_all() -> Result<()> {
     let p0 = topol.nodes[0].port.name().to_string();
     let p1 = topol.nodes[1].port.name().to_string();
     assert_eq!(
-        entry.ports.len(),
+        entry.subscribers.len(),
         2,
         "Expected 2 ports subscribed before unsubscribe_all"
     );
     assert!(
-        entry.ports.contains(&p0),
+        entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
     assert!(
-        entry.ports.contains(&p1),
+        entry.has_port(&p1),
         "expected {p1} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     // Unsubscribe all ports from the group
@@ -754,9 +757,9 @@ fn test_multiple_simultaneous_groups() -> Result<()> {
         .find(|e| e.underlay == underlay_a)
         .expect("missing subscription entry for group A");
     assert!(
-        entry_a.ports.contains(&p0) && !entry_a.ports.contains(&p1),
+        entry_a.has_port(&p0) && !entry_a.has_port(&p1),
         "group A should have only node 0; got {:?}",
-        entry_a.ports
+        entry_a.subscribers
     );
 
     // Group B should have only node 1
@@ -766,9 +769,9 @@ fn test_multiple_simultaneous_groups() -> Result<()> {
         .find(|e| e.underlay == underlay_b)
         .expect("missing subscription entry for group B");
     assert!(
-        entry_b.ports.contains(&p1) && !entry_b.ports.contains(&p0),
+        entry_b.has_port(&p1) && !entry_b.has_port(&p0),
         "group B should have only node 1; got {:?}",
-        entry_b.ports
+        entry_b.subscribers
     );
 
     // Set up forwarding for both groups (needed for Tx path)
