@@ -3110,6 +3110,13 @@ unsafe extern "C" fn xde_mc_getcapab(
 
             boolean_t::B_TRUE
         }
+        // We *are* an overlay device, and this helpfully convinces MAC
+        // to give us eight softrings without advertising MAC_CAPAB_RINGS
+        // (and pretending to have 8 physical rings, get polled by an SRS...).
+        //
+        // We want, in future, to dynamically size the softring count of
+        // an XDE port to 1-to-1 match the number of viona queues above it.
+        mac::mac_capab_t::MAC_CAPAB_OVERLAY => boolean_t::B_TRUE,
         _ => boolean_t::B_FALSE,
     }
 }
