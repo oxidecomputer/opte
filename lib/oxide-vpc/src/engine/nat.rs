@@ -5,14 +5,9 @@
 // Copyright 2026 Oxide Computer Company
 
 use super::VpcNetwork;
-use super::gateway;
-use super::overlay::VpcMappings;
 use super::router::ROUTER_LAYER_NAME;
 use super::router::RouterTargetClass;
 use super::router::RouterTargetInternal;
-use crate::api::AttachSubnetReq;
-use crate::api::DetachSubnetReq;
-use crate::api::DetachSubnetResp;
 use crate::api::ExternalIpCfg;
 use crate::api::InternetGatewayMap;
 use crate::api::SetExternalIpsReq;
@@ -27,7 +22,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use opte::api::IpAddr;
-use opte::api::IpCidr;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv6Addr;
 use opte::api::OpteError;
@@ -560,101 +554,7 @@ pub fn set_external_ips(
     refresh_nat_rules(port, req.inet_gw_map.as_ref())
 }
 
-pub fn attach_subnet(
-    port: &Port<VpcNetwork>,
-    inet_gw_map: Option<&InternetGatewayMap>,
-    vpc_mappings: &Arc<VpcMappings>,
-    req: AttachSubnetReq,
-) -> Result<(), OpteError> {
-    let cfg = &port.network().cfg;
-    let changed = match (req.cidr, &cfg.ip_cfg) {
-        (IpCidr::Ip4(v4), IpCfg::Ipv4(v4_cfg))
-        | (IpCidr::Ip4(v4), IpCfg::DualStack { ipv4: v4_cfg, .. }) => {
-            v4_cfg.attached_subnets.update(|map| {
-                let install = if let Some(val) = map.get(&v4) {
-                    val != &req.cfg
-                } else {
-                    true
-                };
-                install.then(|| {
-                    let mut out = map.clone();
-                    out.insert(v4, req.cfg);
-                    out
-                })
-            })
-        }
-        (IpCidr::Ip6(v6), IpCfg::Ipv6(v6_cfg))
-        | (IpCidr::Ip6(v6), IpCfg::DualStack { ipv6: v6_cfg, .. }) => {
-            v6_cfg.attached_subnets.update(|map| {
-                let install = if let Some(val) = map.get(&v6) {
-                    val != &req.cfg
-                } else {
-                    true
-                };
-                install.then(|| {
-                    let mut out = map.clone();
-                    out.insert(v6, req.cfg);
-                    out
-                })
-            })
-        }
-        // Trying to attach a CIDR class which this port cannot use.
-        _ => return Err(OpteError::InvalidIpCfg),
-    };
-
-    if changed {
-        refresh_nat_rules(port, inet_gw_map)?;
-        gateway::set_gateway_rules(port, vpc_mappings.clone())?;
-    }
-
-    Ok(())
-}
-
-pub fn detach_subnet(
-    port: &Port<VpcNetwork>,
-    inet_gw_map: Option<&InternetGatewayMap>,
-    vpc_mappings: &Arc<VpcMappings>,
-    req: DetachSubnetReq,
-) -> Result<DetachSubnetResp, OpteError> {
-    let cfg = &port.network().cfg;
-    let changed = match (req.cidr, &cfg.ip_cfg) {
-        (IpCidr::Ip4(v4), IpCfg::Ipv4(v4_cfg))
-        | (IpCidr::Ip4(v4), IpCfg::DualStack { ipv4: v4_cfg, .. }) => {
-            v4_cfg.attached_subnets.update(|map| {
-                map.contains_key(&v4).then(|| {
-                    let mut out = map.clone();
-                    out.remove(&v4);
-                    out
-                })
-            })
-        }
-        (IpCidr::Ip6(v6), IpCfg::Ipv6(v6_cfg))
-        | (IpCidr::Ip6(v6), IpCfg::DualStack { ipv6: v6_cfg, .. }) => {
-            v6_cfg.attached_subnets.update(|map| {
-                map.contains_key(&v6).then(|| {
-                    let mut out = map.clone();
-                    out.remove(&v6);
-                    out
-                })
-            })
-        }
-        // Trying to attach a CIDR class which this port cannot use.
-        _ => return Err(OpteError::InvalidIpCfg),
-    };
-
-    if changed {
-        refresh_nat_rules(port, inet_gw_map)?;
-        gateway::set_gateway_rules(port, vpc_mappings.clone())?;
-    }
-
-    Ok(if !changed {
-        DetachSubnetResp::NotFound
-    } else {
-        DetachSubnetResp::Ok(req.cidr)
-    })
-}
-
-fn refresh_nat_rules(
+pub(super) fn refresh_nat_rules(
     port: &Port<VpcNetwork>,
     inet_gw_map: Option<&InternetGatewayMap>,
 ) -> Result<(), OpteError> {

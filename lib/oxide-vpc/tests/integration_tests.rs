@@ -68,6 +68,7 @@ use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::attached_subnets;
 use oxide_vpc::engine::geneve;
 use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
@@ -4418,7 +4419,7 @@ fn internal_attached_subnets() {
 
     // Attach the subnet.
     let cidr = "10.0.0.0/8".parse().unwrap();
-    nat::attach_subnet(
+    attached_subnets::attach_subnet(
         &g1.port,
         None,
         &g1.vpc_map,
@@ -4504,7 +4505,7 @@ fn internal_attached_subnets() {
     incr!(g1, ["epoch, epoch"]);
 
     // ...until we remove the attachment itself.
-    nat::detach_subnet(
+    attached_subnets::detach_subnet(
         &g1.port,
         None,
         &g1.vpc_map,
@@ -4523,7 +4524,7 @@ fn external_attached_subnets_dont_apply_nat() {
     set!(g1, "port_state=running");
 
     // Attach the subnet.
-    nat::attach_subnet(
+    attached_subnets::attach_subnet(
         &g1.port,
         None,
         &g1.vpc_map,
@@ -4630,7 +4631,7 @@ fn external_attached_subnets_cannot_reach_internal() {
     set!(g1, "port_state=running");
 
     // Attach the subnet.
-    nat::attach_subnet(
+    attached_subnets::attach_subnet(
         &g1.port,
         None,
         &g1.vpc_map,

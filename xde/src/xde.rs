@@ -304,6 +304,7 @@ use oxide_vpc::cfg::IpCfg;
 use oxide_vpc::cfg::VpcCfg;
 use oxide_vpc::engine::VpcNetwork;
 use oxide_vpc::engine::VpcParser;
+use oxide_vpc::engine::attached_subnets;
 use oxide_vpc::engine::firewall;
 use oxide_vpc::engine::gateway;
 use oxide_vpc::engine::geneve::MssInfoRef;
@@ -4270,7 +4271,12 @@ fn attach_subnet_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     let igw_map_lock = dev.port_igw_map.lock();
-    nat::attach_subnet(&dev.port, igw_map_lock.as_ref(), &state.vpc_map, req)?;
+    attached_subnets::attach_subnet(
+        &dev.port,
+        igw_map_lock.as_ref(),
+        &state.vpc_map,
+        req,
+    )?;
 
     Ok(NoResp::default())
 }
@@ -4287,7 +4293,12 @@ fn detach_subnet_hdlr(
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
     let igw_map_lock = dev.port_igw_map.lock();
-    nat::detach_subnet(&dev.port, igw_map_lock.as_ref(), &state.vpc_map, req)
+    attached_subnets::detach_subnet(
+        &dev.port,
+        igw_map_lock.as_ref(),
+        &state.vpc_map,
+        req,
+    )
 }
 
 #[unsafe(no_mangle)]
