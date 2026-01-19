@@ -289,7 +289,7 @@ impl StaticAction for EncapAction {
                 // This requires a hairpin through the customer network, but provides
                 // strong isolation which some customers require.
                 //
-                // In future we want this to be a tunable property of the VPC. In this
+                // In future we may want this to be a tunable property of the VPC. In this
                 // case we would require an extra table/poptrie per VPC, containing all
                 // external CIDR blocks visible across the VPC. We would then:
                 //  * resolve `recipient` against this table when going via an IGW,
@@ -298,6 +298,13 @@ impl StaticAction for EncapAction {
                 //    the V2B.
                 //  * Possibly add the Geneve external packet tag to the packet, esp. if
                 //    crossing VPC boundaries.
+                // This obviously works well for attached subnets, but for EIPs and FIPs
+                // we'll have quite a few /32 or /128 routing table entries which can't
+                // be aggregated unless adjacent external IPs point to the same instance
+                // (and this would probably be harmed further by SNAT allocation causing
+                // fragmentation).
+                //
+                // It's a possible optimisation, but it'd need more thought.
                 RouterTargetInternal::InternetGateway(_) => {
                     match self.v2b.get(&recipient) {
                         Some(phys) if sent_from_eip => {
