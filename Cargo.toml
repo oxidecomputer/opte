@@ -49,7 +49,7 @@ criterion = "0.8"
 ctor = "0.6"
 darling = "0.21"
 dyn-clone = "1.0"
-heapless = "0.8"
+heapless = "0.9"
 ingot = "0.1.1"
 ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.14", default-features = false }
