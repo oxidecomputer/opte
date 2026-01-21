@@ -308,10 +308,43 @@ pub enum IpAddr {
 }
 
 impl IpAddr {
+    /// Returns true if this is a multicast address.
     pub const fn is_multicast(&self) -> bool {
         match self {
             IpAddr::Ip4(v4) => v4.is_multicast(),
             IpAddr::Ip6(v6) => v6.is_multicast(),
+        }
+    }
+
+    /// Returns true if this is the unspecified address.
+    pub const fn is_unspecified(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_unspecified(),
+            IpAddr::Ip6(v6) => v6.is_unspecified(),
+        }
+    }
+
+    /// Returns true if this is a loopback address.
+    pub const fn is_loopback(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_loopback(),
+            IpAddr::Ip6(v6) => v6.is_loopback(),
+        }
+    }
+
+    /// Returns true if this is a link-local address.
+    pub const fn is_link_local(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_link_local(),
+            IpAddr::Ip6(v6) => v6.is_link_local(),
+        }
+    }
+
+    /// Returns true if this is a broadcast address (IPv4 only, IPv6 has no broadcast).
+    pub const fn is_broadcast(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_broadcast(),
+            IpAddr::Ip6(_) => false,
         }
     }
 
@@ -410,6 +443,7 @@ pub struct Ipv4Addr {
 
 impl Ipv4Addr {
     pub const ANY_ADDR: Self = Self { inner: [0; 4] };
+    pub const LOCALHOST: Self = Self { inner: [127, 0, 0, 1] };
     pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
 
     /// Return the bytes of the address.
@@ -455,8 +489,29 @@ impl Ipv4Addr {
         u32::from_be_bytes(self.bytes()).to_be()
     }
 
+    /// Returns true if this is a multicast address (224.0.0.0/4).
     pub const fn is_multicast(&self) -> bool {
         matches!(self.inner[0], 224..240)
+    }
+
+    /// Returns true if this is the unspecified address (0.0.0.0).
+    pub const fn is_unspecified(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0])
+    }
+
+    /// Returns true if this is a loopback address (127.0.0.0/8).
+    pub const fn is_loopback(&self) -> bool {
+        self.inner[0] == 127
+    }
+
+    /// Returns true if this is the broadcast address (255.255.255.255).
+    pub const fn is_broadcast(&self) -> bool {
+        matches!(self.inner, [255, 255, 255, 255])
+    }
+
+    /// Returns true if this is a link-local address (169.254.0.0/16).
+    pub const fn is_link_local(&self) -> bool {
+        self.inner[0] == 169 && self.inner[1] == 254
     }
 
     /// Return the multicast MAC address associated with this multicast IPv4
@@ -621,6 +676,9 @@ impl Ipv6Addr {
     /// The unspecified IPv6 address, i.e., `::` or all zeros.
     pub const ANY_ADDR: Self = Self { inner: [0; 16] };
 
+    /// The loopback address, i.e., `::1`.
+    pub const LOCALHOST: Self = Self::from_const([0, 0, 0, 0, 0, 0, 0, 1]);
+
     /// The All-Routers multicast address, used in the Neighbor Discovery
     /// Protocol.
     pub const ALL_ROUTERS: Self =
@@ -694,9 +752,24 @@ impl Ipv6Addr {
         &self.inner[..EXPECTED.len()] == EXPECTED
     }
 
-    /// Return `true` if this is a multicast IPv6 address, and `false` otherwise
+    /// Returns true if this is a multicast address (ff00::/8).
     pub const fn is_multicast(&self) -> bool {
         self.inner[0] == 0xFF
+    }
+
+    /// Returns true if this is the unspecified address (::).
+    pub const fn is_unspecified(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    /// Returns true if this is the loopback address (::1).
+    pub const fn is_loopback(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+    }
+
+    /// Returns true if this is a link-local address (fe80::/10).
+    pub const fn is_link_local(&self) -> bool {
+        self.inner[0] == 0xfe && (self.inner[1] & 0xc0) == 0x80
     }
 
     /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix

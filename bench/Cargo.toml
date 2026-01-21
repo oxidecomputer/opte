@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "xde"
 harness = false
+
+[[bench]]
+name = "multicast"
+harness = false
