@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide Network VPC Overlay.
 //!
@@ -24,10 +24,12 @@ use crate::engine::geneve::ValidOxideOption;
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::str::FromStr;
 use opte::api::Direction;
 use opte::api::Ipv4Addr;
 use opte::api::Ipv4Cidr;
@@ -58,6 +60,7 @@ use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
+use opte::engine::nat::ExternalIpTag;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
 use opte::engine::port::PortBuilder;
@@ -268,28 +271,43 @@ impl StaticAction for EncapAction {
             // The router layer determines a RouterTarget and stores it in
             // the meta map. We need to map this virtual target to a
             // physical one.
-            let target_str = match action_meta.get(RouterTargetInternal::IP_KEY)
-            {
-                Some(val) => val,
-                None => {
-                    return Err(GenHtError::Unexpected {
-                        msg: "no RouterTarget metadata entry found".to_string(),
-                    });
-                }
+            let target = action_meta
+                .get_typed::<RouterTargetInternal>()
+                .map_err(|e| GenHtError::Unexpected { msg: e.to_string() })?;
+
+            let sent_from_eip =
+                action_meta.get_typed::<ExternalIpTag>().is_ok();
+
+            let recipient = match target {
+                RouterTargetInternal::Ip(virt_ip) => virt_ip,
+                _ => dst_ip,
             };
 
-            let target = RouterTargetInternal::from_meta(target_str).map_err(
-                |e| GenHtError::Unexpected {
-                    msg: format!(
-                        "failed to parse metadata entry '{target_str}': {e}",
-                    ),
-                },
-            )?;
-
             match target {
+                // Currently, traffic directed at either attached external subnets or
+                // the external IPs of any other port always go through the V2B table.
+                // This requires a hairpin through the customer network, but provides
+                // strong isolation which some customers require.
+                //
+                // In future we may want this to be a tunable property of the VPC. In this
+                // case we would require an extra table/poptrie per VPC, containing all
+                // external CIDR blocks visible across the VPC. We would then:
+                //  * resolve `recipient` against this table when going via an IGW,
+                //    pulling the address of the owner's primary NIC.
+                //  * if found, resolve the primary NIC address against the V2P instead of
+                //    the V2B.
+                //  * Possibly add the Geneve external packet tag to the packet, esp. if
+                //    crossing VPC boundaries.
+                // This obviously works well for attached subnets, but for EIPs and FIPs
+                // we'll have quite a few /32 or /128 routing table entries which can't
+                // be aggregated unless adjacent external IPs point to the same instance
+                // (and this would probably be harmed further by SNAT allocation causing
+                // fragmentation).
+                //
+                // It's a possible optimisation, but it'd need more thought.
                 RouterTargetInternal::InternetGateway(_) => {
-                    match self.v2b.get(&dst_ip) {
-                        Some(phys) => {
+                    match self.v2b.get(&recipient) {
+                        Some(phys) if sent_from_eip => {
                             // Hash the packet onto a route target. This is a very
                             // rudimentary mechanism. Should level-up to an ECMP
                             // algorithm with well known statistical properties.
@@ -309,13 +327,17 @@ impl StaticAction for EncapAction {
                                 false,
                             )
                         }
-                        None => return Ok(AllowOrDeny::Deny),
+
+                        // Sending traffic to boundary services *requires* that
+                        // it is originated from an external IP.
+                        _ => return Ok(AllowOrDeny::Deny),
                     }
                 }
 
-                RouterTargetInternal::Ip(virt_ip) => {
-                    match self.v2p.get(&virt_ip) {
-                        Some(phys) => (
+                RouterTargetInternal::Ip(_)
+                | RouterTargetInternal::VpcSubnet(_) => {
+                    match self.v2p.get(&recipient) {
+                        Some(phys) if !sent_from_eip => (
                             true,
                             PhysNet {
                                 ether: phys.ether,
@@ -325,9 +347,14 @@ impl StaticAction for EncapAction {
                             false,
                         ),
 
-                        // The router target has specified a VPC IP we do not
-                        // currently know about; this could be for two
-                        // reasons:
+                        // We have either attempted to forward traffic to a
+                        // private IP/subnet from an external IP, or we failed
+                        // to lookup the intended VPC IP.
+                        //
+                        // The former case can only occur when the guest is
+                        // sending traffic from an attached external subnet.
+                        //
+                        // The latter case could arise for two reasons:
                         //
                         // 1. No such IP currently exists in the guest's VPC.
                         //
@@ -339,39 +366,7 @@ impl StaticAction for EncapAction {
                         // the control plane; rather we drop the packet. If we
                         // are dealing with scenario (2), the control plane
                         // should eventually provide us with a mapping.
-                        None => return Ok(AllowOrDeny::Deny),
-                    }
-                }
-
-                RouterTargetInternal::VpcSubnet(_) => {
-                    match self.v2p.get(&flow_id.dst_ip()) {
-                        Some(phys) => (
-                            true,
-                            PhysNet {
-                                ether: phys.ether,
-                                ip: phys.ip,
-                                vni: self.vni,
-                            },
-                            false,
-                        ),
-
-                        // The guest is attempting to contact a VPC IP we
-                        // do not currently know about; this could be for
-                        // two reasons:
-                        //
-                        // 1. No such IP currently exists in the guest's VPC.
-                        //
-                        // 2. The destination IP exists in the guest's
-                        //    VPC, but we do not yet have a mapping for
-                        //    it.
-                        //
-                        // We cannot differentiate these cases from the
-                        // point of view of this code without more
-                        // information from the control plane; rather we
-                        // drop the packet. If we are dealing with
-                        // scenario (2), the control plane should
-                        // eventually provide us with a mapping.
-                        None => return Ok(AllowOrDeny::Deny),
+                        _ => return Ok(AllowOrDeny::Deny),
                     }
                 }
             }
@@ -527,6 +522,23 @@ impl StaticAction for EncapAction {
     }
 }
 
+/// Tag a packet with the VNI it will be sent on, or that was recorded in
+/// encapsulation.
+#[derive(Debug)]
+pub(crate) struct VniTag(pub Vni);
+
+impl ActionMetaValue for VniTag {
+    const KEY: &'static str = "vni";
+
+    fn as_meta(&self) -> Cow<'static, str> {
+        self.0.to_string().into()
+    }
+
+    fn from_meta(s: &str) -> Result<Self, String> {
+        Vni::from_str(s).map_err(|e| e.to_string()).map(Self)
+    }
+}
+
 #[derive(Default)]
 pub struct DecapAction {}
 
@@ -543,8 +555,6 @@ impl fmt::Display for DecapAction {
         write!(f, "Decap")
     }
 }
-
-pub const ACTION_META_VNI: &str = "vni";
 
 impl StaticAction for DecapAction {
     fn gen_ht(
@@ -588,7 +598,7 @@ impl StaticAction for DecapAction {
         // switch during NAT -- if found, `oxide_external_packet`
         // is filled.
         if !is_external {
-            action_meta.insert(ACTION_META_VNI.into(), vni.to_string().into());
+            action_meta.insert_typed(&VniTag(vni));
         }
 
         Ok(AllowOrDeny::Allow(HdrTransform {
@@ -640,10 +650,7 @@ impl MetaAction for MulticastVniValidator {
         }
 
         // Check VNI from action metadata (set by DecapAction)
-        if let Some(vni_str) = action_meta.get(ACTION_META_VNI)
-            && let Ok(vni_val) = vni_str.parse::<u32>()
-            && let Ok(pkt_vni) = Vni::new(vni_val)
-        {
+        if let Ok(VniTag(pkt_vni)) = action_meta.get_typed() {
             let mcast_vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
             // Allow if VNI matches this VPC or fleet-wide multicast VNI
             if pkt_vni == self.my_vni || pkt_vni == mcast_vni {

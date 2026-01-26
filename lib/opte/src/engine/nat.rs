@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! 1:1 NAT.
 
@@ -22,15 +22,19 @@ use super::packet::Packet;
 use super::parse::Ulp;
 use super::parse::UlpRepr;
 use super::port::meta::ActionMeta;
+use super::port::meta::ActionMetaValue;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use super::rule;
 use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
+use super::rule::MetaAction;
 use super::rule::StatefulAction;
 use crate::engine::snat::ConcreteIpAddr;
+use alloc::borrow::Cow;
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -106,7 +110,7 @@ impl StatefulAction for OutboundNat {
         &self,
         flow_id: &InnerFlowId,
         _pkt: &Packet<MblkFullParsed>,
-        _meta: &mut ActionMeta,
+        _meta: &ActionMeta,
     ) -> rule::GenDescResult {
         // When we have several external IPs at our disposal, we are
         // to use them equally.
@@ -169,7 +173,7 @@ impl StatefulAction for InboundNat {
         &self,
         flow_id: &InnerFlowId,
         _pkt: &Packet<MblkFullParsed>,
-        _meta: &mut ActionMeta,
+        _meta: &ActionMeta,
     ) -> rule::GenDescResult {
         // We rely on the attached predicates to filter out IPs which are *not*
         // registered to this port.
@@ -199,10 +203,12 @@ pub struct NatDesc {
 pub const NAT_NAME: &str = "NAT";
 
 impl ActionDesc for NatDesc {
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
+    fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform {
         match dir {
             Direction::Out => {
                 let ip = IpMod::new_src(self.external_ip);
+
+                meta.insert_typed(&ExternalIpTag);
 
                 HdrTransform {
                     name: NAT_NAME.to_string(),
@@ -385,6 +391,51 @@ impl fmt::Display for IcmpV6Nat {
     }
 }
 
+/// Mark matching packets as being sent outbound from an external IP.
+#[derive(Debug)]
+pub struct ExternalIpTagger;
+
+impl fmt::Display for ExternalIpTagger {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ExternalIpTagger")
+    }
+}
+
+impl MetaAction for ExternalIpTagger {
+    fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
+        (vec![], vec![])
+    }
+
+    fn mod_meta(
+        &self,
+        _flow_id: &InnerFlowId,
+        meta: &mut ActionMeta,
+    ) -> rule::ModMetaResult {
+        meta.insert_typed(&ExternalIpTag);
+        rule::ModMetaResult::Ok(AllowOrDeny::Allow(()))
+    }
+}
+
+/// A unit-valued tag marking outbound packets using an external IP.
+#[derive(Debug)]
+pub struct ExternalIpTag;
+
+impl ActionMetaValue for ExternalIpTag {
+    const KEY: &'static str = "external-ip-applied";
+
+    fn as_meta(&self) -> Cow<'static, str> {
+        Cow::Borrowed(Self::KEY)
+    }
+
+    fn from_meta(s: &str) -> Result<Self, String> {
+        if s == Self::KEY {
+            Ok(Self)
+        } else {
+            Err("malformed ExternalIpTag value".into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -459,7 +510,7 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(pkt.meta());
-        let desc = match nat.gen_desc(&flow_out, &pkt, &mut ameta) {
+        let desc = match nat.gen_desc(&flow_out, &pkt, &ameta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
@@ -467,7 +518,7 @@ mod test {
         // ================================================================
         // Verify outbound header transformation
         // ================================================================
-        let out_ht = desc.gen_ht(Direction::Out);
+        let out_ht = desc.gen_ht(Direction::Out, &mut ameta);
         let pmo = pkt.meta_mut();
         out_ht.run(pmo).unwrap();
 
@@ -524,7 +575,7 @@ mod test {
             .to_full_meta();
 
         let pmi = pkt.meta_mut();
-        let in_ht = desc.gen_ht(Direction::In);
+        let in_ht = desc.gen_ht(Direction::In, &mut ameta);
         in_ht.run(pmi).unwrap();
 
         let ether_meta = pmi.inner_ether();

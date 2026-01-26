@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
@@ -23,6 +23,7 @@ use super::ip::v6::Ipv6Ref;
 use super::ip::v6::v6_get_next_header;
 use super::packet::MblkPacketData;
 use super::port::meta::ActionMeta;
+use super::port::meta::ActionMetaValue;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -609,6 +610,11 @@ impl Predicate {
         }
 
         false
+    }
+
+    /// Create a `Predicate::Meta` matching a well-specified value.
+    pub fn from_action_meta<T: ActionMetaValue>(val: T) -> Self {
+        Self::Meta(val.key().into(), val.as_meta().into())
     }
 }
 

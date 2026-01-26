@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Common routines for integration tests.
 
@@ -93,8 +93,10 @@ pub use oxide_vpc::engine::overlay::VpcMappings;
 pub use oxide_vpc::engine::router;
 pub use port_state::*;
 pub use smoltcp::wire::IpProtocol;
+use std::collections::BTreeMap;
 pub use std::num::NonZeroU32;
 pub use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// Expects that a packet result is modified, and applies that modification.
 #[macro_export]
@@ -179,6 +181,8 @@ pub fn g1_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -192,6 +196,8 @@ pub fn g1_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
     g1_cfg2(ip_cfg)
@@ -207,6 +213,7 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -224,6 +231,8 @@ pub fn g2_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -237,6 +246,8 @@ pub fn g2_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
     VpcCfg {
@@ -248,6 +259,7 @@ pub fn g2_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -268,10 +280,8 @@ fn oxide_net_builder(
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
-    let dhcp = base_dhcp_config();
-
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
@@ -355,14 +365,14 @@ pub fn oxide_net_setup2(
     v2b.set(
         "0.0.0.0/0".parse().unwrap(),
         vec![TunnelEndpoint {
-            ip: "fd00:9900::1".parse().unwrap(),
+            ip: BS_IP_ADDR,
             vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
         }],
     );
     v2b.set(
         "::/0".parse().unwrap(),
         vec![TunnelEndpoint {
-            ip: "fd00:9900::1".parse().unwrap(),
+            ip: BS_IP_ADDR,
             vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
         }],
     );
@@ -986,6 +996,12 @@ pub struct TestIpPhys {
     pub mac: MacAddr,
     pub vni: Vni,
 }
+
+pub static BSVC_PHYS: LazyLock<TestIpPhys> = LazyLock::new(|| TestIpPhys {
+    ip: BS_IP_ADDR,
+    mac: BS_MAC_ADDR,
+    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+});
 
 /// Encapsulate a guest packet, marking that it has arrived from beyond
 /// the rack.
