@@ -2,11 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use core::marker::PhantomData;
 
 /// A value meant to be used in the [`ActionMeta`] map.
 ///
@@ -34,7 +35,7 @@ pub trait ActionMetaValue: Sized {
     fn as_meta(&self) -> Cow<'static, str>;
 
     /// Attempt to create a value assuming that `s` was created
-    /// with [`Self::as_meta()`].
+    /// with [`ActionMetaValue::as_meta`].
     fn from_meta(s: &str) -> Result<Self, String>;
 }
 
@@ -77,6 +78,16 @@ impl ActionMeta {
         self.inner.insert(key, val)
     }
 
+    /// Insert a value with a type-determined key into the map,
+    /// replacing any existing key-value pair. Return the value
+    /// being replaced, or `None`.
+    pub fn insert_typed(
+        &mut self,
+        val: &impl ActionMetaValue,
+    ) -> Option<Cow<'static, str>> {
+        self.insert(val.key(), val.as_meta())
+    }
+
     /// Remove the key-value pair with the specified key. Return
     /// the value, or `None` if no such entry exists.
     pub fn remove(&mut self, key: &str) -> Option<Cow<'static, str>> {
@@ -89,23 +100,57 @@ impl ActionMeta {
         self.inner.get(key).map(|v| &**v)
     }
 
+    /// Get a reference to the value at a well known key for `T`, or `None`
+    /// if no such entry exists.
+    pub fn get_typed<T: ActionMetaValue>(
+        &self,
+    ) -> Result<T, ActionMetaError<'_, T>> {
+        let raw_val =
+            self.get(T::KEY).ok_or(ActionMetaError::NotFound(PhantomData))?;
+
+        T::from_meta(raw_val)
+            .map_err(|err| ActionMetaError::ParseFailed { raw_val, err })
+    }
+
     /// Records whether this packet's destination can be reached using only
     /// internal/private paths.
     ///
     /// The dataplane may use this to choose a larger (jumbo-frame) MSS for
     /// TCP segmentation, or rely on other aspects of its internal network.
     pub fn set_internal_target(&mut self, val: bool) {
-        _ = self
-            .insert(InternalTarget::KEY.into(), InternalTarget(val).as_meta());
+        _ = self.insert_typed(&InternalTarget(val));
     }
 
     /// Returns whether this packet's destination can be reached using only
     /// internal/private paths.
     pub fn is_internal_target(&self) -> bool {
-        self.get(InternalTarget::KEY)
-            .and_then(|v| InternalTarget::from_meta(v).ok())
-            .unwrap_or_default()
-            .0
+        self.get_typed::<InternalTarget>().unwrap_or_default().0
+    }
+}
+
+/// Failure modes when reading a target `impl ActionMetaValue` from [`ActionMeta`].
+#[derive(Debug)]
+pub enum ActionMetaError<'a, T> {
+    /// No value was stored using the type's well-known key.
+    NotFound(PhantomData<T>),
+    /// The stored value could not be deserialised into the requested type.
+    ParseFailed { raw_val: &'a str, err: String },
+}
+
+impl<'a, T: core::fmt::Debug> core::error::Error for ActionMetaError<'a, T> {}
+
+impl<'a, T> core::fmt::Display for ActionMetaError<'a, T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ActionMetaError::NotFound(_) => write!(
+                f,
+                "no {} metadata entry found",
+                core::any::type_name::<T>()
+            ),
+            ActionMetaError::ParseFailed { raw_val, err } => {
+                write!(f, "failed to parse metadata entry '{raw_val}': {err}")
+            }
+        }
     }
 }
 

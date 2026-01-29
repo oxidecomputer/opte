@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -60,11 +60,15 @@ use opte::ingot::types::HeaderParse;
 use opte::ingot::udp::Udp;
 use opte::ingot::udp::UdpRef;
 use opte_test_utils as common;
+use oxide_vpc::api::AttachSubnetReq;
+use oxide_vpc::api::AttachedSubnetConfig;
 use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::api::DetachSubnetReq;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::attached_subnets;
 use oxide_vpc::engine::geneve;
 use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
@@ -105,6 +109,8 @@ fn lab_cfg() -> VpcCfg {
             ephemeral_ip: None,
             floating_ips: vec![],
         },
+        attached_subnets: BTreeMap::new(),
+        transit_ips: BTreeMap::new(),
     });
     VpcCfg {
         ip_cfg,
@@ -121,6 +127,7 @@ fn lab_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -1018,6 +1025,8 @@ fn multi_external_setup(
                 ephemeral_ip: v4_eph,
                 floating_ips: v4s[first_float..].to_vec(),
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -1031,6 +1040,8 @@ fn multi_external_setup(
                 ephemeral_ip: v6_eph,
                 floating_ips: v6s[first_float..].to_vec(),
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -1094,11 +1105,6 @@ fn check_external_ip_inbound_behaviour(
     ext_v4: &[Ipv4Addr],
     ext_v6: &[Ipv6Addr],
 ) {
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
     let g1_phys =
         TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
 
@@ -1129,7 +1135,7 @@ fn check_external_ip_inbound_behaviour(
             flow_port,
             80,
         );
-        let mut pkt1_m = encap_external(pkt1, bsvc_phys, g1_phys);
+        let mut pkt1_m = encap_external(pkt1, *BSVC_PHYS, g1_phys);
         let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
         let res = port.port.process(In, pkt1);
@@ -1349,11 +1355,6 @@ fn external_ip_balanced_over_floating_ips() {
 #[test]
 fn external_ip_epoch_affinity_preserved() {
     let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(2, true);
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -1405,7 +1406,7 @@ fn external_ip_epoch_affinity_preserved() {
         };
 
         let pkt1 = http_syn2(BS_MAC_ADDR, partner_ip, g1_cfg.guest_mac, ext_ip);
-        let mut pkt1_m = encap_external(pkt1, bsvc_phys, g1_phys);
+        let mut pkt1_m = encap_external(pkt1, *BSVC_PHYS, g1_phys);
         let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
         let res = g1.port.process(In, pkt1);
@@ -1425,8 +1426,8 @@ fn external_ip_epoch_affinity_preserved() {
         // Bumping epoch on other layers (e.g., firewall) is typically fine,
         // since that won't affect the internal flowtable for NAT.
         // ====================================================================
-        nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
-        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7",]);
+        nat::set_external_ips(&g1.port, req.clone()).unwrap();
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7"]);
 
         // ================================================================
         // The reply packet must still originate from the ephemeral port
@@ -1499,7 +1500,7 @@ fn external_ip_reconfigurable() {
         // based on destination prefix.
         inet_gw_map: None,
     };
-    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    nat::set_external_ips(&g1.port, req).unwrap();
     update!(
         g1,
         [
@@ -1764,12 +1765,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt2_m = encap_external(pkt2_m, bsvc_phys, g1_phys);
+    pkt2_m = encap_external(pkt2_m, *BSVC_PHYS, g1_phys);
     pcap.add_pkt(&pkt2_m);
 
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
@@ -1824,7 +1820,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
-    pkt4_m = encap_external(pkt4_m, bsvc_phys, g1_phys);
+    pkt4_m = encap_external(pkt4_m, *BSVC_PHYS, g1_phys);
     pcap.add_pkt(&pkt4_m);
     let pkt4 = parse_inbound(&mut pkt4_m, VpcParser {}).unwrap();
 
@@ -3720,6 +3716,8 @@ fn ephemeral_ip_preferred_over_snat_outbound() {
                 ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -3733,6 +3731,8 @@ fn ephemeral_ip_preferred_over_snat_outbound() {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -3812,6 +3812,8 @@ fn tcp_inbound() {
                 ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -3825,6 +3827,8 @@ fn tcp_inbound() {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -4377,12 +4381,306 @@ fn port_as_router_target() {
     let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
 
     let res = g2.port.process(Out, pkt2);
-    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
     expect_modified!(res, pkt2_m);
 
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
+
+    // Removing CIDR blocks should piecewise remove the gateway rules.
+    gateway::remove_cidr(&g2.port, cidr, Direction::In, g2.vpc_map.clone())
+        .unwrap();
+    update!(g2, ["incr:epoch", "decr:gateway.rules.in"]);
+    gateway::remove_cidr(&g2.port, cidr, Direction::Out, g2.vpc_map.clone())
+        .unwrap();
+    update!(g2, ["incr:epoch", "decr:gateway.rules.out"]);
+}
+
+// RFD 599 defines two mechanisms relating to attaching subnets to
+// instances: attached external and attached VPC subnets.
+// Both of these require in/out exceptions in the gateway layer, but differ
+// on some points:
+//  - Attached VPC subnets require the control plane to insert a system
+//    router rule mapping cidr(subnet)->primary_ip(instance) on all other ports.
+//    This is the moral equivalent of the `port_as_router_target` test above,
+//    without manual user configuration. What we want to test here is how they
+//    differ, and that rules do not interfere with transit IPs bound to the
+//    same blocks.
+//  - Attached external subnets should exempt any matching inbound traffic
+//    from undergoing NAT, and must ensure that outbound traffic cannot be
+//    directly sent to a VPC-private address.
+#[test]
+fn internal_attached_subnets() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    let cidr = "10.0.0.0/8".parse().unwrap();
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr,
+            cfg: AttachedSubnetConfig { is_external: false },
+        },
+    )
+    .unwrap();
+
+    update!(g1, ["set:epoch=5", "incr:gateway.rules.in, gateway.rules.out"]);
+
+    // Suppose there is another port (same non-attached subnet) on G1's node.
+    let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
+    g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
+
+    let my_ip = "10.0.123.45".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // We can receive traffic on this attached subnet.
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let partner_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: ox_vpc_mac([0xF0, 0x00, 0x66]),
+        vni: g1_cfg.vni,
+    };
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        partner_phys.mac,
+        g1_cfg.guest_mac,
+        partner_ip,
+        my_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    pkt1_m = encap(pkt1_m, partner_phys, guest_phys);
+
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+
+    // And we can send traffic from an arbitrary IP in the subnet.
+    let mut pkt2_m = gen_icmpv4_echo_reply(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
+
+    // Add/remove of an identical transit IP range should be a NO-OP.
+    // (`incr` here implicitly asserts that the gateway rule count is unchanged).
+    gateway::allow_cidr(&g1.port, cidr, Direction::In, g1.vpc_map.clone())
+        .unwrap();
+    gateway::allow_cidr(&g1.port, cidr, Direction::Out, g1.vpc_map.clone())
+        .unwrap();
+    incr!(g1, ["epoch, epoch"]);
+    gateway::remove_cidr(&g1.port, cidr, Direction::In, g1.vpc_map.clone())
+        .unwrap();
+    gateway::remove_cidr(&g1.port, cidr, Direction::Out, g1.vpc_map.clone())
+        .unwrap();
+    incr!(g1, ["epoch, epoch"]);
+
+    // ...until we remove the attachment itself.
+    attached_subnets::detach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        DetachSubnetReq { port_name: g1.port.name().into(), cidr },
+    )
+    .unwrap();
+    update!(g1, ["set:epoch=11", "decr:gateway.rules.in, gateway.rules.out"]);
+}
+
+#[test]
+fn external_attached_subnets_dont_apply_nat() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr: "8.0.0.0/8".parse().unwrap(),
+            cfg: AttachedSubnetConfig { is_external: true },
+        },
+    )
+    .unwrap();
+
+    update!(
+        g1,
+        [
+            "set:epoch=5",
+            "incr:gateway.rules.in, gateway.rules.out",
+            "incr:nat.rules.in, nat.rules.out"
+        ]
+    );
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+        RouterTarget::InternetGateway(None),
+        RouterClass::System,
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let my_ext_ip = "8.8.8.8".parse().unwrap();
+    let partner_ip = "1.1.1.1".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // Have the guest receive a packet on an external IP in its owned
+    // 8.0.0.0/8 range.
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        BS_MAC_ADDR,
+        g1_cfg.guest_mac,
+        partner_ip,
+        my_ext_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    pkt1_m = encap_external(pkt1_m, *BSVC_PHYS, guest_phys);
+
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+
+    // This packet must not have had its source/dest IP addresses altered.
+    let pkt1 =
+        parse_outbound(&mut pkt1_m, VpcParser {}).unwrap().to_full_meta();
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().source(), partner_ip);
+    assert_eq!(pkt1.meta().inner_ip4().unwrap().destination(), my_ext_ip);
+
+    // A reply packet from the guest on these IPs should also be unchanged,
+    // and must be directed at boundary services.
+    let mut pkt2_m = gen_icmpv4_echo_reply(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ext_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap().to_full_meta();
+    let L3::Ipv6(outer_ip6) = pkt2.meta().outer_ip().unwrap() else {
+        panic!("Encapsulation must be IPv6.");
+    };
+    assert_eq!(outer_ip6.source(), g1_cfg.phys_ip);
+    assert_eq!(outer_ip6.destination(), BSVC_PHYS.ip);
+    assert_eq!(pkt2.meta().inner_ip4().unwrap().source(), my_ext_ip);
+    assert_eq!(pkt2.meta().inner_ip4().unwrap().destination(), partner_ip);
+}
+
+#[test]
+fn external_attached_subnets_cannot_reach_internal() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr: "8.0.0.0/8".parse().unwrap(),
+            cfg: AttachedSubnetConfig { is_external: true },
+        },
+    )
+    .unwrap();
+
+    update!(
+        g1,
+        [
+            "set:epoch=5",
+            "incr:gateway.rules.in, gateway.rules.out",
+            "incr:nat.rules.in, nat.rules.out"
+        ]
+    );
+
+    // Suppose there is another port (same non-attached subnet) on G1's node.
+    let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
+    g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
+
+    let my_ext_ip = "8.8.8.8".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // Have the guest attempt to sent a packet from an external IP in its owned
+    // 8.0.0.0/8 range to a VPC-private address. As the source address is
+    // logically outside of the VPC-private scope we need to refuse to select a
+    // V2P mapping.
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ext_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    assert_drop!(
+        res,
+        DropReason::Layer { name: "overlay", reason: DenyReason::Action }
+    );
 }
 
 #[test]
@@ -4433,6 +4731,8 @@ fn select_eip_conditioned_on_igw() {
                     "192.168.0.4".parse().unwrap(),
                 ],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         // Not really testing V6 here. Same principles apply.
         ipv6: Ipv6Cfg {
@@ -4447,6 +4747,8 @@ fn select_eip_conditioned_on_igw() {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -4531,7 +4833,7 @@ fn select_eip_conditioned_on_igw() {
         // enables the limiting we aim to test here.
         inet_gw_map: Some(inet_gw_map),
     };
-    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    nat::set_external_ips(&g1.port, req).unwrap();
     update!(g1, ["incr:epoch", "set:nat.rules.out=8"]);
 
     // Send an ICMP packet for each destination, and verify that the
@@ -4794,16 +5096,10 @@ fn icmpv6_inner_has_nat_applied() {
         ..Default::default()
     };
 
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-
     let pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
     let mut pkt_m = encap_external(
         pkt_m,
-        bsvc_phys,
+        *BSVC_PHYS,
         TestIpPhys {
             ip: g1_cfg.phys_ip,
             mac: g1_cfg.guest_mac,

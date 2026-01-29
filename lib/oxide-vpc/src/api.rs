@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
@@ -130,6 +130,26 @@ pub struct BoundaryServices {
     pub mac: MacAddr,
 }
 
+/// Configuration for a subnet completely owned by a NIC.
+///
+/// When configured this port will allow all in/out traffic matching a CIDR to
+/// be received/sent.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+pub struct AttachedSubnetConfig {
+    /// Denotes whether this attached subnet is an external IP block,
+    /// in which case OPTE will not apply NAT on matching traffic.
+    pub is_external: bool,
+}
+
+/// Configuration for an exception to source/destination address filtering.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TransitIpConfig {
+    /// Allow inbound traffic with a destination IP in the target CIDR.
+    pub allow_in: bool,
+    /// Allow outbound traffic with a source IP in the target CIDR.
+    pub allow_out: bool,
+}
+
 /// The IPv4 configuration of a VPC guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ipv4Cfg {
@@ -149,6 +169,13 @@ pub struct Ipv4Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: ExternalIpCfg<Ipv4Addr>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: BTreeMap<Ipv4Cidr, AttachedSubnetConfig>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: BTreeMap<Ipv4Cidr, TransitIpConfig>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -174,6 +201,13 @@ pub struct Ipv6Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: ExternalIpCfg<Ipv6Addr>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: BTreeMap<Ipv6Cidr, AttachedSubnetConfig>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: BTreeMap<Ipv6Cidr, TransitIpConfig>,
 }
 
 /// Configuration of NAT assignments used by a VPC guest for external networking.
@@ -264,6 +298,9 @@ pub struct VpcCfg {
     /// The host (sled) IPv6 address. All guests on the same sled are
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
+
+    /// Configuration for DHCP responses created by OPTE.
+    pub dhcp: DhcpCfg,
 }
 
 impl VpcCfg {
@@ -581,9 +618,6 @@ pub struct CreateXdeReq {
     /// details.
     pub cfg: VpcCfg,
 
-    /// Configuration for DHCP responses created by OPTE
-    pub dhcp: DhcpCfg,
-
     /// This is a development tool for completely bypassing OPTE processing.
     ///
     /// XXX Pretty sure we aren't making much use of this anymore, and
@@ -837,12 +871,14 @@ pub struct McastUnsubscribeAllReq {
     pub group: IpAddr,
 }
 
+pub type InternetGatewayMap = BTreeMap<IpAddr, BTreeSet<Uuid>>;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetExternalIpsReq {
     pub port_name: String,
     pub external_ips_v4: Option<ExternalIpCfg<Ipv4Addr>>,
     pub external_ips_v6: Option<ExternalIpCfg<Ipv6Addr>>,
-    pub inet_gw_map: Option<BTreeMap<IpAddr, BTreeSet<Uuid>>>,
+    pub inet_gw_map: Option<InternetGatewayMap>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1291,6 +1327,31 @@ pub enum RemoveCidrResp {
 
 impl opte::api::cmd::CmdOk for RemoveCidrResp {}
 
+/// Add an entry to the gateway allowing a port to send or receive
+/// traffic on a CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AttachSubnetReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+    pub cfg: AttachedSubnetConfig,
+}
+
+/// Remove entries from the gateway allowing a port to send or receive
+/// traffic on a specific CIDR other than its private IP.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DetachSubnetReq {
+    pub port_name: String,
+    pub cidr: IpCidr,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum DetachSubnetResp {
+    Ok(IpCidr),
+    NotFound,
+}
+
+impl opte::api::cmd::CmdOk for DetachSubnetResp {}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1392,6 +1453,8 @@ pub mod tests {
                         floating_ips: vec![],
                     },
                     vpc_subnet: "10.0.0.0/24".parse().unwrap(),
+                    attached_subnets: BTreeMap::new(),
+                    transit_ips: BTreeMap::new(),
                 },
                 ipv6: Ipv6Cfg {
                     private_ip: "fd00::5".parse().unwrap(),
@@ -1405,9 +1468,12 @@ pub mod tests {
                         floating_ips: vec![],
                     },
                     vpc_subnet: "fd00::/64".parse().unwrap(),
+                    attached_subnets: BTreeMap::new(),
+                    transit_ips: BTreeMap::new(),
                 },
             },
             vni: Vni::new(100u32).unwrap(),
+            dhcp: DhcpCfg::default(),
         }
     }
 }

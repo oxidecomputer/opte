@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! A layer in a port.
 
@@ -841,7 +841,7 @@ impl Layer {
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.in_lft_hit += 1;
                 let flow_before = *pkt.flow();
-                let ht = desc.gen_ht(Direction::In);
+                let ht = desc.gen_ht(Direction::In, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1032,7 +1032,7 @@ impl Layer {
                 };
 
                 let flow_before = *pkt.flow();
-                let ht_in = desc.gen_ht(In);
+                let ht_in = desc.gen_ht(In, ameta);
                 pkt.hdr_transform(&ht_in)?;
                 xforms.hdr.push(ht_in);
                 ht_probe(
@@ -1127,7 +1127,7 @@ impl Layer {
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.out_lft_hit += 1;
                 let flow_before = *pkt.flow();
-                let ht = desc.gen_ht(Direction::Out);
+                let ht = desc.gen_ht(Direction::Out, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1320,7 +1320,7 @@ impl Layer {
                 };
 
                 let flow_before = *pkt.flow();
-                let ht_out = desc.gen_ht(Out);
+                let ht_out = desc.gen_ht(Out, ameta);
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
                 ht_probe(

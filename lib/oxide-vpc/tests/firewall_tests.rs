@@ -2,13 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use opte::ddi::mblk::MsgBlk;
 use opte_test_utils as common;
 
 use common::*;
-use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
 
 #[test]
 fn firewall_replace_rules() {
@@ -348,11 +347,6 @@ fn firewall_external_inbound() {
     //
     // This will appear on the same VNI as guest.
     // ================================================================
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
     let guest_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -365,7 +359,7 @@ fn firewall_external_inbound() {
         g1_cfg.guest_mac,
         g1_cfg.ipv4().private_ip,
     );
-    pkt1_m = encap_external(pkt1_m, bsvc_phys, guest_phys);
+    pkt1_m = encap_external(pkt1_m, *BSVC_PHYS, guest_phys);
     let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
     // ================================================================

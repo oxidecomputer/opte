@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide VPC Virtual Gateway.
 //!
@@ -55,19 +55,22 @@
 //!   allow multicast packets to reach guests and rewrite the source MAC
 //!   to the gateway MAC, similar to unicast traffic.
 
-use crate::api::DhcpCfg;
+use crate::api::AttachedSubnetConfig;
 use crate::api::MacAddr;
+use crate::api::TransitIpConfig;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
-use crate::engine::overlay::ACTION_META_VNI;
+use crate::engine::overlay::VniTag;
 use crate::engine::overlay::VpcMappings;
-use alloc::string::ToString;
+use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Display;
 use opte::api::Direction;
+use opte::api::NoResp;
 use opte::api::OpteError;
 use opte::engine::ether::EtherMod;
 use opte::engine::headers::HeaderAction;
@@ -78,6 +81,7 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
+use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::port::meta::ActionMeta;
@@ -88,6 +92,7 @@ use opte::engine::predicate::Ipv6AddrMatch;
 use opte::engine::predicate::Predicate;
 use opte::engine::rule::Action;
 use opte::engine::rule::AllowOrDeny;
+use opte::engine::rule::Finalized;
 use opte::engine::rule::GenHtResult;
 use opte::engine::rule::HdrTransform;
 use opte::engine::rule::MetaAction;
@@ -103,14 +108,22 @@ pub mod icmpv6;
 mod transit;
 pub use transit::*;
 
+use super::VpcNetwork;
+
 pub const NAME: &str = "gateway";
+
+struct BuildCtx<'a> {
+    in_rules: Vec<Rule<Finalized>>,
+    out_rules: Vec<Rule<Finalized>>,
+    cfg: &'a VpcCfg,
+    vpc_meta: Arc<VpcMeta>,
+}
 
 pub fn setup(
     pb: &PortBuilder,
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
-    dhcp_cfg: &DhcpCfg,
 ) -> Result<(), OpteError> {
     // We implement the gateway as a filtering layer in order to
     // enforce that any traffic that makes it past this layer is
@@ -128,21 +141,48 @@ pub fn setup(
 
     let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
 
+    let mut ctx = BuildCtx {
+        in_rules: vec![],
+        out_rules: vec![],
+        cfg,
+        vpc_meta: Arc::new(VpcMeta::new(vpc_mappings)),
+    };
+
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
-        setup_ipv4(
-            &mut layer,
-            cfg,
-            ipv4_cfg,
-            vpc_mappings.clone(),
-            dhcp_cfg.clone(),
-        )?;
+        setup_ipv4(&mut ctx, ipv4_cfg)?;
     }
 
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6(&mut layer, cfg, ipv6_cfg, vpc_mappings, dhcp_cfg.clone())?;
+        setup_ipv6(&mut ctx, ipv6_cfg)?;
     }
 
+    layer.set_rules(ctx.in_rules, ctx.out_rules);
+
     pb.add_layer(layer, Pos::Before("firewall"))
+}
+
+// Recreates the full set of gateway rules on a given port in response to a
+// change to the set of transit IPs or overall `IpCfg`.
+pub fn set_gateway_rules(
+    port: &Port<VpcNetwork>,
+    vpc_mappings: Arc<VpcMappings>,
+) -> Result<NoResp, OpteError> {
+    let mut ctx = BuildCtx {
+        in_rules: vec![],
+        out_rules: vec![],
+        cfg: &port.network().cfg,
+        vpc_meta: Arc::new(VpcMeta::new(vpc_mappings)),
+    };
+
+    if let Some(ipv4_cfg) = ctx.cfg.ipv4_cfg() {
+        setup_ipv4(&mut ctx, ipv4_cfg)?;
+    }
+
+    if let Some(ipv6_cfg) = ctx.cfg.ipv6_cfg() {
+        setup_ipv6(&mut ctx, ipv6_cfg)?;
+    }
+
+    port.set_rules(NAME, ctx.in_rules, ctx.out_rules).map(|_| NoResp::default())
 }
 
 struct RewriteSrcMac {
@@ -177,18 +217,31 @@ impl StaticAction for RewriteSrcMac {
     }
 }
 
-fn setup_ipv4(
-    layer: &mut Layer,
-    cfg: &VpcCfg,
-    ip_cfg: &Ipv4Cfg,
-    vpc_mappings: Arc<VpcMappings>,
-    dhcp_cfg: DhcpCfg,
-) -> Result<(), OpteError> {
-    arp::setup(layer, cfg)?;
-    dhcp::setup(layer, cfg, ip_cfg, dhcp_cfg)?;
-    icmp::setup(layer, cfg, ip_cfg)?;
+struct Exceptions<'a, T> {
+    allow_in: BTreeSet<&'a T>,
+    allow_out: BTreeSet<&'a T>,
+}
 
-    let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
+fn compute_exceptions<'a, T: Ord>(
+    attached: &'a BTreeMap<T, AttachedSubnetConfig>,
+    transit: &'a BTreeMap<T, TransitIpConfig>,
+) -> Exceptions<'a, T> {
+    let allow_in: BTreeSet<_> = attached
+        .keys()
+        .chain(transit.iter().filter_map(|(k, v)| v.allow_in.then_some(k)))
+        .collect();
+    let allow_out: BTreeSet<_> = attached
+        .keys()
+        .chain(transit.iter().filter_map(|(k, v)| v.allow_out.then_some(k)))
+        .collect();
+
+    Exceptions { allow_in, allow_out }
+}
+
+fn setup_ipv4(ctx: &mut BuildCtx, ip_cfg: &Ipv4Cfg) -> Result<(), OpteError> {
+    arp::setup(ctx)?;
+    dhcp::setup(ctx, ip_cfg)?;
+    icmp::setup(ctx, ip_cfg)?;
 
     // Outbound no-spoof rule: only allow traffic from the guest's IP and MAC.
     // This rule has no destination IP predicate, so it matches both unicast
@@ -200,28 +253,28 @@ fn setup_ipv4(
     // unless the group is configured. In the future, we may want to explicitly
     // filter outbound multicast to only the groups configured via M2P to further
     // tighten spoof prevention at the gateway layer.
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(ctx.vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
     ]));
     nospoof_out.add_predicate(Predicate::InnerEtherSrc(vec![
-        EtherAddrMatch::Exact(cfg.guest_mac),
+        EtherAddrMatch::Exact(ctx.cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::Out, nospoof_out.finalize());
+    ctx.out_rules.push(nospoof_out.finalize());
 
     let mut unicast_in = Rule::new(
         1000,
         Action::Static(Arc::new(RewriteSrcMac {
-            gateway_mac: cfg.gateway_mac,
+            gateway_mac: ctx.cfg.gateway_mac,
         })),
     );
     unicast_in.add_predicate(Predicate::InnerDstIp4(vec![
         Ipv4AddrMatch::Exact(ip_cfg.private_ip),
     ]));
     unicast_in.add_predicate(Predicate::InnerEtherDst(vec![
-        EtherAddrMatch::Exact(cfg.guest_mac),
+        EtherAddrMatch::Exact(ctx.cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::In, unicast_in.finalize());
+    ctx.in_rules.push(unicast_in.finalize());
 
     // Inbound IPv4 multicast - rewrite source MAC to gateway and allow
     let ipv4_mcast = vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)];
@@ -230,28 +283,43 @@ fn setup_ipv4(
     let mut mcast_in_v4 = Rule::new(
         1001,
         Action::Static(Arc::new(RewriteSrcMac {
-            gateway_mac: cfg.gateway_mac,
+            gateway_mac: ctx.cfg.gateway_mac,
         })),
     );
     mcast_in_v4.add_predicate(Predicate::InnerDstIp4(ipv4_mcast));
     mcast_in_v4.add_predicate(Predicate::InnerEtherDst(vec![
         EtherAddrMatch::Multicast,
     ]));
-    layer.add_rule(Direction::In, mcast_in_v4.finalize());
+    ctx.in_rules.push(mcast_in_v4.finalize());
+
+    // Plumb in any required exceptions to spoof prevention/filtering.
+    let transit = ip_cfg.transit_ips.load();
+    let attached = ip_cfg.attached_subnets.load();
+
+    let Exceptions { allow_in, allow_out } =
+        compute_exceptions(&attached, &transit);
+
+    for (place, dir, from) in [
+        (&mut ctx.in_rules, Direction::In, allow_in),
+        (&mut ctx.out_rules, Direction::Out, allow_out),
+    ] {
+        place.extend(from.into_iter().map(|cidr| {
+            make_holepunch_rule(
+                ctx.cfg.guest_mac,
+                ctx.cfg.gateway_mac,
+                (*cidr).into(),
+                dir,
+                &ctx.vpc_meta,
+            )
+        }));
+    }
 
     Ok(())
 }
 
-fn setup_ipv6(
-    layer: &mut Layer,
-    cfg: &VpcCfg,
-    ip_cfg: &Ipv6Cfg,
-    vpc_mappings: Arc<VpcMappings>,
-    dhcp_cfg: DhcpCfg,
-) -> Result<(), OpteError> {
-    icmpv6::setup(layer, cfg, ip_cfg)?;
-    dhcpv6::setup(layer, cfg, dhcp_cfg)?;
-    let vpc_meta = Arc::new(VpcMeta::new(vpc_mappings));
+fn setup_ipv6(ctx: &mut BuildCtx, ip_cfg: &Ipv6Cfg) -> Result<(), OpteError> {
+    icmpv6::setup(ctx, ip_cfg)?;
+    dhcpv6::setup(ctx)?;
 
     // Outbound no-spoof rule: only allow traffic from the guest's IP and MAC.
     // This rule has no destination IP predicate, so it matches both unicast
@@ -263,42 +331,64 @@ fn setup_ipv6(
     // unless the group is configured. In the future, we may want to explicitly
     // filter outbound multicast to only the groups configured via M2P to further
     // tighten spoof prevention at the gateway layer.
-    let mut nospoof_out = Rule::new(1000, Action::Meta(vpc_meta));
+    let mut nospoof_out = Rule::new(1000, Action::Meta(ctx.vpc_meta.clone()));
     nospoof_out.add_predicate(Predicate::InnerSrcIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
     ]));
     nospoof_out.add_predicate(Predicate::InnerEtherSrc(vec![
-        EtherAddrMatch::Exact(cfg.guest_mac),
+        EtherAddrMatch::Exact(ctx.cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::Out, nospoof_out.finalize());
+    ctx.out_rules.push(nospoof_out.finalize());
 
     let mut unicast_in = Rule::new(
         1000,
         Action::Static(Arc::new(RewriteSrcMac {
-            gateway_mac: cfg.gateway_mac,
+            gateway_mac: ctx.cfg.gateway_mac,
         })),
     );
     unicast_in.add_predicate(Predicate::InnerDstIp6(vec![
         Ipv6AddrMatch::Exact(ip_cfg.private_ip),
     ]));
     unicast_in.add_predicate(Predicate::InnerEtherDst(vec![
-        EtherAddrMatch::Exact(cfg.guest_mac),
+        EtherAddrMatch::Exact(ctx.cfg.guest_mac),
     ]));
-    layer.add_rule(Direction::In, unicast_in.finalize());
+    ctx.in_rules.push(unicast_in.finalize());
 
     // Inbound IPv6 multicast - rewrite source MAC to gateway and allow
     let ipv6_mcast = vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)];
     let mut mcast_in = Rule::new(
         1001,
         Action::Static(Arc::new(RewriteSrcMac {
-            gateway_mac: cfg.gateway_mac,
+            gateway_mac: ctx.cfg.gateway_mac,
         })),
     );
     mcast_in.add_predicate(Predicate::InnerDstIp6(ipv6_mcast));
     mcast_in.add_predicate(Predicate::InnerEtherDst(vec![
         EtherAddrMatch::Multicast,
     ]));
-    layer.add_rule(Direction::In, mcast_in.finalize());
+    ctx.in_rules.push(mcast_in.finalize());
+
+    // Plumb in any required exceptions to spoof prevention/filtering.
+    let transit = ip_cfg.transit_ips.load();
+    let attached = ip_cfg.attached_subnets.load();
+
+    let Exceptions { allow_in, allow_out } =
+        compute_exceptions(&attached, &transit);
+
+    for (place, dir, from) in [
+        (&mut ctx.in_rules, Direction::In, allow_in),
+        (&mut ctx.out_rules, Direction::Out, allow_out),
+    ] {
+        place.extend(from.into_iter().map(|cidr| {
+            make_holepunch_rule(
+                ctx.cfg.guest_mac,
+                ctx.cfg.gateway_mac,
+                (*cidr).into(),
+                dir,
+                &ctx.vpc_meta,
+            )
+        }));
+    }
 
     Ok(())
 }
@@ -325,8 +415,7 @@ impl MetaAction for VpcMeta {
     ) -> ModMetaResult {
         match self.vpc_mappings.ip_to_vni(&flow.dst_ip()) {
             Some(vni) => {
-                action_meta
-                    .insert(ACTION_META_VNI.into(), vni.to_string().into());
+                action_meta.insert_typed(&VniTag(vni));
                 Ok(AllowOrDeny::Allow(()))
             }
 
