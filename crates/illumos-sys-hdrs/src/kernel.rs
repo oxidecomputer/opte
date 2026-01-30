@@ -504,6 +504,8 @@ unsafe extern "C" {
     pub fn freemsg(mp: *mut mblk_t);
     pub fn freemsgchain(mp: *mut mblk_t);
 
+    pub fn msgpullup(mp: *mut mblk_t, n_bytes: isize) -> *mut mblk_t;
+
     pub fn gethrtime() -> hrtime_t;
 
     pub fn getmajor(dev: dev_t) -> major_t;

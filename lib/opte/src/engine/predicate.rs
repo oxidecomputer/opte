@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Predicates used for `Rule` matching.
 
@@ -23,6 +23,7 @@ use super::ip::v6::Ipv6Ref;
 use super::ip::v6::v6_get_next_header;
 use super::packet::MblkPacketData;
 use super::port::meta::ActionMeta;
+use super::port::meta::ActionMetaValue;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -97,12 +98,15 @@ impl Display for EtherTypeMatch {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum EtherAddrMatch {
     Exact(MacAddr),
+    /// Match any multicast/broadcast MAC address (LSB of first octet is 1).
+    Multicast,
 }
 
 impl EtherAddrMatch {
     fn matches(&self, flow_addr: MacAddr) -> bool {
         match self {
             EtherAddrMatch::Exact(addr) => flow_addr == *addr,
+            EtherAddrMatch::Multicast => flow_addr.is_group(),
         }
     }
 }
@@ -113,6 +117,7 @@ impl Display for EtherAddrMatch {
 
         match self {
             Exact(addr) => write!(f, "{addr}"),
+            Multicast => write!(f, "multicast"),
         }
     }
 }
@@ -605,6 +610,11 @@ impl Predicate {
         }
 
         false
+    }
+
+    /// Create a `Predicate::Meta` matching a well-specified value.
+    pub fn from_action_meta<T: ActionMetaValue>(val: T) -> Self {
+        Self::Meta(val.key().into(), val.as_meta().into())
     }
 }
 

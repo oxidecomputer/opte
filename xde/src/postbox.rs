@@ -62,6 +62,12 @@ impl Postbox {
     pub fn drain(self) -> impl Iterator<Item = (VniMac, MsgBlkChain)> {
         self.boxes.into_iter()
     }
+
+    /// Returns true if there are no queued deliveries.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        matches!(self.boxes, Boxes::None)
+    }
 }
 
 // SAFETY: The only `!Send`/`!Sync` element in here is the `NonNull<...>`.

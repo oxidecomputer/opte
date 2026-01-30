@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide Network VPC Router.
 //!
@@ -68,17 +68,6 @@ pub enum RouterTargetInternal {
 }
 
 impl RouterTargetInternal {
-    pub const IP_KEY: &'static str = "router-target-ip";
-    pub const GENERIC_META: &'static str = "ig";
-
-    pub fn generic_meta(&self) -> Cow<'static, str> {
-        Self::GENERIC_META.into()
-    }
-
-    pub fn ip_key(&self) -> Cow<'static, str> {
-        Self::IP_KEY.into()
-    }
-
     pub fn class(&self) -> RouterTargetClass {
         match self {
             RouterTargetInternal::InternetGateway(_) => {
@@ -267,7 +256,19 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+
+    // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
+    // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
+    // The overlay addresses use any valid multicast prefix; underlay restriction
+    // to ff04::/16 is enforced by M2P mapping validation.
+    let mut mcast_out = Rule::new(0, Action::Allow);
+    mcast_out.add_predicate(Predicate::Any(vec![
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)]),
+        Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)]),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize());
+
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
@@ -294,6 +295,22 @@ fn make_rule(
     target: RouterTarget,
     class: RouterClass,
 ) -> Result<Rule<Finalized>, OpteError> {
+    // Reject router entries with multicast destination CIDRs.
+    // Multicast operates fleet-wide via M2P mappings and subscriptions,
+    // not through VPC routing. Router layer allows multicast through
+    // unconditionally without route lookup.
+    let is_mcast_dst = match dest {
+        IpCidr::Ip4(cidr) => cidr.ip().is_multicast(),
+        IpCidr::Ip6(cidr) => cidr.ip().is_multicast(),
+    };
+    if is_mcast_dst {
+        return Err(OpteError::InvalidRouterEntry {
+            dest,
+            target: "multicast destinations not allowed in router entries"
+                .to_string(),
+        });
+    }
+
     if !valid_router_dest_target_pair(&dest, &target) {
         return Err(OpteError::InvalidRouterEntry {
             dest,
@@ -459,13 +476,8 @@ impl MetaAction for RouterAction {
         _flow_id: &InnerFlowId,
         meta: &mut ActionMeta,
     ) -> ModMetaResult {
-        // TODO: I don't think we need IP_KEY.
-        if let RouterTargetInternal::InternetGateway(_) = self.target {
-            meta.insert(self.target.key(), self.target.as_meta());
-        }
-        meta.insert(self.target.ip_key(), self.target.as_meta());
-        let rt_class = self.target.class();
-        meta.insert(rt_class.key(), rt_class.as_meta());
+        meta.insert_typed(&self.target);
+        meta.insert_typed(&self.target.class());
         Ok(AllowOrDeny::Allow(()))
     }
 }

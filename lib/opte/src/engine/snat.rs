@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
@@ -33,6 +33,7 @@ use crate::api::L4Info;
 use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
 use crate::engine::icmp::QueryEcho;
+use crate::engine::nat::ExternalIpTag;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -91,7 +92,7 @@ type SNatAlloc<T> = FiniteHandle<NatPool<T>>;
 mod private {
     use opte_api::Protocol;
 
-    pub trait Ip: Into<super::IpAddr> {
+    pub trait Ip: Into<super::IpAddr> + Send + Sync {
         const MESSAGE_PROTOCOL: Protocol;
     }
 
@@ -307,7 +308,7 @@ where
         &self,
         flow_id: &InnerFlowId,
         pkt: &Packet<MblkFullParsed>,
-        _meta: &mut ActionMeta,
+        _meta: &ActionMeta,
     ) -> GenDescResult {
         let proto = flow_id.protocol();
         let priv_port = match flow_id.l4_info() {
@@ -368,11 +369,13 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
 pub const SNAT_NAME: &str = "SNAT";
 
 impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
+    fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP and source port
             Direction::Out => {
                 let ip = IpMod::new_src(self.nat.entry.ip.into());
+
+                meta.insert_typed(&ExternalIpTag);
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -428,12 +431,14 @@ pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
     // SNAT needs to generate an additional transform for ICMP traffic in
     // order to treat the Echo Identifier as a psuedo ULP port.
-    fn gen_ht(&self, dir: Direction) -> HdrTransform {
+    fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP rewritten, and its
             // 'source port' placed into the ICMP echo ID field.
             Direction::Out => {
                 let ip = IpMod::new_src(self.nat.entry.ip.into());
+
+                meta.insert_typed(&ExternalIpTag);
 
                 HdrTransform {
                     name: SNAT_NAME.to_string(),
@@ -560,7 +565,7 @@ mod test {
         // Verify descriptor generation.
         // ================================================================
         let flow_out = InnerFlowId::from(pkt.meta());
-        let desc = match snat.gen_desc(&flow_out, &pkt, &mut action_meta) {
+        let desc = match snat.gen_desc(&flow_out, &pkt, &action_meta) {
             Ok(AllowOrDeny::Allow(desc)) => desc,
             _ => panic!("expected AllowOrDeny::Allow(desc) result"),
         };
@@ -569,7 +574,7 @@ mod test {
         // ================================================================
         // Verify outbound header transformation
         // ================================================================
-        let out_ht = desc.gen_ht(Direction::Out);
+        let out_ht = desc.gen_ht(Direction::Out, &mut action_meta);
         out_ht.run(pkt.meta_mut()).unwrap();
 
         let pmo = pkt.meta();
@@ -623,7 +628,7 @@ mod test {
             .to_full_meta();
         pkt.compute_checksums();
 
-        let in_ht = desc.gen_ht(Direction::In);
+        let in_ht = desc.gen_ht(Direction::In, &mut action_meta);
         in_ht.run(pkt.meta_mut()).unwrap();
 
         let pmi = pkt.meta();

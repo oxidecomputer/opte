@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use opte::api::API_VERSION;
 use opte::api::ClearLftReq;
@@ -27,22 +27,34 @@ use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::AllowCidrReq;
+use oxide_vpc::api::AttachSubnetReq;
+use oxide_vpc::api::AttachedSubnetConfig;
+use oxide_vpc::api::ClearMcast2PhysReq;
+use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::ClearVirt2BoundaryReq;
 use oxide_vpc::api::ClearVirt2PhysReq;
 use oxide_vpc::api::CreateXdeReq;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
-use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DetachSubnetReq;
+use oxide_vpc::api::DetachSubnetResp;
+use oxide_vpc::api::DumpMcastForwardingResp;
+use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::McastSubscribeReq;
+use oxide_vpc::api::McastUnsubscribeAllReq;
+use oxide_vpc::api::McastUnsubscribeReq;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrReq;
 use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
+use oxide_vpc::api::SetMcast2PhysReq;
+use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
@@ -114,7 +126,6 @@ impl OpteHdl {
         &self,
         name: &str,
         cfg: VpcCfg,
-        dhcp: DhcpCfg,
         passthrough: bool,
     ) -> Result<NoResp, Error> {
         use libnet::link;
@@ -127,7 +138,7 @@ impl OpteHdl {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq { xde_devname, linkid, cfg, dhcp, passthrough };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
 
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
@@ -205,6 +216,16 @@ impl OpteHdl {
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
+    pub fn set_m2p(&self, req: &SetMcast2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetMcast2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    pub fn clear_m2p(&self, req: &ClearMcast2PhysReq) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearMcast2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
     pub fn set_v2b(&self, req: &SetVirt2BoundaryReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::SetVirt2Boundary;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
@@ -222,6 +243,63 @@ impl OpteHdl {
     pub fn dump_v2b(&self) -> Result<DumpVirt2BoundaryResp, Error> {
         let cmd = OpteCmd::DumpVirt2Boundary;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    /// Set a multicast forwarding entry.
+    pub fn set_mcast_fwd(
+        &self,
+        req: &SetMcastForwardingReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetMcastForwarding;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Clear a multicast forwarding entry.
+    pub fn clear_mcast_fwd(
+        &self,
+        req: &ClearMcastForwardingReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ClearMcastForwarding;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Dump the multicast forwarding table.
+    pub fn dump_mcast_fwd(&self) -> Result<DumpMcastForwardingResp, Error> {
+        let cmd = OpteCmd::DumpMcastForwarding;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    /// Dump the multicast subscription table (group -> ports on this sled).
+    pub fn dump_mcast_subs(&self) -> Result<DumpMcastSubscriptionsResp, Error> {
+        let cmd = OpteCmd::DumpMcastSubscriptions;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    /// Subscribe a port to a multicast group.
+    pub fn mcast_subscribe(
+        &self,
+        req: &McastSubscribeReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::McastSubscribe;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Unsubscribe a port from a multicast group.
+    pub fn mcast_unsubscribe(
+        &self,
+        req: &McastUnsubscribeReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::McastUnsubscribe;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Unsubscribe all ports from a multicast group.
+    pub fn mcast_unsubscribe_all(
+        &self,
+        req: &McastUnsubscribeAllReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::McastUnsubscribeAll;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Set xde underlay devices.
@@ -316,6 +394,37 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&RemoveCidrReq { cidr, port_name: port_name.into(), dir }),
+        )
+    }
+
+    pub fn attach_subnet(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+        is_external: bool,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::AttachSubnet;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&AttachSubnetReq {
+                cidr,
+                port_name: port_name.into(),
+                cfg: AttachedSubnetConfig { is_external },
+            }),
+        )
+    }
+
+    pub fn detach_subnet(
+        &self,
+        port_name: &str,
+        cidr: IpCidr,
+    ) -> Result<DetachSubnetResp, Error> {
+        let cmd = OpteCmd::DetachSubnet;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&DetachSubnetReq { cidr, port_name: port_name.into() }),
         )
     }
 

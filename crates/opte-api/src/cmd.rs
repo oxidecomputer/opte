@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use super::API_VERSION;
 use super::RuleId;
@@ -25,31 +25,95 @@ pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub enum OpteCmd {
-    ListPorts = 1,           // list all ports
-    AddFwRule = 20,          // add firewall rule
-    RemFwRule = 21,          // remove firewall rule
-    SetFwRules = 22,         // set/replace all firewall rules at once
-    DumpTcpFlows = 30,       // dump TCP flows
-    DumpLayer = 31,          // dump the specified Layer
-    DumpUft = 32,            // dump the Unified Flow Table
-    ListLayers = 33,         // list the layers on a given port
-    ClearUft = 40,           // clear the UFT
-    ClearLft = 41,           // clear the given Layer's Flow Table
-    SetVirt2Phys = 50,       // set a v2p mapping
-    DumpVirt2Phys = 51,      // dump the v2p mappings
-    SetVirt2Boundary = 52,   // set a v2b mapping
-    ClearVirt2Boundary = 53, // clear a v2b mapping
-    DumpVirt2Boundary = 54,  // dump the v2b mappings
-    ClearVirt2Phys = 55,     // clear a v2p mapping
-    AddRouterEntry = 60,     // add a router entry for IP dest
-    DelRouterEntry = 61,     // remove a router entry for IP dest
-    CreateXde = 70,          // create a new xde device
-    DeleteXde = 71,          // delete an xde device
-    SetXdeUnderlay = 72,     // set xde underlay devices
-    ClearXdeUnderlay = 73,   // clear xde underlay devices
-    SetExternalIps = 80,     // set xde external IPs for a port
-    AllowCidr = 90,          // allow ip block through gateway tx/rx
-    RemoveCidr = 91,         // deny ip block through gateway tx/rx
+    /// List all ports.
+    ListPorts = 1,
+
+    /// Add a firewall rule.
+    AddFwRule = 20,
+    /// Remove a firewall rule.
+    RemFwRule = 21,
+    /// Set/replace all firewall rules at once.
+    SetFwRules = 22,
+
+    /// Read out TCP flows and statistics.
+    DumpTcpFlows = 30,
+    /// Read out installed rules and hit counters in a given layer.
+    DumpLayer = 31,
+    /// Read out UFT (fastpath) flow entries and their associated counters.
+    DumpUft = 32,
+    /// List the layers on a given port.
+    ListLayers = 33,
+
+    /// Clear the UFT (fastpath) for a port.
+    ClearUft = 40,
+    /// Clear a layer's flow table.
+    ClearLft = 41,
+
+    /// Set a V2P mapping.
+    SetVirt2Phys = 50,
+    /// Read out all V2P mappings.
+    DumpVirt2Phys = 51,
+    /// Set a V2B mapping.
+    SetVirt2Boundary = 52,
+    /// Remove a V2B mapping.
+    ClearVirt2Boundary = 53,
+    /// Read out all V2B mappings.
+    DumpVirt2Boundary = 54,
+    /// Remove a V2P mapping.
+    ClearVirt2Phys = 55,
+
+    /// Add a router entry for an IP destination CIDR.
+    AddRouterEntry = 60,
+    /// Remove a router entry for an IP destination CIDR.
+    DelRouterEntry = 61,
+
+    /// Create a new XDE device.
+    ///
+    /// Requires that `SetXdeUnderlay` has been successfully called.
+    CreateXde = 70,
+    /// Delete an XDE device.
+    DeleteXde = 71,
+    /// Set the physical devices which XDE should transmit over.
+    SetXdeUnderlay = 72,
+    /// Unbind the underlay devices.
+    ///
+    /// Requires that no XDE ports exist.
+    ClearXdeUnderlay = 73,
+
+    /// Set all external IP config for a port.
+    SetExternalIps = 80,
+
+    /// Add a transit IP CIDR to this port's allow list.
+    ///
+    /// NOOPs if the given CIDR is an attached subnet.
+    AllowCidr = 90,
+    /// Remove a transit IP CIDR from this port's allow list.
+    ///
+    /// NOOPs if the given CIDR is an attached subnet.
+    RemoveCidr = 91,
+    /// Add or set the config of an attached subnet.
+    AttachSubnet = 92,
+    /// Remove an attached subnet.
+    DetachSubnet = 93,
+
+    /// Set multicast forwarding entries.
+    SetMcastForwarding = 100,
+    /// Clear multicast forwarding entries.
+    ClearMcastForwarding = 101,
+    /// Read out the multicast forwarding table.
+    DumpMcastForwarding = 102,
+    /// Subscribe a port to a multicast group.
+    McastSubscribe = 103,
+    /// Unsubscribe a port to a multicast group.
+    McastUnsubscribe = 104,
+    /// Set an M2P mapping (group -> underlay mcast).
+    SetMcast2Phys = 105,
+    /// Remove an M2P mapping.
+    ClearMcast2Phys = 106,
+    /// Read out the table of multicast subscriptions.
+    DumpMcastSubscriptions = 107,
+    /// Unsubscribe all ports from a multicast group.
+    McastUnsubscribeAll = 108,
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -82,6 +146,15 @@ impl TryFrom<c_int> for OpteCmd {
             80 => Ok(Self::SetExternalIps),
             90 => Ok(Self::AllowCidr),
             91 => Ok(Self::RemoveCidr),
+            100 => Ok(Self::SetMcastForwarding),
+            101 => Ok(Self::ClearMcastForwarding),
+            102 => Ok(Self::DumpMcastForwarding),
+            103 => Ok(Self::McastSubscribe),
+            104 => Ok(Self::McastUnsubscribe),
+            105 => Ok(Self::SetMcast2Phys),
+            106 => Ok(Self::ClearMcast2Phys),
+            107 => Ok(Self::DumpMcastSubscriptions),
+            108 => Ok(Self::McastUnsubscribeAll),
             _ => Err(()),
         }
     }
@@ -177,6 +250,7 @@ pub enum OpteError {
         dest: IpCidr,
         target: String,
     },
+    InvalidUnderlayMulticast(String),
     LayerNotFound(String),
     MacExists {
         port: String,
@@ -230,6 +304,7 @@ impl OpteError {
             Self::DeserCmdReq(_) => ENOMSG,
             Self::FlowExists(_) => EEXIST,
             Self::InvalidRouterEntry { .. } => EINVAL,
+            Self::InvalidUnderlayMulticast(_) => EINVAL,
             Self::LayerNotFound(_) => ENOENT,
             Self::MacExists { .. } => EEXIST,
             Self::MaxCapacity(_) => ENFILE,

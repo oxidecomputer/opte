@@ -45,7 +45,7 @@ cargo_metadata = "0.23"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
-criterion = "0.7"
+criterion = "0.8"
 ctor = "0.6"
 darling = "0.21"
 dyn-clone = "1.0"
@@ -62,7 +62,7 @@ proc-macro2 = { version = "1" }
 quote = "1.0"
 rand = "0.9.2"
 ref-cast = "1.0.25"
-ron = "0.11"
+ron = "0.12"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trace"] }
@@ -80,7 +80,7 @@ version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 
 [profile.dev]
 opt-level = 1

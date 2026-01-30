@@ -31,7 +31,7 @@ header "check style"
 ptime -m cargo +$NIGHTLY fmt -- --check
 
 header "analyze"
-ptime -m cargo clippy --all-targets
+ptime -m cargo clippy --all-targets -- --deny warnings
 
 header "debug build"
 ptime -m cargo build

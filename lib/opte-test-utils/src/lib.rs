@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Common routines for integration tests.
 
@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 pub mod dhcp;
+pub mod geneve_verify;
 pub mod icmp;
 pub mod pcap;
 #[macro_use]
@@ -84,6 +85,7 @@ pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
+pub use oxide_vpc::engine::overlay::Mcast2Phys;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
@@ -91,8 +93,10 @@ pub use oxide_vpc::engine::overlay::VpcMappings;
 pub use oxide_vpc::engine::router;
 pub use port_state::*;
 pub use smoltcp::wire::IpProtocol;
+use std::collections::BTreeMap;
 pub use std::num::NonZeroU32;
 pub use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// Expects that a packet result is modified, and applies that modification.
 #[macro_export]
@@ -177,6 +181,8 @@ pub fn g1_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -190,6 +196,8 @@ pub fn g1_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
     g1_cfg2(ip_cfg)
@@ -205,6 +213,7 @@ pub fn g1_cfg2(ip_cfg: IpCfg) -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -222,6 +231,8 @@ pub fn g2_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -235,6 +246,8 @@ pub fn g2_cfg() -> VpcCfg {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
     VpcCfg {
@@ -246,6 +259,7 @@ pub fn g2_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -254,6 +268,7 @@ fn oxide_net_builder(
     cfg: &oxide_vpc::cfg::VpcCfg,
     vpc_map: Arc<VpcMappings>,
     v2p: Arc<Virt2Phys>,
+    m2p: Arc<Mcast2Phys>,
     v2b: Arc<Virt2Boundary>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
@@ -265,14 +280,12 @@ fn oxide_net_builder(
     let snat_limit = NonZeroU32::new(8096).unwrap();
     let one_limit = NonZeroU32::new(1).unwrap();
 
-    let dhcp = base_dhcp_config();
-
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, fw_limit, &dhcp)
+    gateway::setup(&pb, cfg, vpc_map, fw_limit)
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, v2b, one_limit)
+    overlay::setup(&pb, cfg, v2p, m2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -281,6 +294,7 @@ pub struct PortAndVps {
     pub port: Port<VpcNetwork>,
     pub vps: VpcPortState,
     pub vpc_map: Arc<VpcMappings>,
+    pub m2p: Arc<Mcast2Phys>,
     pub cfg: oxide_vpc::cfg::VpcCfg,
 }
 
@@ -346,26 +360,33 @@ pub fn oxide_net_setup2(
     let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
+    let m2p = Arc::new(Mcast2Phys::new());
     let v2b = Arc::new(Virt2Boundary::new());
     v2b.set(
         "0.0.0.0/0".parse().unwrap(),
         vec![TunnelEndpoint {
-            ip: "fd00:9900::1".parse().unwrap(),
+            ip: BS_IP_ADDR,
             vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
         }],
     );
     v2b.set(
         "::/0".parse().unwrap(),
         vec![TunnelEndpoint {
-            ip: "fd00:9900::1".parse().unwrap(),
+            ip: BS_IP_ADDR,
             vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
         }],
     );
 
-    let port =
-        oxide_net_builder(name, &converted_cfg, vpc_map.clone(), port_v2p, v2b)
-            .create(vpc_net, uft_limit, tcp_limit)
-            .unwrap();
+    let port = oxide_net_builder(
+        name,
+        &converted_cfg,
+        vpc_map.clone(),
+        port_v2p,
+        m2p.clone(),
+        v2b,
+    )
+    .create(vpc_net, uft_limit, tcp_limit)
+    .unwrap();
 
     // Add router entry that allows the guest to send to other guests
     // on same subnet.
@@ -378,34 +399,36 @@ pub fn oxide_net_setup2(
     .unwrap();
 
     let vps = VpcPortState::new();
-    let mut pav = PortAndVps { port, vps, vpc_map, cfg: converted_cfg };
+    let mut pav = PortAndVps { port, vps, vpc_map, m2p, cfg: converted_cfg };
 
     let mut updates = vec![
         // * Epoch starts at 1, adding router entry bumps it to 2.
         "set:epoch=2",
-        // * Allow inbound IPv6 traffic for guest.
-        // * Allow inbound IPv4 traffic for guest.
+        // * Allow inbound IPv4 unicast traffic for guest.
+        // * Allow inbound IPv4 multicast traffic for guest.
+        // * Allow inbound IPv6 unicast traffic for guest.
+        // * Allow inbound IPv6 multicast traffic for guest.
         // * Deny inbound NDP for guest.
-        "set:gateway.rules.in=3",
+        "set:gateway.rules.in=5",
         // IPv4
         // ----
         //
         // * ARP Gateway MAC addr
         // * ICMP Echo Reply for Gateway
-        // * DHCP Offer
-        // * DHCP Ack
-        // * Outbound traffic from Guest IP + MAC address
+        // * DHCP Discover → Offer hairpin
+        // * DHCP Request → Ack hairpin
+        // * Outbound no-spoof from Guest IP + MAC (allows unicast and multicast)
         //
         // IPv6
         // ----
         //
-        // * NDP NA for Gateway
-        // * NDP RA for Gateway
-        // * Deny all other NDP
-        // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
         // * ICMPv6 Echo Reply for Gateway from Guest VPC ULA
+        // * ICMPv6 Echo Reply for Gateway from Guest Link-Local
+        // * NDP RA for Gateway
+        // * NDP NA for Gateway
         // * DHCPv6
-        // * Outbound traffic from Guest IPv6 + MAC Address
+        // * Deny all other NDP
+        // * Outbound no-spoof from Guest IPv6 + MAC (allows unicast and multicast)
         "set:gateway.rules.out=12",
         // * Allow all outbound traffic
         "set:firewall.rules.out=0",
@@ -429,11 +452,13 @@ pub fn oxide_net_setup2(
     });
 
     updates.extend_from_slice(&[
+        // * Multicast passthrough (handles both IPv4 and IPv6)
         // * Allow guest to route to own subnet
-        "set:router.rules.out=1",
+        "set:router.rules.out=2",
         // * Outbound encap
         // * Inbound decap
-        "set:overlay.rules.in=1, overlay.rules.out=1",
+        // * Inbound VNI validator (multicast)
+        "set:overlay.rules.in=2, overlay.rules.out=1",
     ]);
 
     if let Some(val) = custom_updates {
@@ -971,6 +996,12 @@ pub struct TestIpPhys {
     pub mac: MacAddr,
     pub vni: Vni,
 }
+
+pub static BSVC_PHYS: LazyLock<TestIpPhys> = LazyLock::new(|| TestIpPhys {
+    ip: BS_IP_ADDR,
+    mac: BS_MAC_ADDR,
+    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+});
 
 /// Encapsulate a guest packet, marking that it has arrived from beyond
 /// the rack.

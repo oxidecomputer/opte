@@ -2,14 +2,89 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Geneve option types specific to the Oxide VPC dataplane.
+//!
+//! # Oxide Geneve Options
+//!
+//! This module defines Geneve options used in the Oxide rack network to carry
+//! VPC-specific metadata during packet encapsulation. All options use the Oxide
+//! option class (`GENEVE_OPT_CLASS_OXIDE` = 0x0129).
+//!
+//! ## Option Types
+//!
+//! - **External** (0x00): Indicates a packet originated from outside the rack
+//!   and was encapsulated by the switch NAT ingress path with Geneve wrapping.
+//! - **Multicast** (0x01): Carries multicast replication strategy as a 2-bit
+//!   field for coordinating delivery between OPTE and sidecar switch logic.
+//! - **Mss** (0x02): Carries original TCP MSS for MSS clamping/boosting to
+//!   prevent MTU issues during underlay encapsulation.
+//!
+//! ## Multicast Option Encoding
+//!
+//! The multicast option uses a compact 2-bit encoding aligned with sidecar.p4's
+//! processing constraints:
+//!
+//! ```text
+//! Option body (4 bytes):
+//! ┌──────────┬────────────────────────────┐
+//! │ Bits 7-6 │ Bits 5-0 + remaining bytes │
+//! │ (u2)     │ (reserved, must be 0)      │
+//! └──────────┴────────────────────────────┘
+//!    │
+//!    └─> Replication mode:
+//!        00 = External (front panel/customer ports, traffic leaving rack)
+//!        01 = Underlay (infrastructure forwarding to other sleds)
+//!        10 = Both (both External and Underlay)
+//!        11 = Reserved
+//! ```
+//!
+//! ### Replication Semantics (Tx-only instruction)
+//!
+//! The [`Replication`] type is a Tx-only instruction telling the switch which
+//! port groups to replicate outbound multicast packets to. On Rx, OPTE ignores
+//! the replication field and performs local same-sled delivery based purely on
+//! subscriptions.
+//!
+//! OPTE routes to next hop unicast address (for ALL modes) to determine
+//! reachability and underlay port/MAC. Packet destination is multicast
+//! ff04::/16 with multicast MAC.
+//!
+//! - **External**: Switch decaps and replicates to external-facing ports (front panel)
+//! - **Underlay**: Switch replicates to underlay ports (other sleds)
+//! - **Both**: Switch replicates to both external and underlay port groups (bifurcated)
+//! - **Local same-sled delivery**: Always happens regardless of the [`Replication`] setting.
+//!   Not an access control mechanism - local delivery is independent of [`Replication`] mode.
+//!
+//! All multicast packets are encapsulated with fleet VNI 77 (`DEFAULT_MULTICAST_VNI`)
+//! regardless of [`Replication`] mode. The [`Replication`] mode determines delivery behavior,
+//! not VNI selection.
+//!
+//! The 2-bit encoding allows extraction in P4 programs and aligns with the
+//! sidecar pipeline's tag-based routing decisions.
+//!
+//! [`Replication`]: crate::api::Replication
+//!
+//! ## Option Length Encoding
+//!
+//! Geneve has two length fields to consider (both measured in 4-byte words):
+//! - Geneve header `opt_len` (6 bits): total size of the options area
+//!   (sums each option's 4-byte header + body).
+//! - Option header `len` (5 bits): size of that option's body only.
+//!
+//! For Oxide options used here:
+//! - External: geneve opt_len += 1; option len = 0
+//! - Multicast: geneve opt_len += 2; option len = 1
+//! - MSS: geneve opt_len += 2; option len = 1
 
+use crate::api::Replication;
 use ingot::geneve::GeneveFlags;
+use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::types::CRStr;
+use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
 use ingot::types::NetworkRepr;
 use ingot::types::ParseError;
@@ -42,6 +117,20 @@ pub enum ValidOxideOption<'a> {
     External,
     Multicast(ValidMulticastInfo<&'a [u8]>),
     Mss(ValidMssInfo<&'a [u8]>),
+}
+
+impl<'a> HeaderLen for ValidOxideOption<'a> {
+    const MINIMUM_LENGTH: usize = GeneveOpt::MINIMUM_LENGTH;
+
+    fn packet_length(&self) -> usize {
+        match self {
+            // External option: 4B header, 0B body
+            Self::External => Self::MINIMUM_LENGTH,
+            // Multicast/Mss options: 4B header + 4B body
+            Self::Multicast(mc) => Self::MINIMUM_LENGTH + mc.packet_length(),
+            Self::Mss(mss) => Self::MINIMUM_LENGTH + mss.packet_length(),
+        }
+    }
 }
 
 impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
@@ -84,26 +173,13 @@ impl<'a> OptionCast<'a> for ValidOxideOption<'a> {
     }
 }
 
+/// Geneve multicast option body carrying replication information.
 #[derive(Debug, Clone, Ingot, Eq, PartialEq)]
 #[ingot(impl_default)]
 pub struct MulticastInfo {
     #[ingot(is = "u2")]
     pub version: Replication,
     rsvd: u30be,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-#[repr(u8)]
-pub enum Replication {
-    /// Replicate packets to ports set for external multicast traffic.
-    #[default]
-    External = 0x00,
-    /// Replicate packets to ports set for underlay multicast traffic.
-    Underlay,
-    /// Replicate packets to ports set for underlay and external multicast
-    /// traffic (bifurcated).
-    All,
-    Reserved,
 }
 
 impl NetworkRepr<u2> for Replication {
@@ -116,9 +192,9 @@ impl NetworkRepr<u2> for Replication {
         match val {
             0 => Replication::External,
             1 => Replication::Underlay,
-            2 => Replication::All,
+            2 => Replication::Both,
             3 => Replication::Reserved,
-            _ => panic!("outside bounds of u2"),
+            _ => unreachable!("u2 value out of range: {val}"),
         }
     }
 }
@@ -157,6 +233,40 @@ pub fn validate_options<V: ByteSlice>(
     Ok(())
 }
 
+/// Extract multicast replication info from Geneve options.
+///
+/// Treats Reserved (value 3) as invalid and returns None, implementing
+/// fail-closed behavior.
+///
+/// This function silently skips options with parse errors (e.g., `TooSmall`).
+/// Call `validate_options()` first if you want parse errors surfaced and
+/// RFC 8926 critical option semantics enforced. This function assumes
+/// validation has already been performed.
+pub fn extract_multicast_replication<V: ByteSlice>(
+    pkt: &ValidGeneve<V>,
+) -> Option<Replication> {
+    // In debug builds, verify validate_options() was called first if critical options present
+    debug_assert!(
+        !pkt.flags().contains(GeneveFlags::CRITICAL_OPTS)
+            || validate_options(pkt).is_ok(),
+        "extract_multicast_replication() called without prior validation when critical options present"
+    );
+
+    for opt in OxideOptions::from_raw(pkt) {
+        let Ok(opt) = opt else { continue };
+        if let Some(ValidOxideOption::Multicast(mc_info)) = opt.option.known() {
+            let repl = mc_info.version();
+            // Filter out Reserved (u2=3). This value exists in the 2-bit space
+            // but is not used by sidecar P4; treat as invalid.
+            if matches!(repl, Replication::Reserved) {
+                return None;
+            }
+            return Some(repl);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
     pkt: &ValidGeneve<V>,
@@ -177,8 +287,13 @@ pub fn valid_geneve_has_oxide_external<V: ByteSlice>(
 #[cfg(test)]
 mod test {
     use super::*;
+    use alloc::vec::Vec;
     use ingot::types::HeaderParse;
     use ingot::udp::ValidUdp;
+
+    /// Critical bit mask for Geneve option type field (bit 7).
+    /// Per RFC 8926, unknown options with this bit set must cause packet drop.
+    const GENEVE_OPT_TYPE_CRITICAL: u8 = 0x80;
 
     #[test]
     fn parse_single_opt() {
@@ -201,7 +316,6 @@ mod test {
             0x65, 0x58,
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00,
-
             // option class
             0x01, 0x29,
             // crt + type
@@ -217,6 +331,57 @@ mod test {
         validate_options(&geneve).unwrap();
 
         assert!(valid_geneve_has_oxide_external(&geneve));
+    }
+
+    #[test]
+    fn parse_multicast_replication_values() {
+        // Build a minimal UDP+Geneve packet with one Oxide multicast option
+        // Body's first byte top-2 bits carry Replication.
+        fn build_buf(rep: Replication) -> Vec<u8> {
+            #[rustfmt::skip]
+            let mut buf = vec![
+                // UDP source
+                0x1E, 0x61,
+                // UDP dest
+                0x17, 0xC1,
+                // UDP length (8 UDP hdr + 8 Geneve hdr + 4 opt hdr + 4 opt body = 24 = 0x18)
+                0x00, 0x18,
+                // UDP csum
+                0x00, 0x00,
+                // Geneve: ver + opt len (2 words = 8 bytes: 4 opt hdr + 4 opt body)
+                0x02,
+                // Geneve flags
+                0x00,
+                // Geneve proto
+                0x65, 0x58,
+                // Geneve vni + reserved
+                0x00, 0x00, 0x00, 0x00,
+                // Geneve option: class 0x0129 (Oxide)
+                0x01, 0x29,
+                // Geneve option: flags+type (non-critical, Multicast = 0x01)
+                0x01,
+                // Geneve option: rsvd + len (1 word = 4 bytes body)
+                0x01,
+            ];
+            // Geneve option body: 4-byte body with replication in top 2 bits
+            buf.push((rep as u8) << 6);
+            buf.extend_from_slice(&[0x00, 0x00, 0x00]);
+            buf
+        }
+
+        for (rep, expect) in [
+            (Replication::External, Replication::External),
+            (Replication::Underlay, Replication::Underlay),
+            (Replication::Both, Replication::Both),
+        ] {
+            let buf = build_buf(rep);
+            let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+            let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+            validate_options(&geneve).unwrap();
+
+            let got = extract_multicast_replication(&geneve).unwrap();
+            assert_eq!(got, expect);
+        }
     }
 
     #[test]
@@ -242,11 +407,10 @@ mod test {
             0x65, 0x58,
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00,
-
             // experimenter option class
             0xff, 0xff,
             // crt + type
-            0x80,
+            GENEVE_OPT_TYPE_CRITICAL,
             // rsvd + len
             0x00,
         ];
@@ -281,11 +445,10 @@ mod test {
             0x65, 0x58,
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00,
-
             // experimenter option class
             0x01, 0x29,
             // crt + type
-            0x80,
+            GENEVE_OPT_TYPE_CRITICAL,
             // rsvd + len
             0x00,
         ];
@@ -314,8 +477,8 @@ mod test {
             0x1E, 0x61,
             // dest
             0x17, 0xC1,
-            // length
-            0x00, 0x1c,
+            // length (8 UDP hdr + 8 Geneve hdr + 20 options = 36 = 0x24)
+            0x00, 0x24,
             // csum
             0x00, 0x00,
             // ver + opt len
@@ -326,14 +489,12 @@ mod test {
             0x65, 0x58,
             // vni + reserved
             0x00, 0x04, 0xD2, 0x00,
-
             // option class
             0x01, 0x29,
             // crt + type
             0x00,
             // rsvd + len
             0x00,
-
             // experimenter option class
             0xff, 0xff,
             // crt + type
@@ -342,7 +503,6 @@ mod test {
             0x01,
             // body
             0x00, 0x00, 0x00, 0x00,
-
             // experimenter option class
             0xff, 0xff,
             // crt + type
@@ -361,5 +521,81 @@ mod test {
         assert!(valid_geneve_has_oxide_external(&geneve));
 
         assert_eq!(geneve.1.raw().unwrap().iter(None).count(), 3);
+    }
+
+    #[test]
+    fn option_packet_length_with_known_options() {
+        // Test that `packet_length()` returns correct values for known options
+        // where the body has been consumed during parsing. This validates that
+        // `Known<T>::packet_length()` correctly delegates to T's `HeaderLen`
+        // implementation rather than relying on `body_remainder`.
+
+        // Build a minimal packet with just one Multicast option
+        #[rustfmt::skip]
+        let buf = [
+            // UDP source
+            0x1E, 0x61,
+            // UDP dest
+            0x17, 0xC1,
+            // UDP length (8 UDP hdr + 8 Geneve hdr + 8 bytes options = 24 = 0x18)
+            0x00, 0x18,
+            // UDP csum
+            0x00, 0x00,
+            // Geneve: ver(2b)=0 + opt_len(6b)=2 words = 8 bytes
+            0x02,
+            // Geneve flags
+            0x00,
+            // Geneve proto (Ethernet)
+            0x65, 0x58,
+            // Geneve vni + reserved
+            0x00, 0x00, 0x00, 0x00,
+            // Geneve option: class 0x0129 (Oxide)
+            0x01, 0x29,
+            // Geneve option: flags+type (Multicast = 0x01, non-critical)
+            0x01,
+            // Geneve option: rsvd + len (1 word = 4 bytes body)
+            0x01,
+            // Geneve option body: 4-byte body with replication in top 2 bits
+            // Replication::External = 0b00 in top 2 bits
+            0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let (.., rem) = ValidUdp::parse(&buf[..]).unwrap();
+        let (geneve, ..) = ValidGeneve::parse(rem).unwrap();
+
+        opte::engine::geneve::validate_geneve(&geneve).unwrap();
+        validate_options(&geneve).unwrap();
+
+        // Parse the multicast option
+        let mut opt_iter = OxideOptions::from_raw(&geneve);
+
+        if let Some(Ok(opt)) = opt_iter.next() {
+            assert!(
+                matches!(
+                    opt.option.known(),
+                    Some(ValidOxideOption::Multicast(_))
+                ),
+                "Option should be parsed as Multicast"
+            );
+
+            // `body_remainder` is empty because the 4-byte body was consumed
+            // during `ValidMulticastInfo::parse()`. `packet_length()` must
+            // delegate to `ValidOxideOption::packet_length()`, which returns
+            // 8B (4B header + 4B body), NOT 4B (which would be returned if we
+            // incorrectly used only `body_remainder.len()`).
+            assert_eq!(
+                opt.body_remainder.len(),
+                0,
+                "Multicast option body_remainder should be empty"
+            );
+
+            assert_eq!(
+                opt.packet_length(),
+                8,
+                "`GeneveOptionParse::packet_length()` should return 8B (4B header + 4B body)"
+            );
+        } else {
+            panic!("Failed to parse multicast option");
+        }
     }
 }

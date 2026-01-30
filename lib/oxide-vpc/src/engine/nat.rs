@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2023 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use super::VpcNetwork;
 use super::router::ROUTER_LAYER_NAME;
 use super::router::RouterTargetClass;
 use super::router::RouterTargetInternal;
 use crate::api::ExternalIpCfg;
+use crate::api::InternetGatewayMap;
 use crate::api::SetExternalIpsReq;
 use crate::cfg::IpCfg;
 use crate::cfg::Ipv4Cfg;
@@ -30,6 +31,7 @@ use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
+use opte::engine::nat::ExternalIpTagger;
 use opte::engine::nat::InboundNat;
 use opte::engine::nat::OutboundNat;
 use opte::engine::nat::VerifyAddr;
@@ -49,6 +51,7 @@ use opte::engine::snat::SNat;
 use uuid::Uuid;
 
 pub const NAT_LAYER_NAME: &str = "nat";
+const EXTERNAL_ATTACHED_SUBNET_PRIORITY: u16 = 4;
 const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
 const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
 const SNAT_PRIORITY: u16 = 100;
@@ -115,25 +118,15 @@ pub fn setup(
 #[allow(clippy::type_complexity)]
 fn create_nat_rules(
     cfg: &VpcCfg,
-    inet_gw_map: Option<BTreeMap<IpAddr, BTreeSet<Uuid>>>,
+    inet_gw_map: Option<&InternetGatewayMap>,
 ) -> Result<(Vec<Rule<Finalized>>, Vec<Rule<Finalized>>), OpteError> {
     let mut in_rules = vec![];
     let mut out_rules = vec![];
     if let Some(ipv4_cfg) = cfg.ipv4_cfg() {
-        setup_ipv4_nat(
-            ipv4_cfg,
-            &mut in_rules,
-            &mut out_rules,
-            inet_gw_map.as_ref(),
-        )?;
+        setup_ipv4_nat(ipv4_cfg, &mut in_rules, &mut out_rules, inet_gw_map)?;
     }
     if let Some(ipv6_cfg) = cfg.ipv6_cfg() {
-        setup_ipv6_nat(
-            ipv6_cfg,
-            &mut in_rules,
-            &mut out_rules,
-            inet_gw_map.as_ref(),
-        )?;
+        setup_ipv6_nat(ipv6_cfg, &mut in_rules, &mut out_rules, inet_gw_map)?;
     }
 
     // Append an additional rule to drop any InternetGateway packets
@@ -142,9 +135,8 @@ fn create_nat_rules(
     // internet gateways but have no valid source address on a selected
     // IGW.
     let mut out_igw_nat_miss = Rule::new(NO_EIP_PRIORITY, Action::Deny);
-    out_igw_nat_miss.add_predicate(Predicate::Meta(
-        RouterTargetClass::KEY.to_string(),
-        RouterTargetClass::InternetGateway.as_meta().into_owned(),
+    out_igw_nat_miss.add_predicate(Predicate::from_action_meta(
+        RouterTargetClass::InternetGateway,
     ));
     out_rules.push(out_igw_nat_miss.finalize());
 
@@ -165,6 +157,37 @@ fn setup_ipv4_nat(
     let verifier = Arc::new(ExtIps(ip_cfg.external_ips.clone()));
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
+
+    let attached_subnets: Vec<_> = ip_cfg
+        .attached_subnets
+        .load()
+        .iter()
+        .filter_map(|(k, v)| v.is_external.then_some(Ipv4AddrMatch::Prefix(*k)))
+        .collect();
+
+    if !attached_subnets.is_empty() {
+        // Use of this rule implicitly requires that we have selected *an*
+        // InternetGateway routing target by the time we reach the overlay layer.
+        // Don't match on the RouterTargetClass as a predicate here, as we need
+        // to record that a known EIP was used as a source.
+        let mut out_subnet = Rule::new(
+            EXTERNAL_ATTACHED_SUBNET_PRIORITY,
+            Action::Meta(Arc::new(ExternalIpTagger)),
+        );
+        out_subnet
+            .add_predicate(Predicate::InnerSrcIp4(attached_subnets.clone()));
+        out_rules.push(out_subnet.finalize());
+
+        // Inbound rules here aren't *strictly* necessary, as the control plane
+        // should not be assigning us EIPs which overlap with these subnets.
+        // We would then fall through to the default `Allow`.
+        //
+        // Install these as belts and braces, regardless.
+        let mut in_subnet =
+            Rule::new(EXTERNAL_ATTACHED_SUBNET_PRIORITY, Action::Allow);
+        in_subnet.add_predicate(Predicate::InnerDstIp4(attached_subnets));
+        in_rules.push(in_subnet.finalize());
+    }
 
     // Outbound IP selection needs to be gated upon which internet gateway was
     // chosen during routing.
@@ -324,6 +347,37 @@ fn setup_ipv6_nat(
     let in_nat = Arc::new(InboundNat::new(ip_cfg.private_ip, verifier.clone()));
     let external_cfg = ip_cfg.external_ips.load();
 
+    let attached_subnets: Vec<_> = ip_cfg
+        .attached_subnets
+        .load()
+        .iter()
+        .filter_map(|(k, v)| v.is_external.then_some(Ipv6AddrMatch::Prefix(*k)))
+        .collect();
+
+    if !attached_subnets.is_empty() {
+        // Use of this rule implicitly requires that we have selected *an*
+        // InternetGateway routing target by the time we reach the overlay layer.
+        // Don't match on the RouterTargetClass as a predicate here, as we need
+        // to record that a known EIP was used as a source.
+        let mut out_subnet = Rule::new(
+            EXTERNAL_ATTACHED_SUBNET_PRIORITY,
+            Action::Meta(Arc::new(ExternalIpTagger)),
+        );
+        out_subnet
+            .add_predicate(Predicate::InnerSrcIp6(attached_subnets.clone()));
+        out_rules.push(out_subnet.finalize());
+
+        // Inbound rules here aren't *strictly* necessary, as the control plane
+        // should not be assigning us EIPs which overlap with these subnets.
+        // We would then fall through to the default `Allow`.
+        //
+        // Install these as belts and braces, regardless.
+        let mut in_subnet =
+            Rule::new(EXTERNAL_ATTACHED_SUBNET_PRIORITY, Action::Allow);
+        in_subnet.add_predicate(Predicate::InnerDstIp6(attached_subnets));
+        in_rules.push(in_subnet.finalize());
+    }
+
     // See `setup_ipv4_nat` for an explanation on partitioning FIPs
     // by internet gateway ID.
     if !external_cfg.floating_ips.is_empty() {
@@ -465,11 +519,11 @@ fn setup_ipv6_nat(
     Ok(())
 }
 
-pub fn set_nat_rules(
-    cfg: &VpcCfg,
+pub fn set_external_ips(
     port: &Port<VpcNetwork>,
     req: SetExternalIpsReq,
 ) -> Result<(), OpteError> {
+    let cfg = &port.network().cfg;
     // This procedure only holds one lock at a time: a `Dynamic`'s shared
     // space writelock, *or* the table lock via set_rules_soft.
     // The datapath will hold the table lock for processing, *and* the `Dynamic`'s
@@ -497,6 +551,14 @@ pub fn set_nat_rules(
         _ => return Err(OpteError::InvalidIpCfg),
     }
 
-    let (in_rules, out_rules) = create_nat_rules(cfg, req.inet_gw_map)?;
+    refresh_nat_rules(port, req.inet_gw_map.as_ref())
+}
+
+pub(super) fn refresh_nat_rules(
+    port: &Port<VpcNetwork>,
+    inet_gw_map: Option<&InternetGatewayMap>,
+) -> Result<(), OpteError> {
+    let cfg = &port.network().cfg;
+    let (in_rules, out_rules) = create_nat_rules(cfg, inet_gw_map)?;
     port.set_rules_soft(NAT_LAYER_NAME, in_rules, out_rules)
 }

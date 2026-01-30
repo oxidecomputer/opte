@@ -141,7 +141,7 @@ impl Display for DhcpReplyType {
     }
 }
 
-/// Map a subnet to its next-hop.
+/// Map a subnet to its next hop.
 #[derive(Clone, Copy, Debug)]
 pub struct SubnetRouterPair {
     pub subnet: Ipv4Cidr,
@@ -307,6 +307,29 @@ pub enum IpAddr {
     Ip6(Ipv6Addr),
 }
 
+impl IpAddr {
+    pub const fn is_multicast(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_multicast(),
+            IpAddr::Ip6(v6) => v6.is_multicast(),
+        }
+    }
+
+    /// Return the multicast MAC address associated with this multicast IP address.
+    /// If the IP address is not multicast, None will be returned.
+    ///
+    /// See [RFC 1112 §6.4] for IPv4 and [RFC 2464 §7] for IPv6.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    /// [RFC 2464 §7]: https://www.rfc-editor.org/rfc/rfc2464
+    pub const fn multicast_mac(&self) -> Option<MacAddr> {
+        match self {
+            IpAddr::Ip4(v4) => v4.multicast_mac(),
+            IpAddr::Ip6(v6) => v6.multicast_mac(),
+        }
+    }
+}
+
 impl From<Ipv4Addr> for IpAddr {
     fn from(ipv4: Ipv4Addr) -> Self {
         IpAddr::Ip4(ipv4)
@@ -430,6 +453,42 @@ impl Ipv4Addr {
         // bytes, then we convert that to an in-memory network-order
         // u32.
         u32::from_be_bytes(self.bytes()).to_be()
+    }
+
+    pub const fn is_multicast(&self) -> bool {
+        matches!(self.inner[0], 224..240)
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv4
+    /// address. If the IPv4 address is not multicast, None will be returned.
+    ///
+    /// See [RFC 1112 §6.4] for details.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    pub const fn multicast_mac(&self) -> Option<MacAddr> {
+        if self.is_multicast() {
+            Some(self.unchecked_multicast_mac())
+        } else {
+            None
+        }
+    }
+
+    /// Return the multicast MAC address associated with this multicast IPv4
+    /// address, without checking if this IP address is a multicast address.
+    ///
+    /// See [RFC 1112 §6.4] for details.
+    ///
+    /// [RFC 1112 §6.4]: https://www.rfc-editor.org/rfc/rfc1112#section-6.4
+    pub const fn unchecked_multicast_mac(&self) -> MacAddr {
+        let bytes = &self.inner;
+        MacAddr::from_const([
+            0x01,
+            0x00,
+            0x5e,
+            bytes[1] & 0x7f, // Mask bit 24 to get lower 23 bits
+            bytes[2],
+            bytes[3],
+        ])
     }
 }
 
@@ -640,6 +699,29 @@ impl Ipv6Addr {
         self.inner[0] == 0xFF
     }
 
+    /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix
+    /// (admin-local scope with flags=0) as used by Omicron for underlay multicast.
+    ///
+    /// This specifically checks for the ff04::/16 prefix where:
+    /// - First byte: 0xFF (all multicast addresses)
+    /// - Second byte: 0x04 (flags=0, scope=4 admin-local)
+    ///
+    /// See [RFC 7346] for details on IPv6 multicast address scopes.
+    ///
+    /// Omicron allocates multicast addresses from a /64 subnet within ff04::/16
+    /// for underlay multicast traffic. Specific underlay IPv6 addresses are sent
+    /// from Omicron, with uniqueness guaranteed within the allocated /64 subnet.
+    ///
+    /// [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346.html
+    pub const fn is_admin_scoped_multicast(&self) -> bool {
+        if !self.is_multicast() {
+            return false;
+        }
+
+        // Check for ff04::/16 prefix only
+        self.inner[1] == 0x04
+    }
+
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
@@ -798,6 +880,92 @@ impl Deref for Ipv6Addr {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+/// Newtype for underlay IPv6 multicast addresses.
+///
+/// This newtype wraps admin-scoped (ff04::/16) IPv6 multicast addresses
+/// used for underlay multicast delivery.
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+)]
+#[serde(try_from = "Ipv6Addr", into = "Ipv6Addr")]
+pub struct MulticastUnderlay(Ipv6Addr);
+
+impl MulticastUnderlay {
+    /// Create a new `MulticastUnderlay` from an IPv6 address.
+    ///
+    /// Returns an error if the address is not an admin-scoped multicast address
+    /// (ff04::/16 prefix).
+    pub fn new(addr: Ipv6Addr) -> Result<Self, String> {
+        if !addr.is_admin_scoped_multicast() {
+            return Err(format!(
+                "address must be admin-scoped IPv6 multicast (ff04::/16), got: {addr}"
+            ));
+        }
+        Ok(Self(addr))
+    }
+
+    /// Create a new `MulticastUnderlay` without validation.
+    ///
+    /// Safety: The caller must ensure that `addr` is an admin-scoped IPv6
+    /// multicast address (ff04::/16). Using this with an invalid address
+    /// violates the type's invariant and may lead to undefined behavior.
+    ///
+    /// This is intended for cases where validation has already been performed
+    /// (e.g., after an explicit `is_admin_scoped_multicast()` check) to avoid
+    /// redundant validation overhead.
+    #[inline]
+    pub const fn new_unchecked(addr: Ipv6Addr) -> Self {
+        Self(addr)
+    }
+
+    /// Get the inner IPv6 address.
+    pub fn addr(&self) -> Ipv6Addr {
+        self.0
+    }
+}
+
+impl FromStr for MulticastUnderlay {
+    type Err = String;
+
+    /// Parse an IPv6 address string and validate it's admin-scoped multicast.
+    ///
+    /// Returns an error if the address is not a valid IPv6 address or if it's
+    /// not an admin-scoped multicast address (ff04::/16).
+    fn from_str(val: &str) -> result::Result<Self, Self::Err> {
+        let addr = val.parse::<Ipv6Addr>()?;
+        Self::new(addr)
+    }
+}
+
+impl Display for MulticastUnderlay {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<Ipv6Addr> for MulticastUnderlay {
+    type Error = String;
+
+    fn try_from(addr: Ipv6Addr) -> result::Result<Self, Self::Error> {
+        Self::new(addr)
+    }
+}
+
+impl From<MulticastUnderlay> for Ipv6Addr {
+    fn from(underlay: MulticastUnderlay) -> Self {
+        underlay.0
     }
 }
 
@@ -989,6 +1157,12 @@ impl Display for Ipv4Cidr {
 }
 
 impl Ipv4Cidr {
+    /// IPv4 multicast address range, `224.0.0.0/4`.
+    pub const MCAST: Self = Self {
+        ip: Ipv4Addr::from_const([224, 0, 0, 0]),
+        prefix_len: Ipv4PrefixLen(4),
+    };
+
     pub fn ip(&self) -> Ipv4Addr {
         self.parts().0
     }
@@ -1144,6 +1318,18 @@ impl Ipv6Cidr {
     pub const LINK_LOCAL: Self = Self {
         ip: Ipv6Addr::from_const([0xfe80, 0, 0, 0, 0, 0, 0, 0]),
         prefix_len: Ipv6PrefixLen(64),
+    };
+
+    /// IPv6 multicast address range, `ff00::/8`.
+    pub const MCAST: Self = Self {
+        ip: Ipv6Addr::from_const([0xff00, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(8),
+    };
+
+    /// IPv6 admin-local multicast scope prefix, `ff04::/16`.
+    pub const MCAST_ADMIN_LOCAL: Self = Self {
+        ip: Ipv6Addr::from_const([0xff04, 0, 0, 0, 0, 0, 0, 0]),
+        prefix_len: Ipv6PrefixLen(16),
     };
 
     pub fn new(ip: Ipv6Addr, prefix_len: Ipv6PrefixLen) -> Self {
@@ -1461,11 +1647,45 @@ mod test {
         );
     }
 
+    fn to_ipv4(s: &str) -> Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn test_ipv4_multicast_mac() {
+        assert!(to_ipv4("192.168.1.1").multicast_mac().is_none());
+        assert_eq!(
+            to_ipv4("224.0.0.251").multicast_mac().unwrap(),
+            MacAddr::from([0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]),
+        );
+    }
+
     #[test]
     fn test_ipv6_solicited_node_multicast() {
         let addr = to_ipv6("fd00:abcd:abcd:abcd:abcd:abcd:abcd:abcd");
         let expected = to_ipv6("ff02::1:ffcd:abcd");
         assert_eq!(addr.solicited_node_multicast(), expected);
+    }
+
+    #[test]
+    fn test_ipv6_admin_scoped_multicast() {
+        // Test ff04::/16 prefix (admin-local scope used by Omicron)
+        assert!(to_ipv6("ff04::1").is_admin_scoped_multicast());
+        assert!(to_ipv6("ff04:1234:5678:9abc::1").is_admin_scoped_multicast());
+
+        // Test other administrative scopes (NOT accepted)
+        assert!(!to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local
+        assert!(!to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local
+
+        // Test non-admin scoped multicast addresses
+        assert!(!to_ipv6("ff01::1").is_admin_scoped_multicast()); // interface-local
+        assert!(!to_ipv6("ff02::1").is_admin_scoped_multicast()); // link-local
+        assert!(!to_ipv6("ff0e::1").is_admin_scoped_multicast()); // global
+
+        // Test non-multicast addresses
+        assert!(!to_ipv6("fd00::1").is_admin_scoped_multicast()); // ULA
+        assert!(!to_ipv6("fe80::1").is_admin_scoped_multicast()); // link-local unicast
+        assert!(!to_ipv6("2001:db8::1").is_admin_scoped_multicast()); // global unicast
     }
 
     #[test]
@@ -1497,5 +1717,35 @@ mod test {
         space.clear();
         domain_no_host.push_fqdn(&mut space);
         assert!(space.is_empty());
+    }
+
+    #[test]
+    fn test_multicast_underlay_serde() {
+        // Test valid admin-scoped address (ff04::/16)
+        let valid_addr = to_ipv6("ff04::1");
+        let underlay = MulticastUnderlay::new(valid_addr).unwrap();
+
+        // Serialize with postcard (the serialization format used in opte-api)
+        let serialized = postcard::to_allocvec(&underlay).unwrap();
+
+        // Deserialize - should succeed
+        let deserialized: MulticastUnderlay =
+            postcard::from_bytes(&serialized).unwrap();
+        assert_eq!(deserialized.addr(), valid_addr);
+
+        // Test invalid address (not admin-scoped) - should fail deserialization
+        let invalid_addr = to_ipv6("ff05::1"); // site-local, not admin-scoped
+        let serialized_invalid = postcard::to_allocvec(&invalid_addr).unwrap();
+        let result: Result<MulticastUnderlay, _> =
+            postcard::from_bytes(&serialized_invalid);
+        assert!(result.is_err());
+
+        // Test non-multicast address - should fail deserialization
+        let non_mcast_addr = to_ipv6("fd00::1");
+        let serialized_non_mcast =
+            postcard::to_allocvec(&non_mcast_addr).unwrap();
+        let result: Result<MulticastUnderlay, _> =
+            postcard::from_bytes(&serialized_non_mcast);
+        assert!(result.is_err());
     }
 }
