@@ -16,7 +16,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use bitflags::bitflags;
-use ingot::ip::IpProtocol;
 use core::ffi::CStr;
 use core::fmt;
 use core::mem::MaybeUninit;
@@ -24,6 +23,7 @@ use core::num::NonZeroUsize;
 use core::ops::RangeInclusive;
 use core::ptr;
 use illumos_sys_hdrs::*;
+use ingot::ip::IpProtocol;
 use opte::ddi::mblk::AsMblk;
 use opte::ddi::mblk::MsgBlk;
 use opte::ddi::mblk::MsgBlkChain;
@@ -755,13 +755,13 @@ impl MacFlowDesc {
                 &flow_ac,
             )
         } {
-            0 => Ok(MacFlow {name, parent}),
+            0 => Ok(MacFlow { name, parent }),
             err => {
                 if let Some(ptr) = parent {
-                    _ = unsafe {Arc::from_raw(ptr)};
+                    _ = unsafe { Arc::from_raw(ptr) };
                 }
                 Err(FlowCreateError::CreateFailed(flow_name, err))
-            },
+            }
         }
     }
 }

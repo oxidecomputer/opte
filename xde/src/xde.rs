@@ -164,7 +164,6 @@ use crate::mac::MacClient;
 use crate::mac::MacEmul;
 use crate::mac::MacFlow;
 use crate::mac::MacHandle;
-use crate::mac::MacSiphon;
 use crate::mac::MacTxFlags;
 use crate::mac::OffloadInfo;
 use crate::mac::TcpLsoFlags;
@@ -195,12 +194,10 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use ingot::ip::IpProtocol;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::num::NonZeroUsize;
 use core::ptr;
-use core::ptr::NonNull;
 use core::ptr::addr_of;
 use core::ptr::addr_of_mut;
 use core::time::Duration;
@@ -212,6 +209,7 @@ use ingot::geneve::GeneveMut;
 use ingot::geneve::GeneveOpt;
 use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
+use ingot::ip::IpProtocol;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
 use opte::ExecCtx;
@@ -1697,8 +1695,12 @@ fn create_underlay_port(
     //
     // There is a fe_refcnt and fe_user_refcnt, I'll have to look at
     // those.
-    let mut flow = flow_desc
-        .new_flow(format!("{link_name}_xde").as_str(), link_id, Some((xde_rx, stream.clone())))
+    let flow = flow_desc
+        .new_flow(
+            format!("{link_name}_xde").as_str(),
+            link_id,
+            Some((xde_rx, stream.clone())),
+        )
         .map_err(|e| OpteError::System {
             errno: EFAULT,
             msg: format!("{e}"),
@@ -3230,7 +3232,7 @@ unsafe extern "C" fn xde_rx(
             .expect("packet was received from siphon with a NULL argument")
     };
 
-    let Ok(mut chain) = unsafe { MsgBlkChain::new(mp_chain) } else {
+    let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
             None,
             Direction::In,
@@ -3256,7 +3258,7 @@ unsafe extern "C" fn xde_rx(
     let mut postbox = Postbox::new();
 
     while let Some(pkt) = chain.pop_front() {
-        _ = xde_rx_one(&stream.stream, pkt, &cpu_state, &mut postbox);
+        _ = xde_rx_one(&stream.stream, pkt, &devmap, &mut postbox);
     }
 
     devmap.deliver_all(postbox);

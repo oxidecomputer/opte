@@ -676,7 +676,6 @@ pub const MAC_LSO_EMUL: u32 = 1 << 2;
 // ust/common/sys/mac_flow.h
 // ======================================================================
 
-
 bitflags::bitflags! {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FlowActionFlags: u32 {
