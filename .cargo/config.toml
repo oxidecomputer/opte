@@ -1,6 +1,7 @@
 [alias]
 xtask = "run --package xtask --"
 ubench = "bench --package opte-bench --bench userland --profile release-lto --"
+mbench = "bench --package opte-bench --bench multicast --profile release-lto --"
 kbench = "bench --package opte-bench --bench xde --"
 
 [env]

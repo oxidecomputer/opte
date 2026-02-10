@@ -21,12 +21,14 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
 use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
 use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
@@ -81,9 +83,9 @@ fn test_subscribe_ff04_direct_without_m2p() -> Result<()> {
         .expect("missing multicast subscription entry for ff04 group");
     let p0 = topol.nodes[0].port.name().to_string();
     assert!(
-        entry.ports.contains(&p0),
+        entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     Ok(())
@@ -97,6 +99,7 @@ fn test_subscribe_nonexistent_port() -> Result<()> {
     let res = hdl.mcast_subscribe(&McastSubscribeReq {
         port_name: "this_port_does_not_exist_anywhere".to_string(),
         group: mcast_group.into(),
+        filter: SourceFilter::default(),
     });
 
     assert!(
@@ -116,6 +119,7 @@ fn test_subscribe_unicast_ip_as_group() -> Result<()> {
     let res = hdl.mcast_subscribe(&McastSubscribeReq {
         port_name: topol.nodes[0].port.name().to_string(),
         group: unicast_ip.into(),
+        filter: SourceFilter::default(),
     });
 
     let err = res.expect_err("Expected error when subscribing to unicast IP");
@@ -147,10 +151,11 @@ fn test_double_subscribe() -> Result<()> {
     // Use node B's underlay address as the switch unicast address for routing.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
@@ -177,9 +182,9 @@ fn test_double_subscribe() -> Result<()> {
         .expect("missing multicast subscription entry for group");
     let p1 = topol.nodes[1].port.name().to_string();
     assert!(
-        entry.ports.contains(&p1),
+        entry.has_port(&p1),
         "expected {p1} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     let filter =
@@ -243,10 +248,11 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
     // Use node B's underlay address as the switch unicast address for routing.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
@@ -306,10 +312,11 @@ fn test_set_mcast_fwd_rejects_non_default_vni() -> Result<()> {
 
     let res = hdl.set_mcast_fwd(&oxide_vpc::api::SetMcastForwardingReq {
         underlay,
-        next_hops: vec![(
-            NextHopV6::new(fake_switch_addr, bad_vni),
-            Replication::External,
-        )],
+        next_hops: vec![oxide_vpc::api::McastForwardingNextHop {
+            next_hop: NextHopV6::new(fake_switch_addr, bad_vni),
+            replication: Replication::External,
+            source_filter: SourceFilter::default(),
+        }],
     });
 
     assert!(res.is_err(), "set_mcast_fwd should reject non-default VNI");
@@ -336,10 +343,11 @@ fn test_set_mcast_fwd_rejects_multicast_next_hop() -> Result<()> {
 
     let res = hdl.set_mcast_fwd(&oxide_vpc::api::SetMcastForwardingReq {
         underlay,
-        next_hops: vec![(
-            NextHopV6::new(bad_next_hop, vni),
-            Replication::External,
-        )],
+        next_hops: vec![oxide_vpc::api::McastForwardingNextHop {
+            next_hop: NextHopV6::new(bad_next_hop, vni),
+            replication: Replication::External,
+            source_filter: SourceFilter::default(),
+        }],
     });
 
     assert!(res.is_err(), "set_mcast_fwd should reject multicast next hop");
@@ -402,10 +410,11 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     let switch_a = topol.nodes[0].port.underlay_ip().into();
     let switch_b = topol.nodes[1].port.underlay_ip().into();
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(switch_a, vni),
-        Replication::External,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(switch_a, vni),
+        replication: Replication::External,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let hdl = OpteHdl::open()?;
     let fwd = hdl.dump_mcast_fwd()?;
@@ -415,13 +424,14 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
         .find(|e| e.underlay == underlay)
         .expect("missing forwarding entry");
     assert_eq!(entry.next_hops.len(), 1, "Expected 1 next hop after first set");
-    assert_eq!(entry.next_hops[0].0.addr, switch_a);
-    assert_eq!(entry.next_hops[0].1, Replication::External);
+    assert_eq!(entry.next_hops[0].next_hop.addr, switch_a);
+    assert_eq!(entry.next_hops[0].replication, Replication::External);
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(switch_b, vni),
-        Replication::Underlay,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(switch_b, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let fwd = hdl.dump_mcast_fwd()?;
     let entry = fwd
@@ -438,29 +448,30 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     let nexthop_a = entry
         .next_hops
         .iter()
-        .find(|(nexthop, _)| nexthop.addr == switch_a)
+        .find(|hop| hop.next_hop.addr == switch_a)
         .expect("switch_a not found");
     let nexthop_b = entry
         .next_hops
         .iter()
-        .find(|(nexthop, _)| nexthop.addr == switch_b)
+        .find(|hop| hop.next_hop.addr == switch_b)
         .expect("switch_b not found");
 
     assert_eq!(
-        nexthop_a.1,
+        nexthop_a.replication,
         Replication::External,
         "switch_a should have External"
     );
     assert_eq!(
-        nexthop_b.1,
+        nexthop_b.replication,
         Replication::Underlay,
         "switch_b should have Underlay"
     );
 
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(switch_a, vni),
-        Replication::Both,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(switch_a, vni),
+        replication: Replication::Both,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let fwd = hdl.dump_mcast_fwd()?;
     let entry = fwd
@@ -477,21 +488,21 @@ fn test_multiple_nexthops_accumulate() -> Result<()> {
     let nexthop_a = entry
         .next_hops
         .iter()
-        .find(|(nexthop, _)| nexthop.addr == switch_a)
+        .find(|hop| hop.next_hop.addr == switch_a)
         .expect("switch_a not found");
     let nexthop_b = entry
         .next_hops
         .iter()
-        .find(|(nexthop, _)| nexthop.addr == switch_b)
+        .find(|hop| hop.next_hop.addr == switch_b)
         .expect("switch_b not found");
 
     assert_eq!(
-        nexthop_a.1,
+        nexthop_a.replication,
         Replication::Both,
         "switch_a should now have Both (updated)"
     );
     assert_eq!(
-        nexthop_b.1,
+        nexthop_b.replication,
         Replication::Underlay,
         "switch_b should still have Underlay"
     );
@@ -538,19 +549,19 @@ fn test_unsubscribe_all() -> Result<()> {
     let p0 = topol.nodes[0].port.name().to_string();
     let p1 = topol.nodes[1].port.name().to_string();
     assert_eq!(
-        entry.ports.len(),
+        entry.subscribers.len(),
         2,
         "Expected 2 ports subscribed before unsubscribe_all"
     );
     assert!(
-        entry.ports.contains(&p0),
+        entry.has_port(&p0),
         "expected {p0} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
     assert!(
-        entry.ports.contains(&p1),
+        entry.has_port(&p1),
         "expected {p1} to be subscribed; got {:?}",
-        entry.ports
+        entry.subscribers
     );
 
     // Unsubscribe all ports from the group
@@ -617,10 +628,11 @@ fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
 
     // Route via node B's underlay address to select the egress link.
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Underlay,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic via Multicast target
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
@@ -648,7 +660,7 @@ fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
         "Expected 1 next hop in forwarding table"
     );
     assert_eq!(
-        entry.next_hops[0].1,
+        entry.next_hops[0].replication,
         Replication::Underlay,
         "Expected Underlay replication mode"
     );
@@ -754,9 +766,9 @@ fn test_multiple_simultaneous_groups() -> Result<()> {
         .find(|e| e.underlay == underlay_a)
         .expect("missing subscription entry for group A");
     assert!(
-        entry_a.ports.contains(&p0) && !entry_a.ports.contains(&p1),
+        entry_a.has_port(&p0) && !entry_a.has_port(&p1),
         "group A should have only node 0; got {:?}",
-        entry_a.ports
+        entry_a.subscribers
     );
 
     // Group B should have only node 1
@@ -766,22 +778,24 @@ fn test_multiple_simultaneous_groups() -> Result<()> {
         .find(|e| e.underlay == underlay_b)
         .expect("missing subscription entry for group B");
     assert!(
-        entry_b.ports.contains(&p1) && !entry_b.ports.contains(&p0),
+        entry_b.has_port(&p1) && !entry_b.has_port(&p0),
         "group B should have only node 1; got {:?}",
-        entry_b.ports
+        entry_b.subscribers
     );
 
     // Set up forwarding for both groups (needed for Tx path)
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
     let fake_switch = topol.nodes[1].port.underlay_ip().into();
-    mcast_a.set_forwarding(vec![(
-        NextHopV6::new(fake_switch, vni),
-        Replication::Underlay,
-    )])?;
-    mcast_b.set_forwarding(vec![(
-        NextHopV6::new(fake_switch, vni),
-        Replication::Underlay,
-    )])?;
+    mcast_a.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
+    mcast_b.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Start snoops on node B (we send from node 0, so we snoop on node 1)
     let dev_b = topol.nodes[1].port.name().to_string();
