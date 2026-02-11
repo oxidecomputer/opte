@@ -1700,6 +1700,13 @@ fn create_underlay_port(
             format!("{link_name}_xde").as_str(),
             link_id,
             Some((xde_rx, stream.clone())),
+            // We create an RX-only action here since the above match can only
+            // catch inbound traffic anyway (illumos does not [yet] support source
+            // and destination port), and we do not want to impose any bandwidth
+            // limits on XDE.
+            // This also prevents us (and the underlay) from paying any flowtree
+            // walk cost in the Tx path.
+            true,
         )
         .map_err(|e| OpteError::System {
             errno: EFAULT,

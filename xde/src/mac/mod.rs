@@ -729,15 +729,22 @@ impl MacFlowDesc {
         flow_name: &'a str,
         link_id: LinkId,
         action: Option<(mac_direct_rx_fn, Arc<P>)>,
+        rx_only: bool,
     ) -> Result<MacFlow<P>, FlowCreateError<'a>> {
         let name = CString::new(flow_name)
             .map_err(|_| FlowCreateError::InvalidFlowName(flow_name))?;
         let desc = self.to_desc();
 
+        let mut flags = if rx_only {
+            FlowActionFlags::RX_ONLY
+        } else {
+            FlowActionFlags::empty()
+        };
+
         let mut flow_ac = flow_action_t::default();
         let parent = if let Some((fun, val)) = action {
             let ptr = Arc::into_raw(val);
-            flow_ac.fa_flags = FlowActionFlags::ACTION.bits();
+            flags |= FlowActionFlags::ACTION;
             flow_ac.fa_direct_rx_fn = Some(fun);
             flow_ac.fa_direct_rx_arg = ptr as *mut c_void;
 
@@ -745,6 +752,8 @@ impl MacFlowDesc {
         } else {
             None
         };
+
+        flow_ac.fa_flags = flags.bits();
 
         match unsafe {
             mac_link_flow_add_action(
