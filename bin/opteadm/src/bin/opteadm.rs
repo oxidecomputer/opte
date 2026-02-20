@@ -68,6 +68,7 @@ use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::print::print_m2p;
 use oxide_vpc::print::print_mcast_fwd;
 use oxide_vpc::print::print_mcast_subs;
 use oxide_vpc::print::print_v2b;
@@ -309,6 +310,9 @@ enum Command {
 
     /// Dump multicast subscriptions (group -> ports on this sled)
     DumpMcastSubs,
+
+    /// Dump M2P (multicast group -> underlay multicast) mappings
+    DumpM2p,
 
     /// Subscribe a port to a multicast group
     ///
@@ -984,6 +988,10 @@ fn main() -> anyhow::Result<()> {
 
         Command::DumpMcastSubs => {
             print_mcast_subs(&hdl.dump_mcast_subs()?)?;
+        }
+
+        Command::DumpM2p => {
+            print_m2p(&hdl.dump_m2p()?)?;
         }
 
         Command::McastSubscribe { port, group } => {

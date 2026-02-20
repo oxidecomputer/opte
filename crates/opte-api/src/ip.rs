@@ -340,7 +340,9 @@ impl IpAddr {
         }
     }
 
-    /// Returns true if this is a broadcast address (IPv4 only, IPv6 has no broadcast).
+    /// Returns true if this is a broadcast address.
+    ///
+    /// Always false for IPv6 addresses, which have no broadcast domain.
     pub const fn is_broadcast(&self) -> bool {
         match self {
             IpAddr::Ip4(v4) => v4.is_broadcast(),
@@ -424,21 +426,34 @@ impl FromStr for IpAddr {
 }
 
 /// An IPv4 address.
-#[derive(
-    Clone,
-    Copy,
-    Default,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
+///
+/// Manual `Ord`/`PartialOrd` implementations compare via `u32` rather than
+/// byte-by-byte, producing a single comparison instruction instead of
+/// `memcmp` or a per-byte loop. The ordering is identical (network byte
+/// order is big-endian), but the generated code is significantly faster
+/// for BTreeSet/BTreeMap lookups.
+///
+/// See `VniMac` in `xde::dev_map` for the same rationale.
+#[derive(Clone, Copy, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
+}
+
+impl Ord for Ipv4Addr {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        let a = u32::from_be_bytes(self.inner);
+        let b = u32::from_be_bytes(other.inner);
+        a.cmp(&b)
+    }
+}
+
+impl PartialOrd for Ipv4Addr {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Ipv4Addr {
@@ -654,22 +669,31 @@ impl Deref for Ipv4Addr {
 }
 
 /// An IPv6 address.
+///
+/// See [`Ipv4Addr`] for the rationale behind manual `Ord`/`PartialOrd`.
+/// Comparisons use `(u64, u64)` to avoid 16-byte `memcmp`.
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    Deserialize,
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize,
 )]
 #[repr(C)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
+}
+
+impl Ord for Ipv6Addr {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        let a = self.as_u64_pair();
+        let b = other.as_u64_pair();
+        a.cmp(&b)
+    }
+}
+
+impl PartialOrd for Ipv6Addr {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Ipv6Addr {
@@ -798,6 +822,32 @@ impl Ipv6Addr {
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
+    }
+
+    /// Return the address as a `(high, low)` pair of big-endian `u64`s.
+    #[inline]
+    fn as_u64_pair(&self) -> (u64, u64) {
+        let hi = u64::from_be_bytes([
+            self.inner[0],
+            self.inner[1],
+            self.inner[2],
+            self.inner[3],
+            self.inner[4],
+            self.inner[5],
+            self.inner[6],
+            self.inner[7],
+        ]);
+        let lo = u64::from_be_bytes([
+            self.inner[8],
+            self.inner[9],
+            self.inner[10],
+            self.inner[11],
+            self.inner[12],
+            self.inner[13],
+            self.inner[14],
+            self.inner[15],
+        ]);
+        (hi, lo)
     }
 
     /// Return the address after applying the network mask.

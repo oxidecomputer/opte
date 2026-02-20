@@ -690,6 +690,15 @@ pub struct DumpVirt2BoundaryResp {
 
 impl CmdOk for DumpVirt2BoundaryResp {}
 
+/// Response for dumping M2P (multicast group -> underlay multicast) mappings.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DumpMcast2PhysResp {
+    pub ip4: Vec<(Ipv4Addr, MulticastUnderlay)>,
+    pub ip6: Vec<(Ipv6Addr, MulticastUnderlay)>,
+}
+
+impl CmdOk for DumpMcast2PhysResp {}
+
 /// Set mapping from VPC IP to physical network destination.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2PhysReq {
@@ -801,17 +810,18 @@ pub struct SetMcastForwardingReq {
 
 /// A forwarding entry for a single next hop with its aggregated source filter.
 ///
-/// The source filter is the union of all subscriber filters on the destination
-/// sled. Omicron computes this aggregation. OPTE checks the filter before
-/// forwarding to avoid sending packets to sleds where all subscribers would
-/// filter them.
+/// The source filter is the union of all subscriber filters across every
+/// destination reachable via this next hop (sleds behind the switch port,
+/// external uplinks, etc.). Omicron computes this aggregation. OPTE checks
+/// the filter before forwarding to avoid sending packets to a next hop
+/// where no reachable subscriber would accept the source.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct McastForwardingNextHop {
     /// The unicast IPv6 address of the switch endpoint (for routing).
     pub next_hop: NextHopV6,
     /// Tx-only instruction for switch port group replication.
     pub replication: Replication,
-    /// Aggregated source filter for this destination sled.
+    /// Aggregated source filter for destinations reachable via this next hop.
     /// Default (Exclude with empty sources) means accept any source.
     #[serde(default)]
     pub source_filter: SourceFilter,
@@ -905,34 +915,53 @@ pub enum FilterMode {
 ///
 /// Each port subscribed to a multicast group can have its own source filter,
 /// allowing fine-grained control over which sources are accepted:
-/// - `EXCLUDE()`: accept any source (*, G)
-/// - `EXCLUDE(S1, S2)`: accept any except listed
-/// - `INCLUDE(S1, S2)`: accept only listed sources
-/// - `INCLUDE()`: accept nothing
-#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
-pub struct SourceFilter {
-    pub mode: FilterMode,
-    pub sources: BTreeSet<IpAddr>,
+/// - `Exclude(empty)`: accept any source (*, G)
+/// - `Exclude({S1, S2})`: accept any except listed
+/// - `Include({S1, S2})`: accept only listed sources
+/// - `Include(empty)`: accept nothing
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SourceFilter {
+    /// Accept packets only from sources in the set.
+    /// Empty set means no sources are accepted.
+    Include(BTreeSet<IpAddr>),
+    /// Accept packets from any source except those in the set.
+    /// Empty set means all sources are accepted (*, G).
+    Exclude(BTreeSet<IpAddr>),
+}
+
+impl Default for SourceFilter {
+    fn default() -> Self {
+        SourceFilter::Exclude(BTreeSet::new())
+    }
 }
 
 impl SourceFilter {
     /// Returns true if this filter allows packets from the given source.
     pub fn allows(&self, src: IpAddr) -> bool {
-        match self.mode {
-            FilterMode::Include => self.sources.contains(&src),
-            FilterMode::Exclude => {
-                // Fast path for (*, G) subscriptions: EXCLUDE() with empty
-                // sources is the default and most common case encountered.
-                // Checking is_empty() avoids the BTreeSet lookup on every
-                // packet.
-                self.sources.is_empty() || !self.sources.contains(&src)
-            }
+        match self {
+            SourceFilter::Include(set) => set.contains(&src),
+            SourceFilter::Exclude(set) => !set.contains(&src),
         }
     }
 
     /// Returns true if this filter accepts any source (*, G).
     pub fn accepts_any(&self) -> bool {
-        matches!(self.mode, FilterMode::Exclude) && self.sources.is_empty()
+        matches!(self, SourceFilter::Exclude(s) if s.is_empty())
+    }
+
+    /// Return the filter mode.
+    pub fn mode(&self) -> FilterMode {
+        match self {
+            SourceFilter::Include(_) => FilterMode::Include,
+            SourceFilter::Exclude(_) => FilterMode::Exclude,
+        }
+    }
+
+    /// Return a reference to the source set.
+    pub fn sources(&self) -> &BTreeSet<IpAddr> {
+        match self {
+            SourceFilter::Include(s) | SourceFilter::Exclude(s) => s,
+        }
     }
 }
 

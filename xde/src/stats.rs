@@ -93,9 +93,6 @@ pub struct XdeStats {
     mcast_tx_source_filtered: KStatU64,
     /// The number of multicast Rx packets blocked by source filtering.
     mcast_rx_source_filtered: KStatU64,
-    /// The number of multicast Tx packets dropped because no inner IP header
-    /// was found (non-IP frames cannot be source-filtered).
-    mcast_tx_no_inner_ip: KStatU64,
     /// The number of multicast Tx packets not forwarded to a next hop because
     /// the aggregated source filter for that sled rejected the source.
     mcast_tx_fwd_source_filtered: KStatU64,
@@ -152,10 +149,6 @@ impl XdeStats {
 
     pub fn mcast_rx_source_filtered(&self) -> &KStatU64 {
         &self.mcast_rx_source_filtered
-    }
-
-    pub fn mcast_tx_no_inner_ip(&self) -> &KStatU64 {
-        &self.mcast_tx_no_inner_ip
     }
 
     pub fn mcast_tx_fwd_source_filtered(&self) -> &KStatU64 {

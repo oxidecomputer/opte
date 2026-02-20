@@ -278,6 +278,7 @@ use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DetachSubnetResp;
+use oxide_vpc::api::DumpMcast2PhysResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
@@ -434,9 +435,6 @@ unsafe extern "C" {
     // Multicast dataplane problem probes
     pub safe fn __dtrace_probe_mcast__tx__pullup__fail(len: uintptr_t);
     pub safe fn __dtrace_probe_mcast__rx__pullup__fail(len: uintptr_t);
-    /// Fires when a multicast Tx packet is dropped because no inner IP header
-    /// was found (non-IP frames cannot be source-filtered).
-    pub safe fn __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr: uintptr_t);
     pub safe fn __dtrace_probe_mcast__no__fwd__entry(
         underlay: *const oxide_vpc::api::Ipv6Addr,
         vni: uintptr_t,
@@ -1112,6 +1110,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::ClearMcast2Phys => {
             let resp = clear_m2p_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpMcast2Phys => {
+            let resp = dump_m2p_hdlr();
             hdlr_resp(&mut env, resp)
         }
     }
@@ -2361,7 +2364,7 @@ fn handle_mcast_tx<'a>(
                     dst_ptr,
                     ctx.vni.as_u32() as uintptr_t,
                     dev.port.name_cstr().as_ptr() as uintptr_t,
-                    filter.mode as uintptr_t,
+                    filter.mode() as uintptr_t,
                 );
                 continue;
             }
@@ -2418,10 +2421,9 @@ fn handle_mcast_tx<'a>(
         // We found forwarding entries, replicate to each next hop
         for (next_hop, (replication, source_filter)) in next_hops.iter() {
             // Check aggregated source filter before forwarding.
-            // This filter is the union of all subscriber filters on the
-            // destination sled. If no subscriber would accept this source,
-            // skip forwarding to avoid sending packets across the network
-            // just to have them filtered at the destination.
+            // This filter is the union of all subscriber filters for
+            // this next hop. If no subscriber would accept this source,
+            // skip forwarding.
             if !source_filter.allows(ctx.inner_src) {
                 let xde = get_xde_state();
                 xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
@@ -2433,7 +2435,7 @@ fn handle_mcast_tx<'a>(
                     dst_ptr,
                     ctx.vni.as_u32() as uintptr_t,
                     &next_hop.addr as *const _ as uintptr_t,
-                    source_filter.mode as uintptr_t,
+                    source_filter.mode() as uintptr_t,
                 );
                 continue;
             }
@@ -2636,7 +2638,7 @@ fn handle_mcast_rx(
                     dst_ptr,
                     ctx.vni.as_u32() as uintptr_t,
                     dev.port.name_cstr().as_ptr() as uintptr_t,
-                    filter.mode as uintptr_t,
+                    filter.mode() as uintptr_t,
                 );
                 continue;
             }
@@ -2947,14 +2949,9 @@ fn xde_mc_tx_one<'a>(
                 let inner_src = match inner_src_ip {
                     Some(ip) => ip,
                     None => {
-                        // No inner L3 header. Multicast source filtering requires
-                        // an IP source address; drop non-IP frames.
                         opte::engine::dbg!(
                             "mcast Tx: no inner L3 for source filtering"
                         );
-                        let xde = get_xde_state();
-                        xde.stats.vals.mcast_tx_no_inner_ip().incr(1);
-                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
                         return;
                     }
                 };
@@ -3836,6 +3833,11 @@ fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     Ok(NoResp::default())
 }
 
+fn dump_m2p_hdlr() -> Result<DumpMcast2PhysResp, OpteError> {
+    let state = get_xde_state();
+    Ok(state.m2p.dump())
+}
+
 #[unsafe(no_mangle)]
 fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2BoundaryReq = env.copy_in_req()?;
@@ -4040,7 +4042,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         }
 
         // Validate source filter: sources must contain valid unicast addresses
-        for src in &req.filter.sources {
+        for src in req.filter.sources() {
             if src.is_multicast() {
                 return Err(OpteError::BadState(format!(
                     "source filter address {src} is multicast"

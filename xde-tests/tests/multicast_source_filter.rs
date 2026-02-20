@@ -18,7 +18,6 @@
 
 use anyhow::Result;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
-use oxide_vpc::api::FilterMode;
 use oxide_vpc::api::IpAddr;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
@@ -39,18 +38,12 @@ use xde_tests::UNDERLAY_TEST_DEVICE;
 
 /// Create an INCLUDE filter with specified sources.
 fn include_filter(sources: impl IntoIterator<Item = IpAddr>) -> SourceFilter {
-    SourceFilter {
-        mode: FilterMode::Include,
-        sources: sources.into_iter().collect(),
-    }
+    SourceFilter::Include(sources.into_iter().collect())
 }
 
 /// Create an EXCLUDE filter with specified sources.
 fn exclude_filter(sources: impl IntoIterator<Item = IpAddr>) -> SourceFilter {
-    SourceFilter {
-        mode: FilterMode::Exclude,
-        sources: sources.into_iter().collect(),
-    }
+    SourceFilter::Exclude(sources.into_iter().collect())
 }
 
 #[test]
@@ -275,7 +268,7 @@ fn test_include_empty_blocks_all() -> Result<()> {
 
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            include_filter(std::iter::empty::<IpAddr>()),
+            include_filter([]),
         )?;
 
         let filter =
@@ -306,7 +299,7 @@ fn test_include_empty_blocks_all() -> Result<()> {
 
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            include_filter(std::iter::empty::<IpAddr>()),
+            include_filter([]),
         )?;
 
         let filter =
@@ -357,7 +350,7 @@ fn test_exclude_empty_allows_all() -> Result<()> {
 
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            exclude_filter(std::iter::empty::<IpAddr>()),
+            exclude_filter([]),
         )?;
 
         let filter =
@@ -394,7 +387,7 @@ fn test_exclude_empty_allows_all() -> Result<()> {
 
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            exclude_filter(std::iter::empty::<IpAddr>()),
+            exclude_filter([]),
         )?;
 
         let filter =
@@ -675,7 +668,7 @@ fn test_filter_update_via_resubscribe() -> Result<()> {
         // Case: resubscribe with EXCLUDE() allows delivery again
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            exclude_filter(std::iter::empty::<IpAddr>()),
+            exclude_filter([]),
         )?;
 
         let mut snoop3 = SnoopGuard::start(&dev_name_b, &filter)?;
@@ -741,7 +734,7 @@ fn test_filter_update_via_resubscribe() -> Result<()> {
         // Case: resubscribe with EXCLUDE() allows delivery again
         topol.nodes[1].port.subscribe_multicast_filtered(
             mcast_group.into(),
-            exclude_filter(std::iter::empty::<IpAddr>()),
+            exclude_filter([]),
         )?;
 
         let mut snoop3 = SnoopGuard::start(&dev_name_b, &filter)?;

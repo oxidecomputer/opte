@@ -9,11 +9,11 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
+use crate::api::DumpMcast2PhysResp;
 use crate::api::DumpMcastForwardingResp;
 use crate::api::DumpMcastSubscriptionsResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
-use crate::api::FilterMode;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
@@ -215,6 +215,38 @@ pub fn print_mcast_subs_into(
     t.flush()
 }
 
+/// Print a [`DumpMcast2PhysResp`].
+pub fn print_m2p(resp: &DumpMcast2PhysResp) -> std::io::Result<()> {
+    print_m2p_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpMcast2PhysResp`] into a given writer.
+pub fn print_m2p_into(
+    writer: &mut impl Write,
+    resp: &DumpMcast2PhysResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Multicast to Physical Mappings (M2P)")?;
+    write_hrb(&mut t)?;
+
+    writeln!(t, "\nIPv4 groups")?;
+    write_hr(&mut t)?;
+    writeln!(t, "OVERLAY GROUP\tUNDERLAY MCAST")?;
+    for (group, underlay) in &resp.ip4 {
+        writeln!(t, "{}\t{underlay}", std::net::Ipv4Addr::from(group.bytes()))?;
+    }
+    t.flush()?;
+
+    writeln!(t, "\nIPv6 groups")?;
+    write_hr(&mut t)?;
+    writeln!(t, "OVERLAY GROUP\tUNDERLAY MCAST")?;
+    for (group, underlay) in &resp.ip6 {
+        writeln!(t, "{}\t{underlay}", std::net::Ipv6Addr::from(group.bytes()))?;
+    }
+    writeln!(t)?;
+    t.flush()
+}
+
 /// Write a source filter to the given writer.
 ///
 /// Uses notation inspired by RFC 3376 (IGMPv3) and RFC 3810 (MLDv2):
@@ -229,20 +261,19 @@ fn write_source_filter(
     t: &mut impl Write,
     filter: &SourceFilter,
 ) -> std::io::Result<()> {
-    let mode = match filter.mode {
-        FilterMode::Include => "INCLUDE",
-        FilterMode::Exclude => "EXCLUDE",
+    let (mode, sources) = match filter {
+        SourceFilter::Include(s) => ("INCLUDE", s),
+        SourceFilter::Exclude(s) => ("EXCLUDE", s),
     };
-    if filter.sources.is_empty() {
-        if matches!(filter.mode, FilterMode::Exclude) {
-            write!(t, "{mode}() (any)")
-        } else {
-            write!(t, "{mode}() (none)")
+    if sources.is_empty() {
+        match filter {
+            SourceFilter::Exclude(_) => write!(t, "{mode}() (any)"),
+            SourceFilter::Include(_) => write!(t, "{mode}() (none)"),
         }
     } else {
         write!(t, "{mode}(")?;
         let mut first = true;
-        for source in &filter.sources {
+        for source in sources {
             if !first {
                 write!(t, ", ")?;
             }
