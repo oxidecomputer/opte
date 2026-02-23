@@ -426,20 +426,18 @@ impl FromStr for IpAddr {
 }
 
 /// An IPv4 address.
-///
-/// Manual `Ord`/`PartialOrd` implementations compare via `u32` rather than
-/// byte-by-byte, producing a single comparison instruction instead of
-/// `memcmp` or a per-byte loop. The ordering is identical (network byte
-/// order is big-endian), but the generated code is significantly faster
-/// for BTreeSet/BTreeMap lookups.
-///
-/// See `VniMac` in `xde::dev_map` for the same rationale.
 #[derive(Clone, Copy, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
 
+// Compare via `u32` rather than byte-by-byte, producing a single comparison
+// instruction instead of `memcmp` or a per-byte loop. The ordering is
+// identical (network byte order is big-endian), but the generated code is
+// significantly faster for BTreeSet/BTreeMap lookups.
+//
+// See `VniMac` in `xde::dev_map` for the same rationale.
 impl Ord for Ipv4Addr {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -669,9 +667,6 @@ impl Deref for Ipv4Addr {
 }
 
 /// An IPv6 address.
-///
-/// See [`Ipv4Addr`] for the rationale behind manual `Ord`/`PartialOrd`.
-/// Comparisons use `(u64, u64)` to avoid 16-byte `memcmp`.
 #[derive(
     Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize,
 )]
@@ -680,6 +675,8 @@ pub struct Ipv6Addr {
     inner: [u8; 16],
 }
 
+// Same rationale as `Ipv4Addr`: compare via `(u64, u64)` to avoid
+// 16-byte `memcmp`.
 impl Ord for Ipv6Addr {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
