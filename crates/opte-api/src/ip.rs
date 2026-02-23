@@ -426,20 +426,18 @@ impl FromStr for IpAddr {
 }
 
 /// An IPv4 address.
-///
-/// Manual `Ord`/`PartialOrd` implementations compare via `u32` rather than
-/// byte-by-byte, producing a single comparison instruction instead of
-/// `memcmp` or a per-byte loop. The ordering is identical (network byte
-/// order is big-endian), but the generated code is significantly faster
-/// for BTreeSet/BTreeMap lookups.
-///
-/// See `VniMac` in `xde::dev_map` for the same rationale.
 #[derive(Clone, Copy, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
 
+// Compare via `u32` rather than byte-by-byte, producing a single comparison
+// instruction instead of `memcmp` or a per-byte loop. The ordering is
+// identical (network byte order is big-endian), but the generated code is
+// significantly faster for BTreeSet/BTreeMap lookups.
+//
+// See `VniMac` in `xde::dev_map` for the same rationale.
 impl Ord for Ipv4Addr {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -669,9 +667,6 @@ impl Deref for Ipv4Addr {
 }
 
 /// An IPv6 address.
-///
-/// See [`Ipv4Addr`] for the rationale behind manual `Ord`/`PartialOrd`.
-/// Comparisons use `(u64, u64)` to avoid 16-byte `memcmp`.
 #[derive(
     Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize,
 )]
@@ -680,6 +675,8 @@ pub struct Ipv6Addr {
     inner: [u8; 16],
 }
 
+// Same rationale as `Ipv4Addr`: compare via `(u64, u64)` to avoid
+// 16-byte `memcmp`.
 impl Ord for Ipv6Addr {
     #[inline]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -805,9 +802,11 @@ impl Ipv6Addr {
     ///
     /// See [RFC 7346] for details on IPv6 multicast address scopes.
     ///
-    /// Omicron allocates multicast addresses from a /64 subnet within ff04::/16
-    /// for underlay multicast traffic. Specific underlay IPv6 addresses are sent
-    /// from Omicron, with uniqueness guaranteed within the allocated /64 subnet.
+    /// Omicron allocates multicast addresses from a /64 subnet within
+    /// ff04::/16, and the narrower /64 constraint is enforced upstream
+    /// by maghemite and dendrite. OPTE need not be aware of the
+    /// specific allocation policy, validating the /16 scope is sufficient
+    /// for correct packet handling at this layer.
     ///
     /// [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346.html
     pub const fn is_admin_scoped_multicast(&self) -> bool {
