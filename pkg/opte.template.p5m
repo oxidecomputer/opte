@@ -1,6 +1,6 @@
 <transform dir file link hardlink -> default variant.opensolaris.zone global>
 set name=pkg.fmri \
-    value=pkg://%PUBLISHER%/driver/network/opte@0.%API_VSN%.%COMMIT_COUNT%
+    value=pkg://%PUBLISHER%/driver/network/opte@0.%API_VSN%.%COMMIT_COUNT%-%HELIOS_RELEASE%.%CVER%
 set name=pkg.summary value="The Oxide Packet Transformation Engine"
 set name=info.classification \
     value=org.opensolaris.category.2008:Drivers/Networking
