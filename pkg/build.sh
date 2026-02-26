@@ -1,7 +1,9 @@
 #!/bin/bash
 
-export PUBLISHER=helios-dev
+export PUBLISHER=helios
+export HELIOS_RELEASE=`awk -F= '/^VERSION=/{print $2}' /etc/os-release`
 export COMMIT_COUNT=`git rev-list --count HEAD`
+export CVER=0
 export REPO=packages/repo
 
 set -e
@@ -31,6 +33,8 @@ API_VSN=$(./print-api-version.sh)
 # create the package
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
     -e "s/%COMMIT_COUNT%/$COMMIT_COUNT/g" \
+    -e "s/%HELIOS_RELEASE%/$HELIOS_RELEASE/g" \
+    -e "s/%CVER%/$CVER/g" \
     -e "s/%API_VSN%/$API_VSN/g" \
     opte.template.p5m | pkgmogrify -v -D inc_debug="$INC_DEBUG" -O opte.base.p5m
 
