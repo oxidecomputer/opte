@@ -1,6 +1,7 @@
 #!/bin/bash
 
-export PUBLISHER=helios-dev
+export PUBLISHER=helios
+export HELIOS_RELEASE=`awk -F= '/^VERSION=/{print $2}' /etc/os-release`
 export COMMIT_COUNT=`git rev-list --count HEAD`
 export REPO=packages/repo
 
@@ -29,12 +30,10 @@ fi
 # This allows us to append a secondary version identifier to the package
 # version in the event of backports, or other scenarios which would otherwise
 # lead to a version conflict in the helios repository.
+typeset -ri TAG=0
+
 API_VSN=$(./print-api-version.sh)
-TAG=""
-PKG_VERSION="0.$API_VSN.$COMMIT_COUNT"
-if [ $TAG ]; then
-    PKG_VERSION=$PKG_VERSION-$TAG
-fi
+PKG_VERSION="0.$API_VSN.$COMMIT_COUNT-$HELIOS_RELEASE.$TAG"
 
 # create the package
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
