@@ -10,6 +10,7 @@
 use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
 use crate::api::DEFAULT_MULTICAST_VNI;
+use crate::api::DumpMcast2PhysResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
@@ -1037,21 +1038,18 @@ impl Mcast2Phys {
     }
 
     /// Dump all IPv4 overlay multicast group to underlay IPv6 multicast mappings.
-    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, Ipv6Addr)> {
-        self.ip4
-            .lock()
-            .iter()
-            .map(|(vip, mcast)| (*vip, mcast.addr()))
-            .collect()
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, MulticastUnderlay)> {
+        self.ip4.lock().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
     }
 
     /// Dump all IPv6 overlay multicast group to underlay IPv6 multicast mappings.
-    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, Ipv6Addr)> {
-        self.ip6
-            .lock()
-            .iter()
-            .map(|(vip, mcast)| (*vip, mcast.addr()))
-            .collect()
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, MulticastUnderlay)> {
+        self.ip6.lock().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
+    }
+
+    /// Dump all M2P mappings.
+    pub fn dump(&self) -> DumpMcast2PhysResp {
+        DumpMcast2PhysResp { ip4: self.dump_ip4(), ip6: self.dump_ip6() }
     }
 }
 

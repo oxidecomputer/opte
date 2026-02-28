@@ -9,6 +9,7 @@
 //! This is mostly just a place to hang printing routines so that they
 //! can be used by both opteadm and integration tests.
 
+use crate::api::DumpMcast2PhysResp;
 use crate::api::DumpMcastForwardingResp;
 use crate::api::DumpMcastSubscriptionsResp;
 use crate::api::DumpVirt2BoundaryResp;
@@ -16,6 +17,7 @@ use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::Ipv4Addr;
 use crate::api::Ipv6Addr;
+use crate::api::SourceFilter;
 use opte::api::IpCidr;
 use opte::api::Vni;
 use opte::print::*;
@@ -140,7 +142,7 @@ fn print_v2p_ip6(
 
 /// Print the header for the [`print_mcast_fwd()`] output.
 fn print_mcast_fwd_header(t: &mut impl Write) -> std::io::Result<()> {
-    writeln!(t, "GROUP IP\tUNDERLAY IP\tVNI\tREPLICATION")
+    writeln!(t, "GROUP IP\tUNDERLAY IP\tVNI\tREPLICATION\tFILTER")
 }
 
 /// Print a [`DumpMcastForwardingResp`].
@@ -161,12 +163,17 @@ pub fn print_mcast_fwd_into(
     write_hr(&mut t)?;
 
     for entry in &resp.entries {
-        for (next_hop, replication) in &entry.next_hops {
-            writeln!(
+        for hop in &entry.next_hops {
+            write!(
                 t,
-                "{}\t{}\t{}\t{replication:?}",
-                entry.underlay, next_hop.addr, next_hop.vni
+                "{}\t{}\t{}\t{:?}\t",
+                entry.underlay,
+                hop.next_hop.addr,
+                hop.next_hop.vni,
+                hop.replication
             )?;
+            write_source_filter(&mut t, &hop.source_filter)?;
+            writeln!(t)?;
         }
     }
     writeln!(t)?;
@@ -175,7 +182,7 @@ pub fn print_mcast_fwd_into(
 
 /// Print the header for the [`print_mcast_subs()`] output.
 fn print_mcast_subs_header(t: &mut impl Write) -> std::io::Result<()> {
-    writeln!(t, "UNDERLAY GROUP\tSUBSCRIBED PORTS")
+    writeln!(t, "UNDERLAY GROUP\tPORT\tFILTER")
 }
 
 /// Print a [`DumpMcastSubscriptionsResp`].
@@ -198,9 +205,81 @@ pub fn print_mcast_subs_into(
     write_hr(&mut t)?;
 
     for entry in &resp.entries {
-        let ports = entry.ports.join(", ");
-        writeln!(t, "{}\t{ports}", entry.underlay)?;
+        for sub in &entry.subscribers {
+            write!(t, "{}\t{}\t", entry.underlay, sub.port)?;
+            write_source_filter(&mut t, &sub.filter)?;
+            writeln!(t)?;
+        }
     }
     writeln!(t)?;
     t.flush()
+}
+
+/// Print a [`DumpMcast2PhysResp`].
+pub fn print_m2p(resp: &DumpMcast2PhysResp) -> std::io::Result<()> {
+    print_m2p_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpMcast2PhysResp`] into a given writer.
+pub fn print_m2p_into(
+    writer: &mut impl Write,
+    resp: &DumpMcast2PhysResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "Multicast to Physical Mappings (M2P)")?;
+    write_hrb(&mut t)?;
+
+    writeln!(t, "\nIPv4 groups")?;
+    write_hr(&mut t)?;
+    writeln!(t, "OVERLAY GROUP\tUNDERLAY MCAST")?;
+    for (group, underlay) in &resp.ip4 {
+        writeln!(t, "{}\t{underlay}", std::net::Ipv4Addr::from(group.bytes()))?;
+    }
+    t.flush()?;
+
+    writeln!(t, "\nIPv6 groups")?;
+    write_hr(&mut t)?;
+    writeln!(t, "OVERLAY GROUP\tUNDERLAY MCAST")?;
+    for (group, underlay) in &resp.ip6 {
+        writeln!(t, "{}\t{underlay}", std::net::Ipv6Addr::from(group.bytes()))?;
+    }
+    writeln!(t)?;
+    t.flush()
+}
+
+/// Write a source filter to the given writer.
+///
+/// Uses notation inspired by RFC 3376 (IGMPv3) and RFC 3810 (MLDv2):
+/// - `INCLUDE(S1, S2)` - accept only from listed sources
+/// - `EXCLUDE(S1, S2)` - accept from all except listed sources
+/// - `EXCLUDE()` - accept any source (*, G)
+/// - `INCLUDE()` - accept nothing
+///
+/// See <https://www.rfc-editor.org/rfc/rfc3376> (IGMPv3) and
+/// <https://www.rfc-editor.org/rfc/rfc3810> (MLDv2).
+fn write_source_filter(
+    t: &mut impl Write,
+    filter: &SourceFilter,
+) -> std::io::Result<()> {
+    let (mode, sources) = match filter {
+        SourceFilter::Include(s) => ("INCLUDE", s),
+        SourceFilter::Exclude(s) => ("EXCLUDE", s),
+    };
+    if sources.is_empty() {
+        match filter {
+            SourceFilter::Exclude(_) => write!(t, "{mode}() (any)"),
+            SourceFilter::Include(_) => write!(t, "{mode}() (none)"),
+        }
+    } else {
+        write!(t, "{mode}(")?;
+        let mut first = true;
+        for source in sources {
+            if !first {
+                write!(t, ", ")?;
+            }
+            write!(t, "{source}")?;
+            first = false;
+        }
+        write!(t, ")")
+    }
 }

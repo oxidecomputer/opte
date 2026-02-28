@@ -39,6 +39,7 @@ use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DeleteXdeReq;
 use oxide_vpc::api::DetachSubnetReq;
 use oxide_vpc::api::DetachSubnetResp;
+use oxide_vpc::api::DumpMcast2PhysResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
@@ -224,6 +225,12 @@ impl OpteHdl {
     pub fn clear_m2p(&self, req: &ClearMcast2PhysReq) -> Result<NoResp, Error> {
         let cmd = OpteCmd::ClearMcast2Phys;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Dump the M2P (multicast group -> underlay multicast) mappings.
+    pub fn dump_m2p(&self) -> Result<DumpMcast2PhysResp, Error> {
+        let cmd = OpteCmd::DumpMcast2Phys;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
     }
 
     pub fn set_v2b(&self, req: &SetVirt2BoundaryReq) -> Result<NoResp, Error> {

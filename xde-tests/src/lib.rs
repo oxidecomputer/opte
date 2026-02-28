@@ -28,6 +28,7 @@ use oxide_vpc::api::Ipv4Cfg;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::Ipv6Cfg;
 use oxide_vpc::api::MacAddr;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
 use oxide_vpc::api::McastUnsubscribeReq;
 use oxide_vpc::api::MulticastUnderlay;
@@ -40,6 +41,7 @@ use oxide_vpc::api::SNat6Cfg;
 use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
 use rand::Rng;
@@ -438,13 +440,24 @@ impl OptePort {
         &self.name
     }
 
-    /// Subscribe this port to a multicast group.
+    /// Subscribe this port to a multicast group (accepting any source).
     /// Automatically tracks the subscription for cleanup on drop.
     pub fn subscribe_multicast(&self, group: IpAddr) -> Result<()> {
+        self.subscribe_multicast_filtered(group, SourceFilter::default())
+    }
+
+    /// Subscribe this port to a multicast group with source filtering.
+    /// Automatically tracks the subscription for cleanup on drop.
+    pub fn subscribe_multicast_filtered(
+        &self,
+        group: IpAddr,
+        filter: SourceFilter,
+    ) -> Result<()> {
         let adm = OpteHdl::open()?;
         adm.mcast_subscribe(&McastSubscribeReq {
             port_name: self.name.clone(),
             group,
+            filter,
         })?;
         self.mcast_subscriptions.borrow_mut().push(group);
         Ok(())
@@ -635,7 +648,7 @@ impl SnoopGuard {
     /// for negative assertions (verifying that traffic is not flowing).
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// let mut snoop = SnoopGuard::start("xde_test_sim1", "udp port 9999")?;
     /// // ... perform operations that should NOT generate traffic ...
     /// snoop.assert_no_packet("on unsubscribed node B");
@@ -655,7 +668,7 @@ impl SnoopGuard {
     /// assertions (typically verifying that traffic is flowing).
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// let mut snoop = SnoopGuard::start("xde_test_sim1", "udp port 9999")?;
     /// // ... perform operations that should generate traffic ...
     /// let output = snoop.assert_packet("on subscribed node B");
@@ -736,10 +749,7 @@ impl MulticastGroup {
     /// Set multicast forwarding entries for this group.
     pub fn set_forwarding(
         &self,
-        next_hops: Vec<(
-            oxide_vpc::api::NextHopV6,
-            oxide_vpc::api::Replication,
-        )>,
+        next_hops: Vec<McastForwardingNextHop>,
     ) -> Result<()> {
         let hdl = OpteHdl::open()?;
         hdl.set_mcast_fwd(&SetMcastForwardingReq {
@@ -815,6 +825,7 @@ pub struct Topology {
 /// devices as underlay links. These simnet devices are connected to each
 /// other.
 ///
+/// ```text
 ///         zone a
 ///     #============#
 ///     | *--------* |    *-------*
@@ -828,6 +839,7 @@ pub struct Topology {
 ///     | *--------* |    *-------*
 ///     #============#
 ///         zone b
+/// ```
 ///
 /// The following system of overlay/underlay routes is set up
 ///
@@ -910,16 +922,32 @@ pub fn two_node_topology() -> Result<Topology> {
     let zfs = Arc::new(Zfs::new("opte2node")?);
 
     // Create a pair of zones to simulate our VM instances.
-    println!("start zone {zone_a_name}");
-    let a = OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand)?;
-    println!("start zone {zone_b_name}");
-    let b = OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand)?;
+    // Boot zones in parallel to reduce setup time.
+    //
+    // Thread-safety: each zone has a unique name and dataset (zfs creates
+    // unique child datasets per zone). zoneadm operations on different
+    // zones are independent, and each zone uses its own OPTE port.
+    println!("start zones {zone_a_name}, {zone_b_name}");
+    let (a, b) = std::thread::scope(|s| {
+        let handle_a =
+            s.spawn(|| OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand));
+        let handle_b =
+            s.spawn(|| OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand));
+        (handle_a.join().unwrap(), handle_b.join().unwrap())
+    });
+    let a = a?;
+    let b = b?;
 
-    println!("setup zone {zone_a_name}");
-    a.setup(&opte0.name, opte0.ip())?;
-
-    println!("setup zone {zone_b_name}");
-    b.setup(&opte1.name, opte1.ip())?;
+    // Setup zones in parallel
+    println!("setup zones {zone_a_name}, {zone_b_name}");
+    let (name0, ip0) = (opte0.name.clone(), opte0.ip());
+    let (name1, ip1) = (opte1.name.clone(), opte1.ip());
+    std::thread::scope(|s| {
+        let handle_a = s.spawn(|| a.setup(&name0, ip0));
+        let handle_b = s.spawn(|| b.setup(&name1, ip1));
+        handle_a.join().unwrap()?;
+        handle_b.join().unwrap()
+    })?;
 
     Ok(Topology {
         nodes: vec![
@@ -986,24 +1014,30 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
 
     let zfs = Arc::new(Zfs::new("opte2node")?);
 
-    println!("start zone {zone_a_name}");
-    let a = OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand)?;
-    println!("start zone {zone_b_name}");
-    let b = OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand)?;
+    // Boot zones in parallel to reduce setup time.
+    println!("start zones {zone_a_name}, {zone_b_name}");
+    let (a, b) = std::thread::scope(|s| {
+        let handle_a =
+            s.spawn(|| OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand));
+        let handle_b =
+            s.spawn(|| OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand));
+        (handle_a.join().unwrap(), handle_b.join().unwrap())
+    });
+    let a = a?;
+    let b = b?;
 
-    println!("setup zone {zone_a_name}");
-    a.setup_dualstack(
-        &opte0.name,
-        opte0.ip(),
-        opte0.ipv6().expect("dualstack port must have IPv6"),
-    )?;
-
-    println!("setup zone {zone_b_name}");
-    b.setup_dualstack(
-        &opte1.name,
-        opte1.ip(),
-        opte1.ipv6().expect("dualstack port must have IPv6"),
-    )?;
+    // Setup zones in parallel
+    println!("setup zones {zone_a_name}, {zone_b_name}");
+    let (name0, ip0, ip0v6) =
+        (opte0.name.clone(), opte0.ip(), opte0.ipv6().unwrap());
+    let (name1, ip1, ip1v6) =
+        (opte1.name.clone(), opte1.ip(), opte1.ipv6().unwrap());
+    std::thread::scope(|s| {
+        let handle_a = s.spawn(|| a.setup_dualstack(&name0, ip0, ip0v6));
+        let handle_b = s.spawn(|| b.setup_dualstack(&name1, ip1, ip1v6));
+        handle_a.join().unwrap()?;
+        handle_b.join().unwrap()
+    })?;
 
     Ok(Topology {
         nodes: vec![
@@ -1075,21 +1109,159 @@ pub fn three_node_topology() -> Result<Topology> {
 
     let zfs = Arc::new(Zfs::new("opte3node")?);
 
-    println!("start zone {zone_a_name}");
-    let a = OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand)?;
-    println!("start zone {zone_b_name}");
-    let b = OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand)?;
-    println!("start zone {zone_c_name}");
-    let c = OpteZone::new(zone_c_name, &zfs, &[&opte2.name], brand)?;
+    // Boot zones in parallel to reduce setup time.
+    println!("start zones {zone_a_name}, {zone_b_name}, {zone_c_name}");
+    let (a, b, c) = std::thread::scope(|s| {
+        let handle_a =
+            s.spawn(|| OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand));
+        let handle_b =
+            s.spawn(|| OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand));
+        let handle_c =
+            s.spawn(|| OpteZone::new(zone_c_name, &zfs, &[&opte2.name], brand));
+        (
+            handle_a.join().unwrap(),
+            handle_b.join().unwrap(),
+            handle_c.join().unwrap(),
+        )
+    });
+    let a = a?;
+    let b = b?;
+    let c = c?;
 
-    println!("setup zone {zone_a_name}");
-    a.setup(&opte0.name, opte0.ip())?;
+    // Setup zones in parallel
+    println!("setup zones {zone_a_name}, {zone_b_name}, {zone_c_name}");
+    let (name0, ip0) = (opte0.name.clone(), opte0.ip());
+    let (name1, ip1) = (opte1.name.clone(), opte1.ip());
+    let (name2, ip2) = (opte2.name.clone(), opte2.ip());
+    std::thread::scope(|s| {
+        let handle_a = s.spawn(|| a.setup(&name0, ip0));
+        let handle_b = s.spawn(|| b.setup(&name1, ip1));
+        let handle_c = s.spawn(|| c.setup(&name2, ip2));
+        handle_a.join().unwrap()?;
+        handle_b.join().unwrap()?;
+        handle_c.join().unwrap()
+    })?;
 
-    println!("setup zone {zone_b_name}");
-    b.setup(&opte1.name, opte1.ip())?;
+    Ok(Topology {
+        nodes: vec![
+            TestNode { zone: a, port: opte0 },
+            TestNode { zone: b, port: opte1 },
+            TestNode { zone: c, port: opte2 },
+        ],
+        null_ports: vec![],
+        v6_routes: vec![r0, r1, r2],
+        xde,
+        lls: vec![ll0, ll1],
+        vnics: vec![vn0, vn1],
+        simnet: Some(sim),
+        zfs,
+    })
+}
 
-    println!("setup zone {zone_c_name}");
-    c.setup(&opte2.name, opte2.ip())?;
+/// Three-node topology with dual-stack (IPv4 + IPv6) guest addresses.
+pub fn three_node_topology_dualstack() -> Result<Topology> {
+    let brand = "omicron1";
+    let zone_a_name = "a";
+    let zone_b_name = "b";
+    let zone_c_name = "c";
+
+    let sim = SimnetLink::new("xde_test_sim0", "xde_test_sim1")?;
+    let vn0 = Vnic::new("xde_test_vnic0", &sim.end_a)?;
+    let vn1 = Vnic::new("xde_test_vnic1", &sim.end_b)?;
+    let ll0 = LinkLocal::new(&vn0.name, "ll")?;
+    let ll1 = LinkLocal::new(&vn1.name, "ll")?;
+
+    Xde::set_xde_underlay(&vn0.name, &vn1.name)?;
+    let xde = Xde {};
+
+    // Set up V2P mappings for three nodes
+    Xde::set_v2p("10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
+    Xde::set_v2p("10.0.0.3", "a8:40:25:ff:00:03", "fd88::1")?;
+
+    // Create three dual-stack OPTE ports
+    let opte0 = OptePort::new_dualstack(
+        "opte0",
+        "10.0.0.1",
+        "fd00::1",
+        "a8:40:25:ff:00:01",
+        "fd44::1",
+    )?;
+    opte0.add_router_entry("10.0.0.2")?;
+    opte0.add_router_entry("10.0.0.3")?;
+    opte0.fw_allow_all()?;
+
+    let opte1 = OptePort::new_dualstack(
+        "opte1",
+        "10.0.0.2",
+        "fd00::2",
+        "a8:40:25:ff:00:02",
+        "fd77::1",
+    )?;
+    opte1.add_router_entry("10.0.0.1")?;
+    opte1.add_router_entry("10.0.0.3")?;
+    opte1.fw_allow_all()?;
+
+    let opte2 = OptePort::new_dualstack(
+        "opte2",
+        "10.0.0.3",
+        "fd00::3",
+        "a8:40:25:ff:00:03",
+        "fd88::1",
+    )?;
+    opte2.add_router_entry("10.0.0.1")?;
+    opte2.add_router_entry("10.0.0.2")?;
+    opte2.fw_allow_all()?;
+
+    println!("adding underlay route 0");
+    let r0 =
+        RouteV6::new(opte0.underlay_ip(), 64, ll0.ip, Some(vn1.name.clone()))?;
+
+    println!("adding underlay route 1");
+    let r1 =
+        RouteV6::new(opte1.underlay_ip(), 64, ll1.ip, Some(vn0.name.clone()))?;
+
+    println!("adding underlay route 2");
+    let r2 =
+        RouteV6::new(opte2.underlay_ip(), 64, ll1.ip, Some(vn0.name.clone()))?;
+
+    let zfs = Arc::new(Zfs::new("opte3node")?);
+
+    // Boot zones in parallel to reduce setup time.
+    println!("start zones {zone_a_name}, {zone_b_name}, {zone_c_name}");
+    let (a, b, c) = std::thread::scope(|s| {
+        let handle_a =
+            s.spawn(|| OpteZone::new(zone_a_name, &zfs, &[&opte0.name], brand));
+        let handle_b =
+            s.spawn(|| OpteZone::new(zone_b_name, &zfs, &[&opte1.name], brand));
+        let handle_c =
+            s.spawn(|| OpteZone::new(zone_c_name, &zfs, &[&opte2.name], brand));
+        (
+            handle_a.join().unwrap(),
+            handle_b.join().unwrap(),
+            handle_c.join().unwrap(),
+        )
+    });
+    let a = a?;
+    let b = b?;
+    let c = c?;
+
+    // Setup zones in parallel
+    println!("setup zones {zone_a_name}, {zone_b_name}, {zone_c_name}");
+    let (name0, ip0, ip0v6) =
+        (opte0.name.clone(), opte0.ip(), opte0.ipv6().unwrap());
+    let (name1, ip1, ip1v6) =
+        (opte1.name.clone(), opte1.ip(), opte1.ipv6().unwrap());
+    let (name2, ip2, ip2v6) =
+        (opte2.name.clone(), opte2.ip(), opte2.ipv6().unwrap());
+    std::thread::scope(|s| {
+        let handle_a = s.spawn(|| a.setup_dualstack(&name0, ip0, ip0v6));
+        let handle_b = s.spawn(|| b.setup_dualstack(&name1, ip1, ip1v6));
+        let handle_c = s.spawn(|| c.setup_dualstack(&name2, ip2, ip2v6));
+        handle_a.join().unwrap()?;
+        handle_b.join().unwrap()?;
+        handle_c.join().unwrap()
+    })?;
 
     Ok(Topology {
         nodes: vec![

@@ -43,6 +43,7 @@ use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::Ipv4Cfg;
 use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
 use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
@@ -64,8 +65,10 @@ use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::TunnelEndpoint;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::print::print_m2p;
 use oxide_vpc::print::print_mcast_fwd;
 use oxide_vpc::print::print_mcast_subs;
 use oxide_vpc::print::print_v2b;
@@ -307,6 +310,9 @@ enum Command {
 
     /// Dump multicast subscriptions (group -> ports on this sled)
     DumpMcastSubs,
+
+    /// Dump M2P (multicast group -> underlay multicast) mappings
+    DumpM2p,
 
     /// Subscribe a port to a multicast group
     ///
@@ -962,7 +968,11 @@ fn main() -> anyhow::Result<()> {
             let next_hop_addr = NextHopV6::new(next_hop, next_hop_vni);
             let req = SetMcastForwardingReq {
                 underlay,
-                next_hops: vec![(next_hop_addr, replication)],
+                next_hops: vec![McastForwardingNextHop {
+                    next_hop: next_hop_addr,
+                    replication,
+                    source_filter: SourceFilter::default(),
+                }],
             };
             hdl.set_mcast_fwd(&req)?;
         }
@@ -980,8 +990,16 @@ fn main() -> anyhow::Result<()> {
             print_mcast_subs(&hdl.dump_mcast_subs()?)?;
         }
 
+        Command::DumpM2p => {
+            print_m2p(&hdl.dump_m2p()?)?;
+        }
+
         Command::McastSubscribe { port, group } => {
-            let req = McastSubscribeReq { port_name: port, group };
+            let req = McastSubscribeReq {
+                port_name: port,
+                group,
+                filter: SourceFilter::default(),
+            };
             hdl.mcast_subscribe(&req)?;
         }
 

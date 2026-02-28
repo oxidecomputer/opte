@@ -114,6 +114,8 @@ pub enum OpteCmd {
     DumpMcastSubscriptions = 107,
     /// Unsubscribe all ports from a multicast group.
     McastUnsubscribeAll = 108,
+    /// Read out all M2P (multicast group -> underlay multicast) mappings.
+    DumpMcast2Phys = 109,
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -155,6 +157,7 @@ impl TryFrom<c_int> for OpteCmd {
             106 => Ok(Self::ClearMcast2Phys),
             107 => Ok(Self::DumpMcastSubscriptions),
             108 => Ok(Self::McastUnsubscribeAll),
+            109 => Ok(Self::DumpMcast2Phys),
             _ => Err(()),
         }
     }

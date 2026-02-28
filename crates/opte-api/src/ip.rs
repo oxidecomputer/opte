@@ -308,10 +308,45 @@ pub enum IpAddr {
 }
 
 impl IpAddr {
+    /// Returns true if this is a multicast address.
     pub const fn is_multicast(&self) -> bool {
         match self {
             IpAddr::Ip4(v4) => v4.is_multicast(),
             IpAddr::Ip6(v6) => v6.is_multicast(),
+        }
+    }
+
+    /// Returns true if this is the unspecified address.
+    pub const fn is_unspecified(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_unspecified(),
+            IpAddr::Ip6(v6) => v6.is_unspecified(),
+        }
+    }
+
+    /// Returns true if this is a loopback address.
+    pub const fn is_loopback(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_loopback(),
+            IpAddr::Ip6(v6) => v6.is_loopback(),
+        }
+    }
+
+    /// Returns true if this is a link-local address.
+    pub const fn is_link_local(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_link_local(),
+            IpAddr::Ip6(v6) => v6.is_link_local(),
+        }
+    }
+
+    /// Returns true if this is a broadcast address.
+    ///
+    /// Always false for IPv6 addresses, which have no broadcast domain.
+    pub const fn is_broadcast(&self) -> bool {
+        match self {
+            IpAddr::Ip4(v4) => v4.is_broadcast(),
+            IpAddr::Ip6(_) => false,
         }
     }
 
@@ -391,25 +426,37 @@ impl FromStr for IpAddr {
 }
 
 /// An IPv4 address.
-#[derive(
-    Clone,
-    Copy,
-    Default,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-)]
+#[derive(Clone, Copy, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[repr(C)]
 pub struct Ipv4Addr {
     inner: [u8; 4],
 }
 
+// Compare via `u32` rather than byte-by-byte, producing a single comparison
+// instruction instead of `memcmp` or a per-byte loop. The ordering is
+// identical (network byte order is big-endian), but the generated code is
+// significantly faster for BTreeSet/BTreeMap lookups.
+//
+// See `VniMac` in `xde::dev_map` for the same rationale.
+impl Ord for Ipv4Addr {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        let a = u32::from_be_bytes(self.inner);
+        let b = u32::from_be_bytes(other.inner);
+        a.cmp(&b)
+    }
+}
+
+impl PartialOrd for Ipv4Addr {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Ipv4Addr {
     pub const ANY_ADDR: Self = Self { inner: [0; 4] };
+    pub const LOCALHOST: Self = Self { inner: [127, 0, 0, 1] };
     pub const LOCAL_BCAST: Self = Self { inner: [255; 4] };
 
     /// Return the bytes of the address.
@@ -455,8 +502,29 @@ impl Ipv4Addr {
         u32::from_be_bytes(self.bytes()).to_be()
     }
 
+    /// Returns true if this is a multicast address (224.0.0.0/4).
     pub const fn is_multicast(&self) -> bool {
         matches!(self.inner[0], 224..240)
+    }
+
+    /// Returns true if this is the unspecified address (0.0.0.0).
+    pub const fn is_unspecified(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0])
+    }
+
+    /// Returns true if this is a loopback address (127.0.0.0/8).
+    pub const fn is_loopback(&self) -> bool {
+        self.inner[0] == 127
+    }
+
+    /// Returns true if this is the broadcast address (255.255.255.255).
+    pub const fn is_broadcast(&self) -> bool {
+        matches!(self.inner, [255, 255, 255, 255])
+    }
+
+    /// Returns true if this is a link-local address (169.254.0.0/16).
+    pub const fn is_link_local(&self) -> bool {
+        self.inner[0] == 169 && self.inner[1] == 254
     }
 
     /// Return the multicast MAC address associated with this multicast IPv4
@@ -600,26 +668,37 @@ impl Deref for Ipv4Addr {
 
 /// An IPv6 address.
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    Deserialize,
+    Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize,
 )]
 #[repr(C)]
 pub struct Ipv6Addr {
     inner: [u8; 16],
 }
 
+// Same rationale as `Ipv4Addr`: compare via `(u64, u64)` to avoid
+// 16-byte `memcmp`.
+impl Ord for Ipv6Addr {
+    #[inline]
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        let a = self.as_u64_pair();
+        let b = other.as_u64_pair();
+        a.cmp(&b)
+    }
+}
+
+impl PartialOrd for Ipv6Addr {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Ipv6Addr {
     /// The unspecified IPv6 address, i.e., `::` or all zeros.
     pub const ANY_ADDR: Self = Self { inner: [0; 16] };
+
+    /// The loopback address, i.e., `::1`.
+    pub const LOCALHOST: Self = Self::from_const([0, 0, 0, 0, 0, 0, 0, 1]);
 
     /// The All-Routers multicast address, used in the Neighbor Discovery
     /// Protocol.
@@ -694,9 +773,24 @@ impl Ipv6Addr {
         &self.inner[..EXPECTED.len()] == EXPECTED
     }
 
-    /// Return `true` if this is a multicast IPv6 address, and `false` otherwise
+    /// Returns true if this is a multicast address (ff00::/8).
     pub const fn is_multicast(&self) -> bool {
         self.inner[0] == 0xFF
+    }
+
+    /// Returns true if this is the unspecified address (::).
+    pub const fn is_unspecified(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    /// Returns true if this is the loopback address (::1).
+    pub const fn is_loopback(&self) -> bool {
+        matches!(self.inner, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+    }
+
+    /// Returns true if this is a link-local address (fe80::/10).
+    pub const fn is_link_local(&self) -> bool {
+        self.inner[0] == 0xfe && (self.inner[1] & 0xc0) == 0x80
     }
 
     /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix
@@ -725,6 +819,32 @@ impl Ipv6Addr {
     /// Return the bytes of the address.
     pub fn bytes(&self) -> [u8; 16] {
         self.inner
+    }
+
+    /// Return the address as a `(high, low)` pair of big-endian `u64`s.
+    #[inline]
+    fn as_u64_pair(&self) -> (u64, u64) {
+        let hi = u64::from_be_bytes([
+            self.inner[0],
+            self.inner[1],
+            self.inner[2],
+            self.inner[3],
+            self.inner[4],
+            self.inner[5],
+            self.inner[6],
+            self.inner[7],
+        ]);
+        let lo = u64::from_be_bytes([
+            self.inner[8],
+            self.inner[9],
+            self.inner[10],
+            self.inner[11],
+            self.inner[12],
+            self.inner[13],
+            self.inner[14],
+            self.inner[15],
+        ]);
+        (hi, lo)
     }
 
     /// Return the address after applying the network mask.
