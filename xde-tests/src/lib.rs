@@ -42,7 +42,7 @@ use oxide_vpc::api::SetMcastForwardingReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::Vni;
 use oxide_vpc::api::VpcCfg;
-use rand::Rng;
+use rand::RngExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
