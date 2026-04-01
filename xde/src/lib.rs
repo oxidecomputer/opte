@@ -19,7 +19,6 @@
 #![allow(non_snake_case)] // for bindgen code in ip.rs
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
-#![feature(maybe_uninit_slice)]
 #![deny(unused_must_use)]
 
 mod ioctl;
