@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
@@ -643,7 +643,7 @@ fn generate_packet<'a>(
     let ingot_layers = (&eth, &ip, &udp);
     let total_sz = ingot_layers.packet_length() + msg.buffer_len();
 
-    let mut pkt = MsgBlk::new_ethernet(total_sz);
+    let mut pkt = MsgBlk::new_ethernet(total_sz)?;
     pkt.emit_back(ingot_layers)
         .expect("MsgBlk should have enough bytes by construction");
     let l = pkt.len();
@@ -692,7 +692,7 @@ impl HairpinAction for Dhcpv6Action {
     // here and reply accordingly. So the `Dhcpv6Action` is really a full
     // server, to the extent we emulate one.
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        let body = meta.copy_remaining();
+        let body = meta.copy_remaining()?;
         if let Some(client_msg) = Message::from_bytes(&body) {
             if let Some(reply) = process_client_message(self, meta, &client_msg)
             {

@@ -2,10 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! ARP headers and data.
 
+use super::HdlPktError;
 use super::ether::Ethernet;
 use crate::ddi::mblk::MsgBlk;
 use core::fmt;
@@ -74,7 +75,7 @@ pub fn gen_arp_reply(
     spa: Ipv4Addr,
     tha: MacAddr,
     tpa: Ipv4Addr,
-) -> MsgBlk {
+) -> Result<MsgBlk, HdlPktError> {
     MsgBlk::new_ethernet_pkt((
         Ethernet { destination: tha, source: sha, ethertype: Ethertype::ARP },
         ArpEthIpv4 {
@@ -85,7 +86,7 @@ pub fn gen_arp_reply(
             tpa,
             ..Default::default()
         },
-    ))
+    )).map_err(|_| HdlPktError("could not allocate new mblk_t for ARP reply"))
 }
 
 /// An ARP packet containing Ethernet (MAC) to IPv4 address mappings.

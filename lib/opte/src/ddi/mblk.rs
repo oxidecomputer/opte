@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::engine::packet::BufferState;
 use crate::engine::packet::Pullup;
@@ -286,20 +286,19 @@ impl MsgBlk {
     /// `allocb(9F)` and `freeb(9F)`, which contains enough scaffolding
     /// to satisfy OPTE's use of the underlying `mblk_t` and `dblk_t`
     /// structures.
-    pub fn new(len: usize) -> Self {
-        let inner = NonNull::new(allocb(len))
-            .expect("somehow failed to get an mblk...");
-
-        Self(inner)
+    pub fn new(len: usize) -> Result<Self, PktAllocError> {
+        NonNull::new(allocb(len))
+            .map(Self)
+            .ok_or(PktAllocError)
     }
 
     /// Allocates a new [`MsgBlk`] of size `buf.len()`, copying its
     /// contents.
-    pub fn copy(buf: impl AsRef<[u8]>) -> Self {
-        let mut out = Self::new(buf.as_ref().len());
+    pub fn copy(buf: impl AsRef<[u8]>) -> Result<Self, PktAllocError> {
+        let mut out = Self::new(buf.as_ref().len())?;
         // Unwrap safety -- just allocated length of input buffer.
         out.write_bytes_back(buf).unwrap();
-        out
+        Ok(out)
     }
 
     /// Copy the first `n` bytes of this packet into a new `mblk_t`,
@@ -339,7 +338,7 @@ impl MsgBlk {
                 // in our userland mblk abstraction.
                 // Do the segmentation right, but otherwise it's fully cloned.
                 let to_ensure = n.map(|v| v.get()).unwrap_or(totlen);
-                let mut top_mblk = MsgBlk::new(to_ensure);
+                let mut top_mblk = MsgBlk::new(to_ensure)?;
                 let mut still_to_write = to_ensure;
 
                 for chunk in self.iter() {
@@ -355,7 +354,7 @@ impl MsgBlk {
                     left_in_chunk -= to_take;
 
                     if left_in_chunk != 0 {
-                        top_mblk.append(MsgBlk::copy(&chunk[to_take..]));
+                        top_mblk.append(MsgBlk::copy(&chunk[to_take..])?);
                     }
                 }
 
@@ -365,10 +364,10 @@ impl MsgBlk {
     }
 
     /// Creates a new [`MsgBlk`] using a given set of packet headers.
-    pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Self {
-        let mut pkt = Self::new(emit.packet_length());
+    pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Result<Self, PktAllocError> {
+        let mut pkt = Self::new(emit.packet_length())?;
         pkt.emit_back(emit).unwrap();
-        pkt
+        Ok(pkt)
     }
 
     /// Returns the number of bytes available for writing ahead of the
@@ -408,7 +407,7 @@ impl MsgBlk {
     /// bytes with 2B of headroom/alignment.
     ///
     /// This sets up 4B alignment on all post-ethernet headers.
-    pub fn new_ethernet(len: usize) -> Self {
+    pub fn new_ethernet(len: usize) -> Result<Self, PktAllocError> {
         Self::new_with_headroom(2, len)
     }
 
@@ -418,10 +417,10 @@ impl MsgBlk {
     /// This sets up 4B alignment on all post-ethernet headers.
     pub fn new_ethernet_pkt(
         emit: impl Emit + EmitDoesNotRelyOnBufContents,
-    ) -> Self {
-        let mut pkt = Self::new_ethernet(emit.packet_length());
+    ) -> Result<Self, PktAllocError> {
+        let mut pkt = Self::new_ethernet(emit.packet_length())?;
         pkt.emit_back(emit).unwrap();
-        pkt
+        Ok(pkt)
     }
 
     /// Return the number of initialised bytes in this `MsgBlk` over
@@ -482,8 +481,8 @@ impl MsgBlk {
     ///
     /// The read/write pointer is set to have `head_len` bytes of
     /// headroom and `body_len` bytes of capacity at the back.
-    pub fn new_with_headroom(head_len: usize, body_len: usize) -> Self {
-        let out = Self::new(head_len + body_len);
+    pub fn new_with_headroom(head_len: usize, body_len: usize) -> Result<Self, PktAllocError> {
+        let out = Self::new(head_len + body_len)?;
 
         // SAFETY: alloc is contiguous and always larger than head_len.
         let mut_out = out.0.as_ptr();
@@ -492,7 +491,7 @@ impl MsgBlk {
             (*mut_out).b_wptr = (*mut_out).b_rptr;
         }
 
-        out
+        Ok(out)
     }
 
     /// Provides a slice of length `n_bytes` at the back of an [`MsgBlk`]
@@ -1023,11 +1022,11 @@ impl MsgBlkIterMut<'_> {
 }
 
 impl Pullup for MsgBlkIterMut<'_> {
-    fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk {
+    fn pullup(&self, prepend: Option<&[u8]>) -> Result<MsgBlk, PktPullupError> {
         let prepend = prepend.unwrap_or_default();
         let bytes_in_self = BufferState::len(self);
         let needed_alloc = prepend.len() + bytes_in_self;
-        let mut new_seg = MsgBlk::new(needed_alloc);
+        let mut new_seg = MsgBlk::new(needed_alloc)?;
 
         new_seg
             .write_bytes_back(prepend)
@@ -1077,7 +1076,19 @@ impl Pullup for MsgBlkIterMut<'_> {
             }
         }
 
-        new_seg
+        Ok(new_seg)
+    }
+}
+
+/// A new [`MsgBlk`] could not be allocated.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+pub struct PktAllocError;
+
+impl core::error::Error for PktAllocError {}
+
+impl core::fmt::Display for PktAllocError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("failed to allocate an mblk_t")
     }
 }
 
@@ -1115,6 +1126,12 @@ impl core::fmt::Display for PktPullupError {
             Self::TooLong => "requested pullup is longer than packet",
             Self::AllocFailed => "failed to allocate an mblk_t",
         })
+    }
+}
+
+impl From<PktAllocError> for PktPullupError {
+    fn from(_val: PktAllocError) -> Self {
+        Self::AllocFailed
     }
 }
 
@@ -1397,7 +1414,7 @@ mod test {
 
     #[test]
     fn zero_byte_packet() {
-        let mut pkt = MsgBlk::new(0);
+        let mut pkt = MsgBlk::new(0).unwrap();
         assert_eq!(pkt.len(), 0);
         assert_eq!(pkt.seg_len(), 1);
         assert_eq!(pkt.tail_capacity(), 16);

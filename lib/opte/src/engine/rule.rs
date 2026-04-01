@@ -40,6 +40,8 @@ use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use crate::ddi::mblk::MsgBlk;
+use crate::ddi::mblk::PktAllocError;
+use crate::ddi::mblk::PktPullupError;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -499,7 +501,7 @@ pub enum CompiledEncap {
 
 impl CompiledEncap {
     #[inline]
-    pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> MsgBlk {
+    pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> Result<MsgBlk, PktAllocError> {
         let Self::Push {
             bytes,
             l3_len_offset,
@@ -509,12 +511,12 @@ impl CompiledEncap {
             ..
         } = self
         else {
-            return pkt;
+            return Ok(pkt);
         };
 
         let mut prepend =
             if pkt.ref_count() > 1 || pkt.head_capacity() < bytes.len() {
-                let mut pkt = MsgBlk::new_ethernet(bytes.len());
+                let mut pkt = MsgBlk::new_ethernet(bytes.len())?;
                 pkt.pop_all();
                 Some(pkt)
             } else {
@@ -547,13 +549,13 @@ impl CompiledEncap {
 
         *l4_len_slot = u16::try_from(l4_len).unwrap_or(u16::MAX).to_be_bytes();
 
-        if let Some(mut prepend) = prepend {
+        Ok(if let Some(mut prepend) = prepend {
             pkt.copy_offload_info_to(&mut prepend);
             prepend.append(pkt);
             prepend
         } else {
             pkt
-        }
+        })
     }
 }
 
@@ -813,6 +815,8 @@ pub trait MetaAction: Display + Send + Sync {
 
 #[derive(Debug)]
 pub enum GenErr {
+    Allocation,
+    BodyAccess,
     Malformed,
     MissingMeta,
     Unexpected(String),
@@ -821,6 +825,18 @@ pub enum GenErr {
 impl From<smoltcp::wire::Error> for GenErr {
     fn from(_err: smoltcp::wire::Error) -> Self {
         Self::Malformed
+    }
+}
+
+impl From<PktAllocError> for GenErr {
+    fn from(_: PktAllocError) -> Self {
+        Self::Allocation
+    }
+}
+
+impl From<PktPullupError> for GenErr {
+    fn from(_: PktPullupError) -> Self {
+        Self::BodyAccess
     }
 }
 
