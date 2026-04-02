@@ -46,8 +46,8 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.8"
-ctor = "0.6"
-darling = "0.21"
+ctor = "0.8"
+darling = "0.23"
 dyn-clone = "1.0"
 heapless = "0.8"
 ingot = "0.1.1"
@@ -60,7 +60,7 @@ pcap-parser = "0.17"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
 quote = "1.0"
-rand = "0.9.2"
+rand = "0.10.0"
 ref-cast = "1.0.25"
 ron = "0.12"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
@@ -73,7 +73,7 @@ smoltcp = { version = "0.11", default-features = false }
 syn = "2"
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "2.0"
-toml = "0.9"
+toml = "1.0"
 uuid = { version = "1.0", default-features = false, features = ["serde"]}
 usdt = "0.6"
 version_check = "0.9"
