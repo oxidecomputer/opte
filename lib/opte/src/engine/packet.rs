@@ -624,7 +624,10 @@ impl<T: Read + Pullup> PacketData<T> {
         self.body().map(|v| v.to_vec())
     }
 
-    pub fn append_remaining(&self, buf: &mut Vec<u8>) -> Result<(), PktPullupError>
+    pub fn append_remaining(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
@@ -1919,7 +1922,7 @@ mod test {
             ethertype: Ethertype::IPV4,
         };
 
-        MsgBlk::new_ethernet_pkt((eth, ip4, tcp, body))
+        MsgBlk::new_ethernet_pkt((eth, ip4, tcp, body)).unwrap()
     }
 
     #[test]
@@ -1953,7 +1956,8 @@ mod test {
             destination: DST_MAC,
             source: SRC_MAC,
             ethertype: Ethertype::IPV4,
-        });
+        })
+        .unwrap();
 
         let tcp = Tcp {
             source: 3839,
@@ -1971,7 +1975,7 @@ mod test {
             ..Default::default()
         };
 
-        let mp2 = MsgBlk::new_pkt((ip4, tcp));
+        let mp2 = MsgBlk::new_pkt((ip4, tcp)).unwrap();
 
         mp1.append(mp2);
 
@@ -2003,8 +2007,8 @@ mod test {
     fn straddled_tcp() {
         let base = tcp_pkt(&[]);
 
-        let mut st1 = MsgBlk::copy(&base[..42]);
-        let st2 = MsgBlk::copy(&base[42..]);
+        let mut st1 = MsgBlk::copy(&base[..42]).unwrap();
+        let st2 = MsgBlk::copy(&base[42..]).unwrap();
 
         st1.append(st2);
 
@@ -2064,7 +2068,8 @@ mod test {
                 };
 
                 let mut pkt =
-                    MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp));
+                    MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp))
+                        .unwrap();
                 let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
                     .unwrap()
                     .to_full_meta();
@@ -2107,7 +2112,7 @@ mod test {
         // Note that we do NOT update any of the packet headers themselves
         // as this padding process should be transparent to the upper
         // layers.
-        let mut padding_seg = MsgBlk::new(padding_len);
+        let mut padding_seg = MsgBlk::new(padding_len).unwrap();
         padding_seg.resize(padding_len).unwrap();
 
         pkt.append(padding_seg);
@@ -2158,14 +2163,15 @@ mod test {
         let pkt_sz = eth.packet_length()
             + ip6.packet_length()
             + usize::from(ip6.payload_len);
-        let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip6, udp, &body[..]));
+        let mut pkt =
+            MsgBlk::new_ethernet_pkt((eth, ip6, udp, &body[..])).unwrap();
         assert_eq!(pkt.len(), pkt_sz);
 
         // Tack on a new segment filled zero padding at
         // the end that's not part of the payload as indicated
         // by the packet headers.
         let padding_len = 8;
-        let mut padding_seg = MsgBlk::new(padding_len);
+        let mut padding_seg = MsgBlk::new(padding_len).unwrap();
         padding_seg.resize(padding_len).unwrap();
         pkt.append(padding_seg);
         assert_eq!(pkt.byte_len(), pkt_sz + padding_len);

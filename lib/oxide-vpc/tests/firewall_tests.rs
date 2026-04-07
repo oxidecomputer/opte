@@ -99,7 +99,7 @@ fn firewall_replace_rules() {
 
     let mut pkt3_m = pkt2_m;
     let pkt3_bytes = pkt3_m.copy_all();
-    let mut pkt3_copy_m = MsgBlk::copy(pkt3_bytes);
+    let mut pkt3_copy_m = MsgBlk::copy(pkt3_bytes).unwrap();
 
     let pkt3 = parse_inbound(&mut pkt3_m, VpcParser {}).unwrap();
     let pkt3_copy = parse_inbound(&mut pkt3_copy_m, VpcParser {}).unwrap();

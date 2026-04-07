@@ -53,7 +53,8 @@ pub fn packet_from_client_dhcpv4_message(
     let headers = (eth, ip, udp);
     let total_len = msg.buffer_len() + headers.packet_length();
 
-    let mut pkt = MsgBlk::new_ethernet(total_len);
+    let mut pkt =
+        MsgBlk::new_ethernet(total_len).expect("infallible in std context");
     pkt.emit_back(&headers).unwrap();
     let dhcp_off = pkt.len();
     pkt.resize(total_len).unwrap();
@@ -101,7 +102,8 @@ pub fn write_dhcpv6_packet(
     let headers = (eth, ip, udp);
     let total_len = msg.buffer_len() + headers.packet_length();
 
-    let mut pkt = MsgBlk::new_ethernet(total_len);
+    let mut pkt =
+        MsgBlk::new_ethernet(total_len).expect("infallible in std context");
     pkt.emit_back(&headers).unwrap();
     let dhcp_off = pkt.len();
     pkt.resize(total_len).unwrap();

@@ -86,7 +86,8 @@ pub fn gen_arp_reply(
             tpa,
             ..Default::default()
         },
-    )).map_err(|_| HdlPktError("could not allocate new mblk_t for ARP reply"))
+    ))
+    .map_err(|_| HdlPktError("could not allocate new mblk_t for ARP reply"))
 }
 
 /// An ARP packet containing Ethernet (MAC) to IPv4 address mappings.

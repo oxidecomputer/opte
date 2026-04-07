@@ -1844,7 +1844,8 @@ mod test {
                 window_size: 64240,
                 ..Default::default()
             },
-        ));
+        ))
+        .unwrap();
 
         let pmeta = Packet::parse_outbound(test_pkt.iter_mut(), GenericUlp {})
             .unwrap()

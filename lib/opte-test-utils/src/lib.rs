@@ -109,7 +109,7 @@ macro_rules! expect_modified {
         );
         #[allow(unused_assignments)]
         if let Ok(Modified(spec)) = $res {
-            $pkt = spec.apply($pkt);
+            $pkt = spec.apply($pkt).unwrap();
         }
     };
 }
@@ -503,7 +503,8 @@ pub fn ulp_pkt<
     ulp: U,
     body: &[u8],
 ) -> MsgBlk {
-    let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip, ulp, body));
+    let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip, ulp, body))
+        .expect("infallible in std context");
 
     let view = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {}).unwrap();
     let mut view = view.to_full_meta();
@@ -1070,7 +1071,8 @@ fn _encap(
         outer_ip,
         outer_udp,
         outer_geneve,
-    ));
+    ))
+    .expect("infallible in std context");
     encap_pkt.append(inner_pkt);
 
     encap_pkt

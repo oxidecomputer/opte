@@ -128,7 +128,8 @@ impl HairpinAction for IcmpEchoReply {
         };
 
         MsgBlk::new_ethernet_pkt((&eth, &ip4, &icmp, meta.body()?))
-            .map(AllowOrDeny::Allow).map_err(Into::into)
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 

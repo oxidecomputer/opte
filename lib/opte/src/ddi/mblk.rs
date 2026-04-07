@@ -287,9 +287,7 @@ impl MsgBlk {
     /// to satisfy OPTE's use of the underlying `mblk_t` and `dblk_t`
     /// structures.
     pub fn new(len: usize) -> Result<Self, PktAllocError> {
-        NonNull::new(allocb(len))
-            .map(Self)
-            .ok_or(PktAllocError)
+        NonNull::new(allocb(len)).map(Self).ok_or(PktAllocError)
     }
 
     /// Allocates a new [`MsgBlk`] of size `buf.len()`, copying its
@@ -364,7 +362,9 @@ impl MsgBlk {
     }
 
     /// Creates a new [`MsgBlk`] using a given set of packet headers.
-    pub fn new_pkt(emit: impl Emit + EmitDoesNotRelyOnBufContents) -> Result<Self, PktAllocError> {
+    pub fn new_pkt(
+        emit: impl Emit + EmitDoesNotRelyOnBufContents,
+    ) -> Result<Self, PktAllocError> {
         let mut pkt = Self::new(emit.packet_length())?;
         pkt.emit_back(emit).unwrap();
         Ok(pkt)
@@ -481,7 +481,10 @@ impl MsgBlk {
     ///
     /// The read/write pointer is set to have `head_len` bytes of
     /// headroom and `body_len` bytes of capacity at the back.
-    pub fn new_with_headroom(head_len: usize, body_len: usize) -> Result<Self, PktAllocError> {
+    pub fn new_with_headroom(
+        head_len: usize,
+        body_len: usize,
+    ) -> Result<Self, PktAllocError> {
         let out = Self::new(head_len + body_len)?;
 
         // SAFETY: alloc is contiguous and always larger than head_len.
@@ -1430,7 +1433,7 @@ mod test {
             _ => panic!("expected failure, accidentally succeeded at parsing"),
         }
 
-        let pkt2 = MsgBlk::copy([]);
+        let pkt2 = MsgBlk::copy([]).unwrap();
         assert_eq!(pkt2.len(), 0);
         assert_eq!(pkt2.seg_len(), 1);
         assert_eq!(pkt2.tail_capacity(), 16);
@@ -1487,9 +1490,9 @@ mod test {
 
     #[test]
     fn truncate() {
-        let mut p1 = MsgBlk::copy([0, 1, 2, 3]);
-        p1.append(MsgBlk::copy([4, 5, 6, 7]));
-        p1.append(MsgBlk::copy([8, 9, 10, 11]));
+        let mut p1 = MsgBlk::copy([0, 1, 2, 3]).unwrap();
+        p1.append(MsgBlk::copy([4, 5, 6, 7]).unwrap());
+        p1.append(MsgBlk::copy([8, 9, 10, 11]).unwrap());
 
         assert_eq!(p1.seg_len(), 3);
         assert_eq!(p1.byte_len(), 12);
@@ -1508,7 +1511,7 @@ mod test {
     // Verify uninitialized packet.
     #[test]
     fn uninitialized_packet() {
-        let pkt = MsgBlk::new(200);
+        let pkt = MsgBlk::new(200).unwrap();
         assert_eq!(pkt.len(), 0);
         assert_eq!(pkt.seg_len(), 1);
         assert_eq!(pkt.tail_capacity(), 200);
@@ -1516,7 +1519,7 @@ mod test {
 
     #[test]
     fn expand_and_shrink() {
-        let mut seg = MsgBlk::new(18);
+        let mut seg = MsgBlk::new(18).unwrap();
         assert_eq!(seg.len(), 0);
         seg.resize(18).unwrap();
         assert_eq!(seg.len(), 18);
@@ -1532,7 +1535,7 @@ mod test {
 
     #[test]
     fn prefix_len() {
-        let mut seg = MsgBlk::new(18);
+        let mut seg = MsgBlk::new(18).unwrap();
         assert_eq!(seg.head_capacity(), 0);
         seg.resize(18).unwrap();
         assert_eq!(seg.head_capacity(), 0);

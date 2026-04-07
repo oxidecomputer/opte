@@ -501,7 +501,11 @@ pub enum CompiledEncap {
 
 impl CompiledEncap {
     #[inline]
-    pub fn prepend(&self, mut pkt: MsgBlk, ulp_len: usize) -> Result<MsgBlk, PktAllocError> {
+    pub fn prepend(
+        &self,
+        mut pkt: MsgBlk,
+        ulp_len: usize,
+    ) -> Result<MsgBlk, PktAllocError> {
         let Self::Push {
             bytes,
             l3_len_offset,
@@ -1242,7 +1246,7 @@ fn rule_matching() {
 
     let eth = Ethernet { ethertype: Ethertype::IPV4, ..Default::default() };
 
-    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp));
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp)).unwrap();
     let mut pkt = Packet::parse_outbound(pkt_m.iter_mut(), GenericUlp {})
         .unwrap()
         .to_full_meta();

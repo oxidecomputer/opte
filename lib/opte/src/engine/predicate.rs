@@ -729,9 +729,7 @@ impl DataPredicate {
             }
 
             Self::Dhcpv6MsgType(mt) => {
-                let Ok(body) = meta.body() else {
-                    return false
-                };
+                let Ok(body) = meta.body() else { return false };
                 if body.is_empty() {
                     super::err!(
                         "Failed to read DHCPv6 message type from packet"

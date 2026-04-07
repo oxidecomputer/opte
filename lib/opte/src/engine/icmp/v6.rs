@@ -190,7 +190,8 @@ impl HairpinAction for Icmpv6EchoReply {
         };
 
         MsgBlk::new_ethernet_pkt((&eth, &ip6, &icmp, meta.body()?))
-            .map(AllowOrDeny::Allow).map_err(Into::into)
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 
@@ -360,9 +361,9 @@ impl HairpinAction for RouterAdvertisement {
             ethertype: Ethertype::IPV6,
         };
 
-        MsgBlk::new_ethernet_pkt((
-            &eth, &ip6, &ulp_body,
-        )).map(AllowOrDeny::Allow).map_err(Into::into)
+        MsgBlk::new_ethernet_pkt((&eth, &ip6, &ulp_body))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 
@@ -620,9 +621,9 @@ impl HairpinAction for NeighborAdvertisement {
             ethertype: Ethertype::IPV6,
         };
 
-        MsgBlk::new_ethernet_pkt((
-            &eth, &ip6, &ulp_body,
-        )).map(AllowOrDeny::Allow).map_err(Into::into)
+        MsgBlk::new_ethernet_pkt((&eth, &ip6, &ulp_body))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 

@@ -747,7 +747,7 @@ mod test {
 
     #[test]
     fn test_predicates_match_snooped_solicit_message() {
-        let mut pkt = MsgBlk::copy(test_data::TEST_SOLICIT_PACKET);
+        let mut pkt = MsgBlk::copy(test_data::TEST_SOLICIT_PACKET).unwrap();
         let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();

@@ -93,7 +93,8 @@ impl VpcNetwork {
         if is_arp_req_for_tpa(gw_ip, &arp) {
             let gw_mac = self.cfg.gateway_mac;
 
-            return arp::gen_arp_reply(gw_mac, gw_ip, arp.sha(), arp.spa()).map(HdlPktAction::Hairpin);
+            return arp::gen_arp_reply(gw_mac, gw_ip, arp.sha(), arp.spa())
+                .map(HdlPktAction::Hairpin);
         }
 
         Ok(HdlPktAction::Deny)

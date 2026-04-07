@@ -434,7 +434,7 @@ fn gateway_icmp4_ping() {
     }
 
     let mut reply_body = meta.inner_ulp().expect("ICMPv4 is a ULP").emit_vec();
-    reply.meta().append_remaining(&mut reply_body);
+    reply.meta().append_remaining(&mut reply_body).unwrap();
     let reply_pkt = Icmpv4Packet::new_checked(&reply_body).unwrap();
     let mut csum = CsumCapab::ignored();
     csum.ipv4 = smoltcp::phy::Checksum::Rx;
@@ -1616,7 +1616,7 @@ fn unpack_and_verify_icmp4(
     // Because we treat ICMPv4 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
     let mut icmp = pkt.meta().inner_ulp().unwrap().emit_vec();
-    pkt.meta().append_remaining(&mut icmp);
+    pkt.meta().append_remaining(&mut icmp).unwrap();
 
     let icmp = Icmpv4Packet::new_checked(&icmp[..]).unwrap();
 
@@ -1638,7 +1638,7 @@ fn unpack_and_verify_icmp6(
     // Because we treat ICMPv4 as a full-fledged ULP, we need to
     // unsplit the emitted header from the body.
     let mut icmp = pkt.meta().inner_ulp().unwrap().emit_vec();
-    pkt.meta().append_remaining(&mut icmp);
+    pkt.meta().append_remaining(&mut icmp).unwrap();
     let icmp = Icmpv6Packet::new_checked(&icmp[..]).unwrap();
 
     assert!(icmp.verify_checksum(&src_ip, &dst_ip));
@@ -1895,7 +1895,7 @@ fn bad_ip_len() {
 
     let udp = Udp { source: 68, destination: 67, ..Default::default() };
 
-    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth, ip, udp));
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth, ip, udp)).unwrap();
     let res =
         Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {}).err().unwrap();
     assert_eq!(
@@ -1941,7 +1941,7 @@ fn arp_gateway() {
     // let mut bytes = eth_hdr.emit_vec();
     // bytes.extend_from_slice(ArpEthIpv4Raw::from(&arp).as_bytes());
 
-    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth_hdr, arp));
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((eth_hdr, arp)).unwrap();
     let pkt = parse_outbound(&mut pkt_m, VpcParser {}).unwrap();
 
     let res = g1.port.process(Out, pkt);
@@ -1957,7 +1957,7 @@ fn arp_gateway() {
             assert_eq!(ethm.source(), cfg.gateway_mac);
             assert_eq!(ethm.ethertype(), Ethertype::ARP);
 
-            let body = hppkt.to_full_meta().meta().copy_remaining();
+            let body = hppkt.to_full_meta().meta().copy_remaining().unwrap();
 
             let (arp, ..) = ValidArpEthIpv4::parse(&body[..]).unwrap();
             assert_eq!(arp.op(), ArpOp::REPLY);
@@ -2110,7 +2110,7 @@ fn test_guest_to_gateway_icmpv6_ping(
     let msg_type = Icmpv6Message::from(icmp6.ty().0);
     let msg_code = icmp6.code();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().unwrap());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Verify the parsed metadata matches the packet
@@ -2224,7 +2224,7 @@ fn gateway_router_advert_reply() {
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().unwrap());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     let mut csum = CsumCapab::ignored();
@@ -2461,7 +2461,7 @@ fn validate_hairpin_advert(
     let ip6_src = ip6.source();
     let ip6_dst = ip6.destination();
 
-    reply_body.extend(reply.to_full_meta().meta().copy_remaining());
+    reply_body.extend(reply.to_full_meta().meta().copy_remaining().unwrap());
     let reply_pkt = Icmpv6Packet::new_checked(&reply_body).unwrap();
 
     // Validate the details of the Neighbor Advertisement itself.
@@ -2717,7 +2717,7 @@ fn write_dhcpv6_packet(
 ) -> MsgBlk {
     let total_len = msg.buffer_len() + (&eth, &ip, &udp).packet_length();
 
-    let mut pkt = MsgBlk::new_ethernet(total_len);
+    let mut pkt = MsgBlk::new_ethernet(total_len).unwrap();
     pkt.emit_back((eth, ip, udp)).unwrap();
     let l = pkt.len();
     pkt.resize(total_len).unwrap();
@@ -2885,7 +2885,7 @@ fn test_reply_to_dhcpv6_solicit_or_request() {
 
             let reply_pkt =
                 parse_inbound(&mut hp, GenericUlp {}).unwrap().to_full_meta();
-            let out_body = reply_pkt.meta().copy_remaining();
+            let out_body = reply_pkt.meta().copy_remaining().unwrap();
             drop(reply_pkt);
 
             let reply =
@@ -5022,7 +5022,7 @@ fn icmp_inner_has_nat_applied() {
     .into();
     ip.compute_checksum();
 
-    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
+    let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes)).unwrap();
     pcap.add_pkt(&pkt_m);
 
     let pkt = Packet::parse_outbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
@@ -5096,7 +5096,7 @@ fn icmpv6_inner_has_nat_applied() {
         ..Default::default()
     };
 
-    let pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
+    let pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes)).unwrap();
     let mut pkt_m = encap_external(
         pkt_m,
         *BSVC_PHYS,
@@ -5186,7 +5186,7 @@ fn test_ipv6_multicast_encapsulation() {
     let Modified(spec) = res else {
         panic!("Expected Modified result, got {res:?}");
     };
-    let mut pkt_m = spec.apply(pkt_m);
+    let mut pkt_m = spec.apply(pkt_m).unwrap();
 
     // Parse the encapsulated packet as inbound (it's now on the wire with Geneve)
     let parsed = Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
@@ -5312,7 +5312,8 @@ fn test_drop_on_unknown_critical_option() {
     };
 
     // Build inner packet first
-    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    let inner_pkt =
+        MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp)).unwrap();
     let inner_len = inner_pkt.byte_len();
 
     // Create an unknown critical Geneve option (class=0xffff, type=0x80)
@@ -5363,7 +5364,8 @@ fn test_drop_on_unknown_critical_option() {
         outer_ip,
         outer_udp,
         outer_geneve,
-    ));
+    ))
+    .unwrap();
     pkt.append(inner_pkt);
 
     // Attempt to parse the packet through VpcParser's parse_inbound, which
@@ -5488,7 +5490,8 @@ fn test_v6_ext_hdr_geneve_offset_ok() {
     };
 
     // Append inner packet bytes
-    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    let inner_pkt =
+        MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp)).unwrap();
     for chunk in inner_pkt.iter() {
         buf.extend_from_slice(chunk);
     }
@@ -5505,7 +5508,7 @@ fn test_v6_ext_hdr_geneve_offset_ok() {
     // Parse through the full pipeline using `parse_inbound()` with VpcParser
     // This tests that the parser correctly handles IPv6 extension headers and
     // finds the Geneve header after navigating the extension header chain
-    let mut pkt = MsgBlk::copy(&buf);
+    let mut pkt = MsgBlk::copy(&buf).unwrap();
     let parse_result = common::parse_inbound(&mut pkt, VpcParser {});
 
     // Parsing should succeed
