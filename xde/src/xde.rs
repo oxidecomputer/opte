@@ -2099,7 +2099,14 @@ fn guest_loopback(
 
     match dst_dev.port.process(In, parsed_pkt) {
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let mut pkt = emit_spec.apply(pkt);
+            let mut pkt = match emit_spec.apply(pkt) {
+                Ok(p) => p,
+                Err(e) => {
+                    get_xde_state().stats.vals.emit_error(Direction::In, &e);
+                    return;
+                }
+            };
+
             if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);
             }
@@ -2822,7 +2829,13 @@ fn xde_mc_tx_one<'a>(
 
             let mtu_unrestricted = emit_spec.mtu_unrestricted();
             let l4_hash = emit_spec.l4_hash();
-            let mut out_pkt = emit_spec.apply(pkt);
+            let mut out_pkt = match emit_spec.apply(pkt) {
+                Ok(p) => p,
+                Err(e) => {
+                    get_xde_state().stats.vals.emit_error(Direction::Out, &e);
+                    return;
+                }
+            };
             let new_len = out_pkt.byte_len();
 
             if ip6_src == ip6_dst {
@@ -3451,7 +3464,13 @@ fn xde_rx_one(
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let mut npkt = emit_spec.apply(pkt);
+            let mut npkt = match emit_spec.apply(pkt) {
+                Ok(p) => p,
+                Err(e) => {
+                    get_xde_state().stats.vals.emit_error(Direction::In, &e);
+                    return None;
+                }
+            };
             let len = npkt.byte_len();
             let pay_len = len
                 - usize::try_from(non_payl_bytes)
@@ -3564,7 +3583,13 @@ fn xde_rx_one_direct(
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
-            let mut npkt = emit_spec.apply(pkt);
+            let mut npkt = match emit_spec.apply(pkt) {
+                Ok(p) => p,
+                Err(e) => {
+                    get_xde_state().stats.vals.emit_error(Direction::In, &e);
+                    return;
+                }
+            };
             let len = npkt.byte_len();
             let pay_len = len
                 - usize::try_from(non_payl_bytes)

@@ -1,6 +1,7 @@
 use opte::api::Direction;
 use opte::ddi::kstat::KStatProvider;
 use opte::ddi::kstat::KStatU64;
+use opte::ddi::mblk::PktAllocError;
 use opte::engine::packet::ParseError;
 use opte::ingot::types::ParseError as IngotError;
 
@@ -28,6 +29,9 @@ pub struct XdeStats {
     /// The number of inbound packets dropped due to the presence of
     /// unrecognised critical options.
     in_drop_bad_tun_opt: KStatU64,
+    /// The number of inbound packets dropped because we failed to allocate
+    /// or pullup an `mblk_t` when applying a packet transform.
+    in_drop_alloc: KStatU64,
     /// The number of inbound packets dropped for other reasons, including
     /// parser programming errors.
     in_drop_misc: KStatU64,
@@ -50,9 +54,13 @@ pub struct XdeStats {
     /// The number of outbound packets dropped due to reporting more
     /// bytes than the packet contains.
     out_drop_bad_len: KStatU64,
+    /// The number of inbound packets dropped because we failed to allocate
+    /// or pullup an `mblk_t` when applying a packet transform.
+    out_drop_alloc: KStatU64,
     /// The number of outbound packets dropped for other reasons, including
     /// parser programming errors.
     out_drop_misc: KStatU64,
+
     // NOTE: tun_opt is not relevant to outbound packets -- no encapsulation
     // is in use.
     /// The number of multicast packets delivered to local guest instances
@@ -172,6 +180,14 @@ impl XdeStats {
             (Out, ParseError::IllegalValue(_)) => &self.out_drop_illegal_val,
             (Out, ParseError::BadLength(_)) => &self.out_drop_bad_len,
             (Out, _) => &self.out_drop_misc,
+        })
+        .incr(1)
+    }
+
+    pub fn emit_error(&self, dir: Direction, err: &PktAllocError) {
+        (match (dir, err) {
+            (Direction::In, PktAllocError) => &self.in_drop_alloc,
+            (Direction::Out, PktAllocError) => &self.out_drop_alloc,
         })
         .incr(1)
     }

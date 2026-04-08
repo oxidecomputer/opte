@@ -58,13 +58,15 @@ pub fn parse_geneve_packet(bytes: &[u8]) -> Result<GeneveInfo> {
 ///
 /// # Example
 /// ```no_run
-/// let snoop_output = snoop_underlay.assert_packet("on underlay");
-/// let stdout = String::from_utf8_lossy(&snoop_output.stdout);
+/// use opte_test_utils::geneve_verify;
+/// use opte::api::MulticastUnderlay;
+///
+/// let mcast_underlay = MulticastUnderlay::new("ff04::1".parse().unwrap()).unwrap();
 /// geneve_verify::assert_geneve_packet(
-///     &stdout,
-///     vni,
+///     "<...SnoopGuard output...>",
+///     77.try_into().unwrap(),
 ///     mcast_underlay,
-///     Replication::External,
+///     oxide_vpc::api::Replication::External,
 /// );
 /// ```
 pub fn assert_geneve_packet(
