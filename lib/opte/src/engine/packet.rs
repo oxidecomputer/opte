@@ -1554,7 +1554,6 @@ impl EmitSpec {
     /// Perform final structural transformations to a packet (removal of
     /// existing headers, and copying in new/replacement headers).
     #[inline]
-    #[must_use]
     pub fn apply(self, mut pkt: MsgBlk) -> Result<MsgBlk, PktAllocError> {
         // Rewind
         {
