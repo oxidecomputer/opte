@@ -39,6 +39,7 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::rule::GenErr;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -443,6 +444,14 @@ struct LayerStats {
     /// either explicitly or due to the default action.
     in_deny: KStatU64,
 
+    /// The number of inbound packets dropped by this layer due to an
+    /// allocation failure.
+    in_err_alloc: KStatU64,
+
+    /// The number of inbound packets dropped by this layer due to an
+    /// error reported by the action.
+    in_err_action: KStatU64,
+
     /// The current number of inbound rules.
     in_rules: KStatU64,
 
@@ -467,6 +476,14 @@ struct LayerStats {
     /// The number of outbound packets denied by this layer,
     /// either explicitly or due to the default action.
     out_deny: KStatU64,
+
+    /// The number of outbound packets dropped by this layer due to an
+    /// allocation failure.
+    out_err_alloc: KStatU64,
+
+    /// The number of outbound packets dropped by this layer due to an
+    /// error reported by the action.
+    out_err_action: KStatU64,
 
     /// The current number of outbound rules.
     out_rules: KStatU64,
@@ -797,6 +814,33 @@ impl Layer {
             Out => self.process_out(ectx, pkt, xforms, ameta),
             In => self.process_in(ectx, pkt, xforms, ameta),
         };
+        if let Err(e) = &res {
+            (match (dir, e) {
+                (In, LayerError::FlowTableFull { .. }) => {
+                    &self.stats.vals.in_lft_full
+                }
+                (Out, LayerError::FlowTableFull { .. }) => {
+                    &self.stats.vals.out_lft_full
+                }
+                (
+                    In,
+                    LayerError::BodyTransform(
+                        BodyTransformError::PayloadPullup,
+                    )
+                    | LayerError::GenPacket(GenErr::Allocation),
+                ) => &self.stats.vals.in_err_alloc,
+                (
+                    Out,
+                    LayerError::BodyTransform(
+                        BodyTransformError::PayloadPullup,
+                    )
+                    | LayerError::GenPacket(GenErr::Allocation),
+                ) => &self.stats.vals.out_err_alloc,
+                (In, _) => &self.stats.vals.in_err_action,
+                (Out, _) => &self.stats.vals.out_err_action,
+            })
+            .incr(1);
+        }
         self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
     }
@@ -896,7 +940,6 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: In,
@@ -1006,7 +1049,6 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: In,
@@ -1182,7 +1224,6 @@ impl Layer {
 
             Action::StatefulAllow => {
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: Out,
@@ -1294,7 +1335,6 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
                     return Err(LayerError::FlowTableFull {
                         layer: self.name,
                         dir: Out,
