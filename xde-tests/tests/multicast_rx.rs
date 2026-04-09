@@ -21,9 +21,11 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
+use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::MulticastUnderlay;
 use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
@@ -72,10 +74,11 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
     // (when packet loops back via u1→u2 from the underlay). This double-delivery
     // is a test artifact. In production multi-sled, only Rx delivery occurs when
     // receiving from other sleds.
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Underlay,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv4 multicast traffic (224.0.0.0/4) via Multicast target.
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
@@ -105,9 +108,9 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
     let p0 = topol.nodes[0].port.name().to_string();
     let p1 = topol.nodes[1].port.name().to_string();
     assert!(
-        s_entry.ports.contains(&p0) && s_entry.ports.contains(&p1),
+        s_entry.has_port(&p0) && s_entry.has_port(&p1),
         "expected both {p0} and {p1} to be subscribed; got {:?}",
-        s_entry.ports
+        s_entry.subscribers
     );
 
     // Assert forwarding table contains expected next hop + replication
@@ -118,10 +121,10 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast forwarding entry for underlay group");
     assert!(
-        entry.next_hops.iter().any(|(nexthop, rep)| {
-            *rep == Replication::Underlay
-                && nexthop.addr == fake_switch_addr
-                && nexthop.vni == vni
+        entry.next_hops.iter().any(|hop| {
+            hop.replication == Replication::Underlay
+                && hop.next_hop.addr == fake_switch_addr
+                && hop.next_hop.vni == vni
         }),
         "expected Underlay replication to {fake_switch_addr:?} in forwarding table; got: {:?}",
         entry.next_hops
@@ -181,9 +184,9 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast subscription entry after unsubscribe");
     assert!(
-        !s_entry2.ports.contains(&p1),
+        !s_entry2.has_port(&p1),
         "expected {p1} to be unsubscribed; got {:?}",
-        s_entry2.ports
+        s_entry2.subscribers
     );
 
     let mut snoop2 = SnoopGuard::start(&dev_name_b, &filter)?;
@@ -207,10 +210,11 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         MulticastGroup::new(mcast_group_v6.into(), mcast_underlay_v6)?;
 
     // Reuse same forwarding config
-    mcast_v6.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Underlay,
-    )])?;
+    mcast_v6.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     // Allow IPv6 multicast traffic (ff04::/16 admin-local) via Multicast target
     let mcast_cidr_v6 =
@@ -338,10 +342,11 @@ fn test_multicast_config_no_spurious_traffic() -> Result<()> {
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
 
     // Set up forwarding with Underlay replication
-    mcast.set_forwarding(vec![(
-        NextHopV6::new(fake_switch_addr, vni),
-        Replication::Underlay,
-    )])?;
+    mcast.set_forwarding(vec![McastForwardingNextHop {
+        next_hop: NextHopV6::new(fake_switch_addr, vni),
+        replication: Replication::Underlay,
+        source_filter: SourceFilter::default(),
+    }])?;
 
     let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {

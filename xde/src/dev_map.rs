@@ -8,7 +8,6 @@ use crate::postbox::Postbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::btree_map::Entry;
-use alloc::collections::btree_set::BTreeSet;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -18,6 +17,7 @@ use opte::api::OpteError;
 use opte::api::Vni;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
+use oxide_vpc::api::SourceFilter;
 
 /// A map/set lookup key for ports indexed on `(Vni, MacAddr)`.
 ///
@@ -63,13 +63,14 @@ pub struct DevMap {
     devs: BTreeMap<VniMac, Dev>,
     names: BTreeMap<String, Dev>,
     /// Subscriptions keyed by underlay IPv6 multicast group (admin-scoped ff04::/16).
+    /// Each port has its own source filter for per-member filtering.
     /// This table is sled-local and independent of any per-VPC VNI. VNI validation
     /// and VPC isolation are enforced during inbound overlay decapsulation on the
     /// destination port, not here.
     ///
     /// Rationale: multicast groups are fleet-wide; ports opt-in to receive a given
     /// underlay group, and the overlay layer subsequently filters by VNI as appropriate.
-    mcast_groups: BTreeMap<MulticastUnderlay, BTreeSet<VniMac>>,
+    mcast_groups: BTreeMap<MulticastUnderlay, BTreeMap<VniMac, SourceFilter>>,
 }
 
 impl Default for DevMap {
@@ -102,23 +103,30 @@ impl DevMap {
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
         let key = get_key(&self.names.remove(name)?);
 
-        self.mcast_groups.retain(|_group, subscribers| {
-            subscribers.remove(&key);
-            !subscribers.is_empty()
+        self.mcast_groups.retain(|_group, members| {
+            members.remove(&key);
+            !members.is_empty()
         });
 
         self.devs.remove(&key)
     }
 
-    /// Allow a port to receive on a given multicast group.
+    /// Allow a port to receive on a given multicast group with source filtering.
     ///
     /// This takes the underlay IPv6 multicast group address (ff04::/16).
     /// Callers at the ioctl boundary may pass an overlay group; the handler
-    /// translates overlay→underlay via the M2P table before calling here.
+    /// translates overlay->underlay via the M2P table before calling here.
+    ///
+    /// The source filter determines which packet sources this port accepts:
+    /// - `Exclude` with empty sources: accept any source (*, G)
+    /// - `Include` with sources: accept only listed sources
+    ///
+    /// Re-subscribing with a different filter updates the existing subscription.
     pub fn mcast_subscribe(
         &mut self,
         name: &str,
         mcast_underlay: MulticastUnderlay,
+        filter: SourceFilter,
     ) -> Result<(), OpteError> {
         let port = self
             .names
@@ -126,7 +134,10 @@ impl DevMap {
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
         let key = get_key(port);
 
-        self.mcast_groups.entry(mcast_underlay).or_default().insert(key);
+        self.mcast_groups
+            .entry(mcast_underlay)
+            .or_default()
+            .insert(key, filter);
 
         Ok(())
     }
@@ -143,8 +154,13 @@ impl DevMap {
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
         let key = get_key(port);
 
-        if let Entry::Occupied(set) = self.mcast_groups.entry(mcast_underlay) {
-            set.into_mut().remove(&key);
+        if let Entry::Occupied(mut entry) =
+            self.mcast_groups.entry(mcast_underlay)
+        {
+            entry.get_mut().remove(&key);
+            if entry.get().is_empty() {
+                entry.remove();
+            }
         }
 
         Ok(())
@@ -155,11 +171,11 @@ impl DevMap {
         self.mcast_groups.remove(&mcast_underlay);
     }
 
-    /// Find the keys for all ports who want to receive a given multicast packet.
-    pub fn mcast_listeners(
+    /// Find all subscribers for a given multicast group with their source filters.
+    pub fn mcast_subscribers(
         &self,
         mcast_underlay: &MulticastUnderlay,
-    ) -> Option<impl Iterator<Item = &VniMac>> {
+    ) -> Option<impl Iterator<Item = (&VniMac, &SourceFilter)>> {
         self.mcast_groups.get(mcast_underlay).map(|v| v.iter())
     }
 
@@ -217,18 +233,21 @@ impl DevMap {
         }
     }
 
-    /// Dump all multicast subscriptions as a vector of (group, ports) pairs.
+    /// Dump all multicast subscriptions as a vector of (group, subscribers) pairs.
     pub fn dump_mcast_subscriptions(
         &self,
-    ) -> Vec<(MulticastUnderlay, Vec<String>)> {
+    ) -> Vec<(MulticastUnderlay, Vec<(String, SourceFilter)>)> {
         let mut out = Vec::new();
         for (group, subs) in self.mcast_groups.iter() {
-            let ports: Vec<String> = subs
+            let subscribers: Vec<(String, SourceFilter)> = subs
                 .iter()
-                .filter_map(|vm| self.devs.get(vm))
-                .map(|d| d.devname.clone())
+                .filter_map(|(vm, filter)| {
+                    self.devs
+                        .get(vm)
+                        .map(|d| (d.devname.clone(), filter.clone()))
+                })
                 .collect();
-            out.push((*group, ports));
+            out.push((*group, subscribers));
         }
         out
     }
