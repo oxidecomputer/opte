@@ -2333,6 +2333,7 @@ fn handle_mcast_tx<'a>(
 
     // Local same-sled delivery: always deliver to subscribers on this sled,
     // independent of the Tx-only Replication instruction (not an access control mechanism).
+    //
     // The Replication type only affects how switches handle the packet on Tx.
     // Subscription is keyed by underlay (outer) IPv6 multicast address.
     let underlay_addr =
@@ -2340,7 +2341,9 @@ fn handle_mcast_tx<'a>(
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
 
     if let Some(subscribers) = devs.mcast_subscribers(&group_key) {
-        let my_key = VniMac::new(ctx.vni, src_dev.port.mac_addr());
+        // Use the port's VPC VNI, not the multicast VNI from the
+        // Geneve header (ctx.vni), to match how DevMap keys on ports.
+        let my_key = VniMac::new(src_dev.vni, src_dev.port.mac_addr());
         for (key, filter) in subscribers {
             // Skip delivering to self
             if my_key == *key {
