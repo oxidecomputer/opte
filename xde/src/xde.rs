@@ -523,8 +523,7 @@ pub struct XdeUnderlayPort {
     /// The MTU of this link.
     pub mtu: u32,
 
-    /// MAC promiscuous handle for receiving packets on the underlay link.
-    // siphon: MacSiphon<UnderlayDev>,
+    /// MAC flow handle for receiving Geneve packets on the underlay link.
     flow: MacFlow<UnderlayDev>,
 
     /// DLS-level handle on a device for promiscuous registration and
@@ -1570,19 +1569,18 @@ fn clear_xde_underlay() -> Result<NoResp, OpteError> {
             // there are no outstanding refs.
 
             // 1. Remove packet rx callback.
-            // drop(u.siphon);
             drop(u.flow);
 
             // Although `xde_rx` can be called into without any running ports
             // via the siphon handle, illumos guarantees that this callback won't
-            // be running here. `mac_siphon_clear` performs the moral equivalent of
+            // be running here. Removal of a MAC flow performs the moral equivalent of
             // `mac_rx_barrier` -- the client's SRS is quiesced, and then restarted
-            // after the callback is removed.
+            // after the callback and any references to the flow are removed.
             // Because there are no ports and we hold the write/management lock, no
             // one else will have or try to clone the Stream handle.
 
             // 2. Close the open stream handle.
-            // The only other hold on this `DlsStream` is via `u.siphon`, which
+            // The only other hold on this `DlsStream` is via `u.flow`, which
             // we just dropped. The `unwrap_or_else` asserts that we have consumed them
             // in the correct order.
             Arc::into_inner(u.stream).unwrap_or_else(|| {
@@ -3326,7 +3324,7 @@ unsafe extern "C" fn xde_rx(
     let stream = unsafe {
         (arg as *const UnderlayDev)
             .as_ref()
-            .expect("packet was received from siphon with a NULL argument")
+            .expect("packet was received from flow with a NULL argument")
     };
 
     let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
