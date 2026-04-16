@@ -717,7 +717,14 @@ impl MacFlowDesc {
                 link_id.into(),
                 name.as_ptr(),
                 &desc,
-                &MAC_RESOURCE_PROPS_DEF,
+                // We can provide custom CPU and resource bindings here,
+                // but we're choosing to go with the default for now given that
+                //  - these will mirror the underlying NIC in terms of fanout and
+                //    priority.
+                //  - we will likely be changing the API and structures here,
+                //    and I'd rather we have no out-of-tree clients for that
+                //    interface until we stabilise it.
+                ptr::null(),
                 &flow_ac,
             )
         } {
