@@ -519,6 +519,14 @@ fn setup_ipv6_nat(
     Ok(())
 }
 
+/// Replace all external IP-related rules in the NAT layer with a new set
+/// corresponding to `req.external_ips_v4` and  `req.external_ips_v6`.
+///
+/// Passing `None` (or `Some(ExternalIpCfg::default())`) will remove all IPs
+/// of the given family.
+///
+/// Passing `Some(_)` external IPs to a port which does not support that
+/// IP address family will return an error.
 pub fn set_external_ips(
     port: &Port<VpcNetwork>,
     req: SetExternalIpsReq,
