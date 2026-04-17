@@ -211,7 +211,7 @@ pub struct Ipv6Cfg {
 }
 
 /// Configuration of NAT assignments used by a VPC guest for external networking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExternalIpCfg<T> {
     /// The source NAT configuration for making outbound connections
     /// from the private network.
