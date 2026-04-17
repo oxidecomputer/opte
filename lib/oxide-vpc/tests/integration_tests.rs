@@ -1374,10 +1374,17 @@ fn external_ip_epoch_affinity_preserved() {
         ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
     });
 
+    let (external_ips_v4, external_ips_v6) =
+        if let IpCfg::DualStack { ipv4, ipv6 } = &g1_cfg.ip_cfg {
+            (Some(ipv4.external_ips.clone()), Some(ipv6.external_ips.clone()))
+        } else {
+            panic!("port is built as dual-stack");
+        };
+
     let mut req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
-        external_ips_v4: None,
-        external_ips_v6: None,
+        external_ips_v4,
+        external_ips_v6,
 
         // This test does not focus on controlling EIP selection
         // based on destination prefix.
@@ -4714,23 +4721,32 @@ fn select_eip_conditioned_on_igw() {
     // * All EIPs are valid on IGW4.
     //   - Packets will choose a random FIP, by priority ordering.
 
+    let v4_ext = ExternalIpCfg {
+        snat: Some(SNat4Cfg {
+            external_ip: "10.77.77.13".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
+        floating_ips: vec![
+            "192.168.0.2".parse().unwrap(),
+            "192.168.0.3".parse().unwrap(),
+            "192.168.0.4".parse().unwrap(),
+        ],
+    };
+    let v6_ext = ExternalIpCfg {
+        snat: Some(SNat6Cfg {
+            external_ip: "2001:db8::1".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: None,
+        floating_ips: vec![],
+    };
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat4Cfg {
-                    external_ip: "10.77.77.13".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
-                floating_ips: vec![
-                    "192.168.0.2".parse().unwrap(),
-                    "192.168.0.3".parse().unwrap(),
-                    "192.168.0.4".parse().unwrap(),
-                ],
-            },
+            external_ips: v4_ext,
             attached_subnets: BTreeMap::new(),
             transit_ips: BTreeMap::new(),
         },
@@ -4739,14 +4755,7 @@ fn select_eip_conditioned_on_igw() {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat6Cfg {
-                    external_ip: "2001:db8::1".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: None,
-                floating_ips: vec![],
-            },
+            external_ips: v6_ext.clone(),
             attached_subnets: BTreeMap::new(),
             transit_ips: BTreeMap::new(),
         },
@@ -4827,7 +4836,7 @@ fn select_eip_conditioned_on_igw() {
     let req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
         external_ips_v4: new_v4_cfg,
-        external_ips_v6: None,
+        external_ips_v6: Some(v6_ext),
 
         // Setting the inet GW mappings for each external IP
         // enables the limiting we aim to test here.
