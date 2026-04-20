@@ -30,7 +30,7 @@ fi
 # version in the event of backports, or other scenarios which would otherwise
 # lead to a version conflict in the helios repository.
 API_VSN=$(./print-api-version.sh)
-TAG=""
+TAG="19.2"
 PKG_VERSION="0.$API_VSN.$COMMIT_COUNT"
 if [ $TAG ]; then
     PKG_VERSION=$PKG_VERSION-$TAG
