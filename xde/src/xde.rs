@@ -2707,15 +2707,15 @@ unsafe extern "C" fn xde_mc_tx(
     let src_dev = unsafe { &*(arg as *mut XdeDev) };
 
     // ================================================================
-    // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
-    // Packet takes ownership of an mblk_t from mp_chain. When these
+    // IMPORTANT: MsgBlkChain now takes ownership of mp_chain, and each
+    // MsgBlk takes ownership of an mblk_t from mp_chain. When these
     // structs are dropped, so are any contained packets at those pointers.
     // Be careful with any calls involving mblk_t pointers (or their
     // uintptr_t numeric forms) after this point. They should only be calls
     // that read (i.e., SDT arguments), nothing that writes or frees. But
     // really you should think of mp_chain as &mut and avoid any reference
     // to it past this point. Ownership is taken back by calling
-    // Packet/PacketChain::unwrap_mblk().
+    // MsgBlk/MsgBlkChain::unwrap_mblk().
     //
     // XXX We may use Packet types with non-'static lifetimes in future.
     //     We *will* still need to remain careful here and `xde_rx` as
