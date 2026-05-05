@@ -127,7 +127,7 @@ impl OpteHdl {
         &self,
         name: &str,
         cfg: VpcCfg,
-        passthrough: bool,
+        mtu: Option<u32>,
     ) -> Result<NoResp, Error> {
         use libnet::link;
 
@@ -139,7 +139,7 @@ impl OpteHdl {
 
         let xde_devname = name.into();
         let cmd = OpteCmd::CreateXde;
-        let req = CreateXdeReq { xde_devname, linkid, cfg, passthrough };
+        let req = CreateXdeReq { xde_devname, linkid, cfg, mtu };
 
         let res = run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req));
 
