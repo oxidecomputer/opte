@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! TCP headers.
 
@@ -16,11 +16,18 @@ pub const TCP_HDR_OFFSET_SHIFT: u8 = 4;
 pub const TCP_PORT_RDP: u16 = 3389;
 pub const TCP_PORT_SSH: u16 = 22;
 
-/// The duration after which a connection in TIME-WAIT should be
-/// considered free for either side to reuse.
+/// The duration after which we can remove a TCP state entry which is still in
+/// the three-way handshake.
 ///
-/// This value is chosen by Windows and MacOS, which is larger
-/// than Linux's default 60s. Allowances for tuned servers and/or
+/// This value is set very low to prevent SYN-flood like traffic (or many
+/// unacknowledged SYNs from the guest) from holding TCP flow entry slots for
+/// the full [`KEEPALIVE_EXPIRE_SECS`].
+pub const INCIPIENT_EXPIRE_SECS: u64 = 5;
+/// The duration after which a connection in TIME-WAIT or another closing state
+/// should be considered free for either side to reuse.
+///
+/// This value is chosen from the TIME-WAIT duratio of Windows and MacOS, which
+/// is larger than Linux's default 60s. Allowances for tuned servers and/or
 /// more aggressive reuse via RFCs 1323/7323 and/or 6191 are made in
 /// `tcp_state`.
 pub const TIME_WAIT_EXPIRE_SECS: u64 = 120;
@@ -31,6 +38,7 @@ pub const TIME_WAIT_EXPIRE_SECS: u64 = 120;
 /// keepalive, when interval + probe count will result in a timeout after
 /// 8mins (illumos) / 11mins (linux).
 pub const KEEPALIVE_EXPIRE_SECS: u64 = 8_000;
+pub const INCIPIENT_EXPIRE_TTL: Ttl = Ttl::new_seconds(INCIPIENT_EXPIRE_SECS);
 pub const TIME_WAIT_EXPIRE_TTL: Ttl = Ttl::new_seconds(TIME_WAIT_EXPIRE_SECS);
 pub const KEEPALIVE_EXPIRE_TTL: Ttl = Ttl::new_seconds(KEEPALIVE_EXPIRE_SECS);
 

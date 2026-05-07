@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! A virtual switch port.
 
@@ -44,6 +44,7 @@ use super::rule::HdrTransformError;
 use super::rule::PresavedMeoi;
 use super::rule::Rule;
 use super::rule::TransformFlags;
+use super::tcp::INCIPIENT_EXPIRE_TTL;
 use super::tcp::KEEPALIVE_EXPIRE_TTL;
 use super::tcp::TIME_WAIT_EXPIRE_TTL;
 use super::tcp_state::TcpFlowState;
@@ -2992,14 +2993,16 @@ impl Dump for TcpFlowEntryState {
 /// Expiry behaviour for TCP flows dependent on the connection FSM.
 #[derive(Debug)]
 pub struct TcpExpiry {
-    time_wait_ttl: Ttl,
+    incipient_ttl: Ttl,
+    quiescent_ttl: Ttl,
     keepalive_ttl: Ttl,
 }
 
 impl Default for TcpExpiry {
     fn default() -> Self {
         Self {
-            time_wait_ttl: TIME_WAIT_EXPIRE_TTL,
+            incipient_ttl: INCIPIENT_EXPIRE_TTL,
+            quiescent_ttl: TIME_WAIT_EXPIRE_TTL,
             keepalive_ttl: KEEPALIVE_EXPIRE_TTL,
         }
     }
@@ -3012,8 +3015,16 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
         now: Moment,
     ) -> bool {
         let ttl = match entry.state().tcp_state() {
-            TcpState::TimeWait => self.time_wait_ttl,
-            _ => self.keepalive_ttl,
+            TcpState::TimeWait
+            | TcpState::LastAck
+            | TcpState::CloseWait
+            | TcpState::FinWait1
+            | TcpState::FinWait2 => self.quiescent_ttl,
+            TcpState::SynSent | TcpState::SynRcvd | TcpState::Listen => {
+                self.incipient_ttl
+            }
+            TcpState::Established => self.keepalive_ttl,
+            TcpState::Closed => Ttl::new_seconds(0),
         };
         ttl.is_expired(entry.last_hit(), now)
     }
