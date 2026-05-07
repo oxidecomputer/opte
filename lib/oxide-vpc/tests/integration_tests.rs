@@ -15,6 +15,7 @@
 
 use common::icmp::*;
 use common::*;
+use opte::api::L4Info;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::api::TcpState;
@@ -48,6 +49,7 @@ use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
 use opte::engine::rule::MappingResource;
+use opte::engine::tcp::INCIPIENT_EXPIRE_SECS;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::GeneveRef;
@@ -3706,6 +3708,120 @@ fn early_tcp_invalidation() {
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+}
+
+// We have agressive TCP flow entry expiry for flows in the three-way
+// handshake, to ensure that they do not consume table entry space for
+// extremely long periods of time in potential SYN-flood DOS scenarios.
+//
+// However, a slow handshake should still function using the underlying
+// LFT entries where, e.g., the default firewall disposition is in use.
+#[test]
+fn tcp_invalidation_does_not_block_connection() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Ensure we only have the default rules: allow all outbound, block
+    // all inbound.
+    firewall::set_fw_rules(
+        &g1.port,
+        &SetFwRulesReq { port_name: g1.port.name().to_string(), rules: vec![] },
+    )
+    .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=0, firewall.rules.in=0",
+        ]
+    );
+
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let dst_ip = Ipv4Addr::from_const([172, 30, 0, 6]);
+    g1.vpc_map.add(dst_ip.into(), g1_cfg.phys_addr());
+
+    // Attempt to connect to a hypothetical TCP recipient in the same VPC,
+    // on the same sled. This will create new TCP state and setup inbound
+    // LFTs for a SYN-ACK to use.
+    let mut pkt1_m = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow();
+    let remote_port = if let Some(L4Info::Ports(a)) = flow.l4_info() {
+        a.src_port
+    } else {
+        panic!()
+    };
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+
+    // Assume that the recipient takes some time to get back to us, but not
+    // long enough to expire the UFT/LFTs. The TCP state will expire.
+    let t0 = Moment::now();
+    let t1 = t0 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t1).unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
+
+    // The SYN-ACK arrives, and we allow it through. This creates a new
+    // instance of TCP state.
+    let mut pkt2_m = http_syn_ack2(
+        BS_MAC_ADDR,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        remote_port,
+    );
+    pkt2_m = encap(pkt2_m, g1_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_miss, uft.in"]);
+    // TODO(ky): correct?
+    assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
+
+    // And now our instance takes an abnormally long time to reply, in turn.
+    // This packet should also survive.
+    let t2 = t1 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t2).unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
+
+    let mut pkt3_m = http_ack2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt3);
+    expect_modified!(res, pkt3_m);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
+    print_port(&g1.port, &g1.vpc_map);
+
+    // TODO(ky): something is amiss here. I think we're in a weird spot where
+    // we have two UFTs who are hanging onto a separate TCP state which is
+    // excised from the table. Need to handle...
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 }
 
 #[test]
