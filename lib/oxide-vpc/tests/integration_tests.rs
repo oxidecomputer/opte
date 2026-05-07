@@ -3797,31 +3797,14 @@ fn tcp_invalidation_does_not_block_connection() {
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
     incr!(g1, ["stats.port.in_modified, stats.port.in_uft_miss, uft.in"]);
-    // TODO(ky): correct?
-    assert_eq!(TcpState::Listen, g1.port.tcp_state(&flow).unwrap());
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
 
-    // And now our instance takes an abnormally long time to reply, in turn.
-    // This packet should also survive.
+    // Receiving a SYN-ACK moves the connection into established. We'd expect
+    // this normally from `SynSent`, if the state hadn't been lost. This state
+    // will survive a short wait.
     let t2 = t1 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
     g1.port.expire_flows_at(t2).unwrap();
-    assert_eq!(None, g1.port.tcp_state(&flow));
-
-    let mut pkt3_m = http_ack2(
-        g1_cfg.guest_mac,
-        g1_cfg.ipv4().private_ip,
-        GW_MAC_ADDR,
-        dst_ip,
-    );
-    let pkt3 = parse_outbound(&mut pkt3_m, VpcParser {}).unwrap();
-    let res = g1.port.process(Out, pkt3);
-    expect_modified!(res, pkt3_m);
-    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_hit"]);
-    print_port(&g1.port, &g1.vpc_map);
-
-    // TODO(ky): something is amiss here. I think we're in a weird spot where
-    // we have two UFTs who are hanging onto a separate TCP state which is
-    // excised from the table. Need to handle...
-    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+    assert_eq!(Some(TcpState::Established), g1.port.tcp_state(&flow));
 }
 
 #[test]

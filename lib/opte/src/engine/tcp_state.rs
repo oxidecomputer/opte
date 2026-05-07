@@ -148,24 +148,30 @@ impl TcpFlowState {
 
         match self.tcp_state {
             Closed => {
-                // We have a new inbound SYN. We assume for now the
-                // guest is listening on the given port by moving to
-                // the LISTEN state.
-                if flags.contains(IngotTcpFlags::SYN) {
-                    return Some(Listen);
-                }
-
-                // We pontentially have a legitimate inbound data
+                // We potentially have a legitimate inbound data
                 // segment for an ESTABLISHED connection that
                 // previously expired in OPTE but is still active in
-                // the guest. We immeidately move this to the
+                // the guest. We immediately move this to the
                 // ESTABLISHED state even though that might be a lie.
                 // We rely on the fact that the guest will immediately
                 // respond with an ACK or RST. In the future we could
                 // instead keep this in some type of probationary
                 // state (or separate table).
+                //
+                // Alternately, we've received a SYN-ACK, but don't have
+                // state indicating that we sent an initial SYN because
+                // the remote half took longer than the incipient expiry
+                // period to respond. In this case, this is identical to
+                // the transition from `SynSent`.
                 if flags.contains(IngotTcpFlags::ACK) {
                     return Some(Established);
+                }
+
+                // We have a new inbound SYN. We assume for now the
+                // guest is listening on the given port by moving to
+                // the LISTEN state.
+                if flags.contains(IngotTcpFlags::SYN) {
+                    return Some(Listen);
                 }
 
                 None
