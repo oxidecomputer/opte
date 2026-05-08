@@ -3016,13 +3016,13 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
     ) -> bool {
         let ttl = match entry.state().tcp_state() {
             TcpState::TimeWait
-            | TcpState::LastAck
             | TcpState::CloseWait
             | TcpState::FinWait1
             | TcpState::FinWait2 => self.quiescent_ttl,
-            TcpState::SynSent | TcpState::SynRcvd | TcpState::Listen => {
-                self.incipient_ttl
-            }
+            TcpState::SynSent
+            | TcpState::SynRcvd
+            | TcpState::Listen
+            | TcpState::LastAck => self.incipient_ttl,
             TcpState::Established => self.keepalive_ttl,
             TcpState::Closed => Ttl::new_seconds(0),
         };
