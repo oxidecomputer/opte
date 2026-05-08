@@ -331,7 +331,7 @@ type McastForwardingTable = BTreeMap<
 >;
 
 // Entry limits for the various flow tables.
-const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
+const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(524288).unwrap();
 const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// The name of this driver.
@@ -3262,12 +3262,12 @@ fn new_port(
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
-    firewall::setup(&mut pb, FW_FT_LIMIT)?;
-
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
+
+    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
+    firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
