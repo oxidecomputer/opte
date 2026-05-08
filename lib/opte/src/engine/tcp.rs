@@ -26,7 +26,7 @@ pub const INCIPIENT_EXPIRE_SECS: u64 = 5;
 /// The duration after which a connection in TIME-WAIT or another closing state
 /// should be considered free for either side to reuse.
 ///
-/// This value is chosen from the TIME-WAIT duratio of Windows and MacOS, which
+/// This value is chosen from the TIME-WAIT duration of Windows and MacOS, which
 /// is larger than Linux's default 60s. Allowances for tuned servers and/or
 /// more aggressive reuse via RFCs 1323/7323 and/or 6191 are made in
 /// `tcp_state`.
