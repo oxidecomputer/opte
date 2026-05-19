@@ -151,37 +151,31 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
 
 impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     fn inherit_last_hit(&self, new_time: Moment) {
-        // The expectation right now is that this will be called within the
-        // port lock, so there will be no concurrent modification of the value.
-        let mut prior = self.lifetime.last_hit.load(Ordering::Relaxed);
         let new = new_time.raw_millis();
-        while new > prior {
-            if let Err(updated) = self.lifetime.last_hit.compare_exchange_weak(
-                prior,
-                new_time.raw_millis(),
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                prior = updated
-            } else {
-                break;
-            }
-        }
+        // An error from the below call implies a concurrent modification with
+        // a time later than `new_time`. In that case there's just nothing left
+        // to do here.
+        _ = self.lifetime.last_hit.try_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |prior| (prior < new).then_some(new),
+        );
     }
 
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority> {
         let own_prio = self.policy.eviction_priority(self, now);
 
-        //
+        // An explicit signal that this flow is well-behaved wins outright.
         if let Some(EvictionPriority::Protected) = own_prio {
             return own_prio;
         }
-        // A priority of `None` is unevictable -- we don't have any
-        // information that tells us how poorly behaved.
+
+        // A priority of `None` tells us nothing, and will eventually resolve
+        // into `EvictionPriority::Protected` if no explicit priorities are
+        // provided.
         //
-        // If we have an explicit priority, we keep the *best*
-        // (lowest) priority which we know of. There should be at most
-        // one child in practice.
+        // If we have an explicit priority, we keep the most-protected (lowest)
+        // priority which we know of.
         let mut best_prio = own_prio;
         for maybe_child in &*self.lifetime.children.read() {
             if let Some(child) = maybe_child.0.upgrade() {
@@ -208,10 +202,10 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 
     fn mark_evicted(&self) {
         if !self.lifetime.killed.swap(true, Ordering::Relaxed) {
-            // Any flow entry is only valid while all of its parents still exist.
-            // Timeout-driven expiry will not remove an entry while there are still
-            // live parents, but during eviction we need to go through and mark them
-            // as invalid in turn.
+            // Any flow entry is only valid while all of its parents still
+            // exist. Timeout-driven expiry will not remove an entry while there
+            // are still live parents, but during eviction we need to go through
+            // and mark them as invalid in turn.
             for maybe_child in &*self.lifetime.children.read() {
                 if let Some(child) = maybe_child.0.upgrade() {
                     child.mark_evicted();
@@ -266,7 +260,10 @@ impl<S: FlowState> FlowTable<S> {
         entry
     }
 
-    /// TODO
+    /// Add a new entry to the flow table, assigning it the same lifetime as
+    /// an existing entry in another table.
+    ///
+    /// As in [`Self::add_unchecked`], this elides the capacity check.
     pub fn add_unchecked_partner<T: FlowState>(
         &mut self,
         flow_id: InnerFlowId,
@@ -310,11 +307,11 @@ impl<S: FlowState> FlowTable<S> {
         let mut expired = vec![];
 
         self.map.retain(|flowid, entry| {
-            // A flow cannot be expired while it still has children relying upon
-            // its existence. We should also clear out any dangling entries at
-            // this time.
+            // A flow cannot be expired by the timer while it still has children
+            // relying upon its existence. Check whether any remain, and remove
+            // dangling references to child entries which have expired.
             {
-                // Since we have a write lock on the port, there shouldn't be
+                // We have a write lock on the port, so there shouldn't be
                 // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
@@ -342,6 +339,10 @@ impl<S: FlowState> FlowTable<S> {
         expired
     }
 
+    /// Determine whether there is currently space for a new entry to be
+    /// inserted.
+    ///
+    /// If out of space, this method will attempt to evict an existing entry.
     pub fn check_for_space(&mut self) -> Result<()> {
         if self.map.len() < self.limit.get() as usize {
             return Ok(());
@@ -355,12 +356,18 @@ impl<S: FlowState> FlowTable<S> {
         }
     }
 
+    /// Select the flow entry most eligible for eviction (i.e., having the
+    /// numerically highest priority and the oldest timestamp).
+    ///
+    /// Entries which have been killed due to the loss of a dependency will be
+    /// used where possible.
     pub fn find_evictable_entry(&self) -> Option<(InnerFlowId, &FlowEntry<S>)> {
         let now = Moment::now();
 
-        // TODO(ky): some form of datastructure to accelerate?
+        // TODO: some form of datastructure to accelerate this?
         // Who would be responsible for keeping that up to date?
-        // If this cache is wrong, we're just hitting the O(n) scan anyhow?
+        // If that cache is wrong, we're just hitting the O(n) scan anyhow.
+
         let mut to_evict = None;
         for (key, entry) in self.map.iter() {
             if entry.is_killed() {
@@ -494,12 +501,16 @@ pub trait Dump: fmt::Debug + Send + Sync {
     fn dump(&self, hits: u64) -> Self::DumpVal;
 }
 
+/// Common functions needed from the interior state of a flow table entry.
 pub trait FlowState: Dump {
+    /// Return an iterator containing references to all flow entries from other
+    /// tables which underpin `self`.
     fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
         [].into_iter()
     }
 }
 
+/// Lifecycle state for a flow entry or set of interlinked flow entries.
 struct FlowLifetime {
     /// This tracks the last time the flow was matched.
     ///
@@ -529,6 +540,7 @@ impl fmt::Debug for FlowLifetime {
     }
 }
 
+/// Helper newtype to deduplicate child flow entries by address.
 struct ByAddr(Weak<dyn FlowEntryInfo>);
 
 impl PartialEq for ByAddr {
@@ -554,6 +566,7 @@ impl PartialOrd for ByAddr {
 /// The FlowEntry holds any arbitrary state type `S`.
 #[derive(Debug)]
 pub struct FlowEntry<S: FlowState> {
+    /// The 5-tuple of this flow, used as the lookup key in the parent map.
     id: InnerFlowId,
 
     state: S,
@@ -561,6 +574,7 @@ pub struct FlowEntry<S: FlowState> {
     /// Number of times this flow has been matched.
     hits: AtomicU64,
 
+    /// State determining whether this flow can be expired or evicted.
     lifetime: Arc<FlowLifetime>,
 
     /// Records whether this flow predates a rule change, and
@@ -692,6 +706,9 @@ impl Dump for () {
     fn dump(&self, _hits: u64) {}
 }
 
+impl FlowState for () {}
+
+/// A score of how likely we are to evict a given flow.
 enum EvictionKey {
     Dead,
     Evictable(EvictionPriority, Moment),
@@ -707,8 +724,6 @@ mod test {
     use core::time::Duration;
 
     pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
-
-    impl FlowState for () {}
 
     #[test]
     fn flow_expired() {
