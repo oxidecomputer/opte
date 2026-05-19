@@ -3156,17 +3156,17 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
         entry: &FlowEntry<TcpFlowEntryState>,
         now: Moment,
     ) -> Option<EvictionPriority> {
-        // The strategy here for now is to mark a flow as evictable halfway to
-        // the expiry time. Established flows are an exception, where we allow a
-        // such a flow to be evicted when needed, but otherwise aim to keep the
-        // LFTs in place even while the flow is inactive.
         let delta = now.delta_as_millis(entry.last_hit());
         match entry.state().tcp_state() {
             TcpState::TimeWait
             | TcpState::CloseWait
             | TcpState::FinWait1
             | TcpState::FinWait2 => match delta {
-                a if a > self.quiescent_ttl.as_milliseconds() / 2 => {
+                // We can remain in a closing state for quite some time. We need
+                // to be willing to evict such entries from this cache fairly
+                // quickly, but leave them in place for the ~120s when we are
+                // not under pressure.
+                a if a > self.incipient_ttl.as_milliseconds() => {
                     Some(EvictionPriority::Evictable(NonZeroU16::MIN))
                 }
                 _ => Some(EvictionPriority::Protected),
@@ -3175,11 +3175,17 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
             | TcpState::SynRcvd
             | TcpState::Listen
             | TcpState::LastAck => match delta {
+                // Ordinarily we will expire flows in these states quickly. If
+                // we are under table pressure, we can allow them to be
+                // explicitly selected for removal faster.
                 a if a > self.incipient_ttl.as_milliseconds() / 2 => {
                     Some(EvictionPriority::Evictable(NonZeroU16::MIN))
                 }
                 _ => Some(EvictionPriority::Protected),
             },
+            // Allow established flows to be evicted on the same time scale as
+            // UFT/LFT expiry, but if we are not under pressure then we aim to
+            // keep the LFTs in place even while the flow is inactive.
             TcpState::Established
                 if delta >= FLOW_DEF_TTL.as_milliseconds() =>
             {
