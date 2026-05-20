@@ -982,7 +982,11 @@ mod test {
             evict_ft.add(new_id, ()).unwrap();
         }
 
-        // On a table where every flow is evictable, we can!
+        // We've set this table up so that one of these flows will have a
+        // far higher eviction priority than its neighbours. This could
+        // be driven by protocol, by time, or some other aspect of flow state.
+        //
+        // This is the entry we will evict, regardless of the age of all others.
         assert!(evict_ft.map.contains_key(&sacrificial_flow));
         assert!(evict_ft.add(flowid, ()).is_ok());
         assert_eq!(evict_ft.num_flows(), FT_SIZE.unwrap().get());
