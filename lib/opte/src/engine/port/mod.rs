@@ -1476,7 +1476,7 @@ impl<N: NetworkImpl> Port<N> {
                         decision = FastPathDecision::Slow;
                         lock = Some(self.data.write());
                     }
-                    // There is no TCP flow
+                    // There is no TCP flow.
                     None => {}
                 }
             }

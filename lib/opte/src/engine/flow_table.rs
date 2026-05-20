@@ -725,6 +725,28 @@ mod test {
 
     pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
 
+    #[derive(Debug, Clone)]
+    struct FixedPolicy {
+        time: Duration,
+        default: Option<EvictionPriority>,
+        manual: BTreeMap<InnerFlowId, EvictionPriority>,
+    }
+
+    impl<S: FlowState> ExpiryPolicy<S> for FixedPolicy {
+        fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+            entry.last_hit().delta_as_millis(now)
+                >= (self.time.as_millis() as u64)
+        }
+
+        fn eviction_priority(
+            &self,
+            entry: &FlowEntry<S>,
+            _now: Moment,
+        ) -> Option<EvictionPriority> {
+            self.manual.get(entry.id()).copied().or(self.default)
+        }
+    }
+
     #[test]
     fn flow_expired() {
         let flowid = InnerFlowId {
@@ -768,5 +790,133 @@ mod test {
         assert_eq!(ft.num_flows(), 1);
         ft.clear();
         assert_eq!(ft.num_flows(), 0);
+    }
+
+    #[test]
+    fn children_prevent_timer_expiry() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let mut ft1 =
+            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
+        let mut ft2 =
+            FlowTable::new("port", "child-table", FT_SIZE.unwrap(), None);
+        let fe1 = ft1.add(flowid, ()).unwrap();
+        let fe2 = ft2.add(flowid, ()).unwrap();
+
+        let now = fe2.last_hit();
+        fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>));
+
+        // A flow entry cannot be removed by the timer until all its children
+        // have been evicted or expired.
+        let t2 = now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0);
+        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        assert_eq!(ft1.num_flows(), 1);
+
+        // If we go via ft2 first, we will be able to remove its entries (which
+        // have no children), which in turn makes ft1's entries available for
+        // eviction.
+        ft2.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        assert_eq!(ft2.num_flows(), 0);
+        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        assert_eq!(ft1.num_flows(), 0);
+    }
+
+    #[test]
+    fn eviction_basics() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        // Fill up the tables.
+        let mut default_ft =
+            FlowTable::new("port", "no-prio-table", FT_SIZE.unwrap(), None);
+        let mut evict_ft = FlowTable::new(
+            "port",
+            "prio-table",
+            FT_SIZE.unwrap(),
+            Some(Arc::new(FixedPolicy {
+                time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
+                default: Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
+                manual: Default::default(),
+            })),
+        );
+        for i in 0..default_ft.limit.get() {
+            let new_id = InnerFlowId {
+                proto: Protocol::UDP.into(),
+                addrs: AddrPair::V4 {
+                    src: "192.168.2.10".parse().unwrap(),
+                    dst: "76.76.21.21".parse().unwrap(),
+                },
+                proto_info: PortInfo { src_port: i as u16, dst_port: 443 }
+                    .into(),
+            };
+            default_ft.add(new_id, ()).unwrap();
+            evict_ft.add(new_id, ()).unwrap();
+        }
+
+        // With the default policy and a table full of UDP entries, we can't make
+        // room for anything new.
+        assert!(default_ft.add(flowid, ()).is_err());
+        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+
+        // On a table where every flow is evictable, we can!
+        assert!(evict_ft.add(flowid, ()).is_ok());
+        assert_eq!(evict_ft.num_flows(), FT_SIZE.unwrap().get());
+
+        // If we soft-kill a flow entry (i.e., one of its ancestors was evicted)
+        // then we can make room to insert a new one.
+        default_ft.map.values().next().unwrap().mark_evicted();
+        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert!(default_ft.add(flowid, ()).is_ok());
+        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+    }
+
+    #[test]
+    fn eviction_invalidates_descendents() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let mut ft1 =
+            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
+        let mut ft2 =
+            FlowTable::new("port", "child-table", FT_SIZE.unwrap(), None);
+        let mut ft2_2 =
+            FlowTable::new("port", "other-child-table", FT_SIZE.unwrap(), None);
+        let mut ft3 =
+            FlowTable::new("port", "grandchild-table", FT_SIZE.unwrap(), None);
+        let fe1 = ft1.add(flowid, ()).unwrap();
+        let fe2 = ft2.add(flowid, ()).unwrap();
+        let fe_out_of_chain = ft2_2.add(flowid, ()).unwrap();
+        let fe3 = ft3.add(flowid, ()).unwrap();
+
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
+        fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
+        fe_out_of_chain.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
+
+        // If we invalidate fe1, then all of its *direct descendants* will also
+        // be invalid.
+        fe1.mark_evicted();
+        assert!(fe1.is_killed());
+        assert!(fe2.is_killed());
+        assert!(fe3.is_killed());
+        assert!(!fe_out_of_chain.is_killed());
     }
 }
