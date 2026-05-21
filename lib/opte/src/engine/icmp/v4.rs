@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! ICMPv4 headers and processing.
 
@@ -85,7 +85,7 @@ impl HairpinAction for IcmpEchoReply {
         let mut csum = match icmp.checksum() {
             0 => {
                 let mut csum = OpteCsum::new();
-                csum.add_bytes(meta.body());
+                csum.add_bytes(meta.body()?);
                 csum.add_bytes(icmp.rest_of_hdr_ref());
                 csum
             }
@@ -102,7 +102,7 @@ impl HairpinAction for IcmpEchoReply {
         csum.add_bytes(&[ty.0, code]);
 
         // Build the reply in place, and send it out.
-        let body_len: usize = meta.body().len();
+        let body_len: usize = meta.body()?.len();
 
         let icmp = IcmpV4 {
             ty,
@@ -127,14 +127,9 @@ impl HairpinAction for IcmpEchoReply {
             ethertype: Ethertype::IPV4,
         };
 
-        let total_len = body_len + (&eth, &ip4, &icmp).packet_length();
-
-        let mut pkt_out = MsgBlk::new_ethernet(total_len);
-        pkt_out
-            .emit_back((&eth, &ip4, &icmp, meta.body()))
-            .expect("Allocated space for pkt headers and body");
-
-        Ok(AllowOrDeny::Allow(pkt_out))
+        MsgBlk::new_ethernet_pkt((&eth, &ip4, &icmp, meta.body()?))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 

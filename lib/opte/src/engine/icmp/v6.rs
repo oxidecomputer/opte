@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! ICMPv6 headers and processing.
 
@@ -145,7 +145,7 @@ impl HairpinAction for Icmpv6EchoReply {
             0 => {
                 let mut csum = OpteCsum::new();
 
-                csum.add_bytes(meta.body());
+                csum.add_bytes(meta.body()?);
 
                 csum.add_bytes(icmp6.rest_of_hdr_ref());
 
@@ -164,7 +164,7 @@ impl HairpinAction for Icmpv6EchoReply {
         csum.add_bytes(&[ty.0, code]);
 
         // Build the reply in place, and send it out.
-        let body_len: usize = meta.body().len();
+        let body_len: usize = meta.body()?.len();
 
         let icmp = IcmpV6 {
             ty,
@@ -189,13 +189,9 @@ impl HairpinAction for Icmpv6EchoReply {
             ethertype: Ethertype::IPV6,
         };
 
-        let total_len = body_len + (&eth, &ip6, &icmp).packet_length();
-        let mut pkt_out = MsgBlk::new_ethernet(total_len);
-        pkt_out
-            .emit_back((&eth, &ip6, &icmp, meta.body()))
-            .expect("Allocated space for pkt headers and body");
-
-        Ok(AllowOrDeny::Allow(pkt_out))
+        MsgBlk::new_ethernet_pkt((&eth, &ip6, &icmp, meta.body()?))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 
@@ -262,7 +258,7 @@ impl HairpinAction for RouterAdvertisement {
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
         let mut body = icmp6.emit_vec();
-        meta.append_remaining(&mut body);
+        meta.append_remaining(&mut body)?;
 
         let src_pkt = Icmpv6Packet::new_checked(&body)?;
         let mut csum = Csum::ignored();
@@ -365,9 +361,9 @@ impl HairpinAction for RouterAdvertisement {
             ethertype: Ethertype::IPV6,
         };
 
-        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
-            &eth, &ip6, &ulp_body,
-        ))))
+        MsgBlk::new_ethernet_pkt((&eth, &ip6, &ulp_body))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 
@@ -574,7 +570,7 @@ impl HairpinAction for NeighborAdvertisement {
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
         // Given we successfully got the ICMPv6 metadata, rewinding here is fine.
         let mut body = icmp6.emit_vec();
-        meta.append_remaining(&mut body);
+        meta.append_remaining(&mut body)?;
 
         // Validate the ICMPv6 packet is actually a Neighbor Solicitation, and
         // that its data is appopriate.
@@ -625,9 +621,9 @@ impl HairpinAction for NeighborAdvertisement {
             ethertype: Ethertype::IPV6,
         };
 
-        Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
-            &eth, &ip6, &ulp_body,
-        ))))
+        MsgBlk::new_ethernet_pkt((&eth, &ip6, &ulp_body))
+            .map(AllowOrDeny::Allow)
+            .map_err(Into::into)
     }
 }
 

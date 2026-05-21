@@ -147,27 +147,28 @@ pub fn gen_icmp_echo(
 
     let mut segments = vec![];
 
+    // Note: all unwraps below are expected to be infallible in test/std contexts.
     match n_segments {
         1 => {
-            return MsgBlk::new_ethernet_pkt((&eth, &ip, &icmp_bytes));
+            return MsgBlk::new_ethernet_pkt((&eth, &ip, &icmp_bytes)).unwrap();
         }
         2 => {
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt((&ip, &icmp_bytes)));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt((&ip, &icmp_bytes)).unwrap());
         }
         3 => {
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt(ip));
-            segments.push(MsgBlk::new_pkt(&icmp_bytes));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt(ip).unwrap());
+            segments.push(MsgBlk::new_pkt(&icmp_bytes).unwrap());
         }
         4 => {
             // Used to test pullup behaviour around longer mblks
             // which still have pkt bodies in guest memory.
             assert!(icmp_bytes.len() > 8);
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt(ip));
-            segments.push(MsgBlk::new_pkt(&icmp_bytes[..8]));
-            segments.push(MsgBlk::new_pkt(&icmp_bytes[8..]));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt(ip).unwrap());
+            segments.push(MsgBlk::new_pkt(&icmp_bytes[..8]).unwrap());
+            segments.push(MsgBlk::new_pkt(&icmp_bytes[8..]).unwrap());
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
@@ -261,27 +262,28 @@ pub fn gen_icmpv6_echo(
 
     let mut segments = vec![];
 
+    // Note: all unwraps below are expected to be infallible in test/std contexts.
     match n_segments {
         1 => {
-            return MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
+            return MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes)).unwrap();
         }
         2 => {
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt((&ip, &body_bytes)));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt((&ip, &body_bytes)).unwrap());
         }
         3 => {
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt(ip));
-            segments.push(MsgBlk::new_pkt(&body_bytes));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt(ip).unwrap());
+            segments.push(MsgBlk::new_pkt(&body_bytes).unwrap());
         }
         4 => {
             // Used to test pullup behaviour around longer mblks
             // which still have pkt bodies in guest memory.
             assert!(body_bytes.len() > 8);
-            segments.push(MsgBlk::new_ethernet_pkt(eth));
-            segments.push(MsgBlk::new_pkt(ip));
-            segments.push(MsgBlk::new_pkt(&body_bytes[..8]));
-            segments.push(MsgBlk::new_pkt(&body_bytes[8..]));
+            segments.push(MsgBlk::new_ethernet_pkt(eth).unwrap());
+            segments.push(MsgBlk::new_pkt(ip).unwrap());
+            segments.push(MsgBlk::new_pkt(&body_bytes[..8]).unwrap());
+            segments.push(MsgBlk::new_pkt(&body_bytes[8..]).unwrap());
         }
         _ => {
             panic!("only 1 2 or 3 segments allowed")
@@ -325,7 +327,8 @@ pub fn generate_ndisc(
 
     let headers = (eth, ip);
     let total_len = req.buffer_len() + headers.packet_length();
-    let mut pkt = MsgBlk::new_ethernet(total_len);
+    let mut pkt =
+        MsgBlk::new_ethernet(total_len).expect("infallible in std context");
     pkt.emit_back(&headers).unwrap();
     let ndisc_off = pkt.len();
     pkt.resize(total_len).unwrap();

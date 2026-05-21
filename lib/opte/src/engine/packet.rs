@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 
@@ -45,6 +45,8 @@ use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
+use crate::ddi::mblk::PktAllocError;
+use crate::ddi::mblk::PktPullupError;
 use crate::engine::geneve::GeneveMeta;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -127,6 +129,7 @@ dyn_clone::clone_trait_object!(BodyTransform);
 
 #[derive(Debug)]
 pub enum BodyTransformError {
+    PayloadPullup,
     NoPayload,
     ParseFailure(String),
     Todo(String),
@@ -137,6 +140,12 @@ pub enum BodyTransformError {
 impl From<smoltcp::wire::Error> for BodyTransformError {
     fn from(e: smoltcp::wire::Error) -> Self {
         Self::ParseFailure(format!("{e}"))
+    }
+}
+
+impl From<PktPullupError> for BodyTransformError {
+    fn from(_: PktPullupError) -> Self {
+        Self::PayloadPullup
     }
 }
 
@@ -351,13 +360,13 @@ impl<T: Read + Pullup> PktBodyWalker<T> {
 
 impl<T: Read + Pullup> PktBodyWalker<T> {
     #[inline(always)]
-    fn prepare(&self) {
+    fn prepare(&self) -> Result<(), PktPullupError> {
         let BodySegState::NeedsPullup = self.state.clone().into_inner() else {
-            return;
+            return Ok(());
         };
 
         let prepend_slice = self.last_chunk.as_ref().map(|v| &v[..]);
-        let mblk = self.remainder.pullup(prepend_slice);
+        let mblk = self.remainder.pullup(prepend_slice)?;
 
         let mblk_ptr = mblk.unwrap_mblk();
 
@@ -370,12 +379,13 @@ impl<T: Read + Pullup> PktBodyWalker<T> {
             )
             .expect("invariant violated: tried to double-prepare mblk");
         self.state.set(BodySegState::PulledUp);
+        Ok(())
     }
 
-    fn body(&self) -> &[u8] {
-        self.prepare();
+    fn body(&self) -> Result<&[u8], PktPullupError> {
+        self.prepare()?;
 
-        match self.state.clone().into_inner() {
+        Ok(match self.state.clone().into_inner() {
             BodySegState::NoPullup => {
                 self.last_chunk.as_ref().map(|v| &v[..]).unwrap_or_default()
             }
@@ -395,16 +405,16 @@ impl<T: Read + Pullup> PktBodyWalker<T> {
                     core::mem::transmute::<&[u8], &[u8]>(&mblk_ref[..])
                 }
             }
-        }
+        })
     }
 
-    fn body_mut(&mut self) -> &mut [u8]
+    fn body_mut(&mut self) -> Result<&mut [u8], PktPullupError>
     where
         T::Chunk: ByteSliceMut,
     {
-        self.prepare();
+        self.prepare()?;
 
-        match self.state.clone().into_inner() {
+        Ok(match self.state.clone().into_inner() {
             BodySegState::NoPullup => {
                 self.last_chunk.as_mut().map(|v| &mut v[..]).unwrap_or_default()
             }
@@ -429,7 +439,7 @@ impl<T: Read + Pullup> PktBodyWalker<T> {
                     )
                 }
             }
-        }
+        })
     }
 
     fn extract_mblk(&mut self) -> Option<MsgBlk> {
@@ -590,7 +600,7 @@ impl<T: Read + Pullup> PacketData<T> {
         matches!(self.inner_ulp(), Some(Ulp::Tcp(_)))
     }
 
-    pub fn prep_body(&mut self)
+    pub fn prep_body(&mut self) -> Result<(), PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
@@ -598,7 +608,7 @@ impl<T: Read + Pullup> PacketData<T> {
         self.body.prepare()
     }
 
-    pub fn body(&self) -> &[u8]
+    pub fn body(&self) -> Result<&[u8], PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
@@ -606,25 +616,28 @@ impl<T: Read + Pullup> PacketData<T> {
         self.body.body()
     }
 
-    pub fn copy_remaining(&self) -> Vec<u8>
+    pub fn copy_remaining(&self) -> Result<Vec<u8>, PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let base = self.body();
-        base.to_vec()
+        self.body().map(|v| v.to_vec())
     }
 
-    pub fn append_remaining(&self, buf: &mut Vec<u8>)
+    pub fn append_remaining(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let base = self.body();
+        let base = self.body()?;
         buf.extend_from_slice(base);
+        Ok(())
     }
 
-    pub fn body_mut(&mut self) -> &mut [u8]
+    pub fn body_mut(&mut self) -> Result<&mut [u8], PktPullupError>
     where
         T::Chunk: ByteSliceMut,
         T: Pullup,
@@ -1125,7 +1138,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // this does the job as nothing that needs top performance
         // should make use of body transformations.
         self.state.body_modified = true;
-        self.state.meta.body.prepare();
+        self.state.meta.body.prepare()?;
 
         let ulp = self.state.meta.inner_ulp().map(|v| v.repr());
 
@@ -1144,7 +1157,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let out = self.state.meta.body();
+        let out = self.state.meta.body().ok()?;
         if out.is_empty() { None } else { Some(out) }
     }
 
@@ -1154,7 +1167,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        let out = self.state.meta.body_mut();
+        let out = self.state.meta.body_mut().ok()?;
         if out.is_empty() { None } else { Some(out) }
     }
 
@@ -1467,7 +1480,7 @@ pub trait BufferState {
 pub trait Pullup {
     /// Pulls all remaining segments of a packet into a new
     /// `Self` containing a single buffer.
-    fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk;
+    fn pullup(&self, prepend: Option<&[u8]>) -> Result<MsgBlk, PktPullupError>;
 }
 
 /// A set of headers to be emitted at the head of a packet, and
@@ -1541,8 +1554,7 @@ impl EmitSpec {
     /// Perform final structural transformations to a packet (removal of
     /// existing headers, and copying in new/replacement headers).
     #[inline]
-    #[must_use]
-    pub fn apply(self, mut pkt: MsgBlk) -> MsgBlk {
+    pub fn apply(self, mut pkt: MsgBlk) -> Result<MsgBlk, PktAllocError> {
         // Rewind
         {
             let mut slots = heapless::Vec::<&mut MsgBlkNode, 6>::new();
@@ -1599,7 +1611,7 @@ impl EmitSpec {
                 let needed_alloc = needed_push;
 
                 let mut prepend = if needed_alloc > 0 {
-                    let mut new_mblk = MsgBlk::new_ethernet(needed_alloc);
+                    let mut new_mblk = MsgBlk::new_ethernet(needed_alloc)?;
                     new_mblk.pop_all();
                     Some(new_mblk)
                 } else {
@@ -1671,15 +1683,15 @@ impl EmitSpec {
                     target.emit_front(outer_eth).unwrap();
                 }
 
-                if let Some(mut prepend) = prepend {
+                Ok(if let Some(mut prepend) = prepend {
                     pkt.copy_offload_info_to(&mut prepend);
                     prepend.append(pkt);
                     prepend
                 } else {
                     pkt
-                }
+                })
             }
-            PushSpec::NoOp => pkt,
+            PushSpec::NoOp => Ok(pkt),
         }
     }
 
@@ -1909,7 +1921,7 @@ mod test {
             ethertype: Ethertype::IPV4,
         };
 
-        MsgBlk::new_ethernet_pkt((eth, ip4, tcp, body))
+        MsgBlk::new_ethernet_pkt((eth, ip4, tcp, body)).unwrap()
     }
 
     #[test]
@@ -1943,7 +1955,8 @@ mod test {
             destination: DST_MAC,
             source: SRC_MAC,
             ethertype: Ethertype::IPV4,
-        });
+        })
+        .unwrap();
 
         let tcp = Tcp {
             source: 3839,
@@ -1961,7 +1974,7 @@ mod test {
             ..Default::default()
         };
 
-        let mp2 = MsgBlk::new_pkt((ip4, tcp));
+        let mp2 = MsgBlk::new_pkt((ip4, tcp)).unwrap();
 
         mp1.append(mp2);
 
@@ -1993,8 +2006,8 @@ mod test {
     fn straddled_tcp() {
         let base = tcp_pkt(&[]);
 
-        let mut st1 = MsgBlk::copy(&base[..42]);
-        let st2 = MsgBlk::copy(&base[42..]);
+        let mut st1 = MsgBlk::copy(&base[..42]).unwrap();
+        let st2 = MsgBlk::copy(&base[42..]).unwrap();
 
         st1.append(st2);
 
@@ -2054,7 +2067,8 @@ mod test {
                 };
 
                 let mut pkt =
-                    MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp));
+                    MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp))
+                        .unwrap();
                 let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
                     .unwrap()
                     .to_full_meta();
@@ -2097,7 +2111,7 @@ mod test {
         // Note that we do NOT update any of the packet headers themselves
         // as this padding process should be transparent to the upper
         // layers.
-        let mut padding_seg = MsgBlk::new(padding_len);
+        let mut padding_seg = MsgBlk::new(padding_len).unwrap();
         padding_seg.resize(padding_len).unwrap();
 
         pkt.append(padding_seg);
@@ -2148,14 +2162,15 @@ mod test {
         let pkt_sz = eth.packet_length()
             + ip6.packet_length()
             + usize::from(ip6.payload_len);
-        let mut pkt = MsgBlk::new_ethernet_pkt((eth, ip6, udp, &body[..]));
+        let mut pkt =
+            MsgBlk::new_ethernet_pkt((eth, ip6, udp, &body[..])).unwrap();
         assert_eq!(pkt.len(), pkt_sz);
 
         // Tack on a new segment filled zero padding at
         // the end that's not part of the payload as indicated
         // by the packet headers.
         let padding_len = 8;
-        let mut padding_seg = MsgBlk::new(padding_len);
+        let mut padding_seg = MsgBlk::new(padding_len).unwrap();
         padding_seg.resize(padding_len).unwrap();
         pkt.append(padding_seg);
         assert_eq!(pkt.byte_len(), pkt_sz + padding_len);

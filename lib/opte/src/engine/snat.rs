@@ -555,7 +555,8 @@ mod test {
             ethertype: Ethertype::IPV4,
         };
 
-        let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
+        let mut pkt_m =
+            MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body)).unwrap();
         let mut pkt = Packet::parse_outbound(pkt_m.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
@@ -622,7 +623,8 @@ mod test {
             ethertype: Ethertype::IPV4,
         };
 
-        let mut pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body));
+        let mut pkt_m =
+            MsgBlk::new_ethernet_pkt((&eth, &ip4, &tcp, &body)).unwrap();
         let mut pkt = Packet::parse_inbound(pkt_m.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();

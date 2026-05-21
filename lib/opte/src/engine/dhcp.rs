@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! DHCP headers, data, and actions.
 
@@ -479,7 +479,7 @@ impl HairpinAction for DhcpAction {
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        let body = meta.copy_remaining();
+        let body = meta.copy_remaining()?;
         let client_pkt = DhcpPacket::new_checked(&body)?;
         let client_dhcp = DhcpRepr::parse(&client_pkt)?;
         let mt = MessageType::from(self.reply_type);
@@ -599,7 +599,7 @@ impl HairpinAction for DhcpAction {
 
         let ingot_layers = (&eth, &ip, &udp);
         let total_sz = ingot_layers.packet_length() + reply_len;
-        let mut pkt = MsgBlk::new_ethernet(total_sz);
+        let mut pkt = MsgBlk::new_ethernet(total_sz)?;
         pkt.emit_back(ingot_layers)
             .expect("MsgBlk should have enough bytes by construction");
         let l = pkt.len();
