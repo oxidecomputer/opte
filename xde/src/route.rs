@@ -572,7 +572,16 @@ impl RouteCache {
                     slot.insert(route.cached(t));
                     route
                 }
-                (_, Err(dev)) => Route::zero_addr(dev),
+                (Entry::Vacant(slot), Err(dev)) => {
+                    let route = Route::zero_addr(dev);
+                    slot.insert(route.cached(t));
+                    route
+                }
+                (Entry::Occupied(mut slot), Err(dev)) => {
+                    let route = Route::zero_addr(dev);
+                    slot.insert(route.cached(t));
+                    route
+                }
             }
         } else {
             route_full_probe(map_ptr_int, &key);
