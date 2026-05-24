@@ -209,7 +209,7 @@ enum Experiment {
 
         /// Stream counts to benchmark.  Each value runs as a separate
         /// experiment producing its own histograms and flamegraphs.
-        #[arg(short, long, value_delimiter = ',', default_values_t = vec![255, 510, 515, 1024])]
+        #[arg(short, long, value_delimiter = ',', default_values_t = vec![255, 510, 515, 1024, 2048, 4096])]
         streams: Vec<usize>,
 
         #[command(flatten)]
