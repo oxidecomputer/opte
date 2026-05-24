@@ -113,6 +113,7 @@ pfexec add_drv xde
 
 banner "bench"
 cargo kbench local
+cargo kbench route-cache
 cargo ubench
 
 cp -r target/criterion $OUT_DIR
