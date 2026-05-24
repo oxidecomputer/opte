@@ -19,6 +19,7 @@ use std::net::Ipv6Addr;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -99,6 +100,11 @@ fn main() -> Result<()> {
         } => {
             check_deps(!dont_process, false, None)?;
             dtrace_only(&experiment_name, capture_mode, dont_process)?;
+            give_ownership()
+        }
+        Experiment::RouteCache { pause, n_iters, streams, .. } => {
+            check_deps(true, true, Some(ZoneBrand::Omicron1))?;
+            route_cache_bench(pause, n_iters, &streams)?;
             give_ownership()
         }
         Experiment::Cleanup { .. } => {
@@ -184,6 +190,32 @@ enum Experiment {
         #[command(flatten)]
         _waste: IgnoredExtras,
     },
+    /// Benchmark route cache performance under varying flow counts.
+    ///
+    /// Sets up a local two-zone topology and runs iPerf with
+    /// different stream counts to create different levels of cache
+    /// pressure.  Uses a route-cache-specific DTrace program that
+    /// breaks down per-packet Tx latency by cache outcome (hit,
+    /// insert, refresh, full).
+    RouteCache {
+        /// Pauses before running experiments from a zone, allowing
+        /// a window of time to access the zone using `zlogin a`.
+        #[arg(short, long)]
+        pause: bool,
+
+        /// Number of iPerf iterations per stream-count configuration.
+        #[arg(short, long, default_value_t = 10)]
+        n_iters: usize,
+
+        /// Stream counts to benchmark.  Each value runs as a separate
+        /// experiment producing its own histograms and flamegraphs.
+        #[arg(short, long, value_delimiter = ',', default_values_t = vec![255, 510, 515, 1024])]
+        streams: Vec<usize>,
+
+        #[command(flatten)]
+        _waste: IgnoredExtras,
+    },
+
     /// Wipe out any leftover state if a test/server run ends poorly.
     ///
     /// This will remove the 'vopte0' adapter, 'a' zone, and the XDE
@@ -368,6 +400,182 @@ fn zone_to_zone(pause: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "illumos")]
+fn route_cache_bench(
+    pause: bool,
+    n_iters: usize,
+    streams: &[usize],
+) -> Result<()> {
+    ensure_xde()?;
+
+    print_banner("Building test topology... (120s)");
+    let topol = xde_tests::two_node_topology()?;
+    print_banner("Topology built!");
+
+    let target_ip = topol.nodes[1].port.ip();
+
+    // We need up to max(streams) / IPERF_MAX_STREAMS servers, each
+    // on a different port.  Spawn enough up front for the largest
+    // flow count we'll test.
+    let max_flows = streams.iter().copied().max().unwrap_or(1);
+    let n_servers = max_flows.div_ceil(IPERF_MAX_STREAMS);
+    let base_port: u16 = 5201;
+
+    let mut _iperf_servers = Vec::with_capacity(n_servers);
+    for i in 0..n_servers {
+        let port = base_port + i as u16;
+        let mut cmd = topol.nodes[1]
+            .command(&format!("iperf -s -p {port} > /dev/null 2>&1"));
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        _iperf_servers.push(cmd.spawn()?);
+    }
+
+    print_banner(&format!(
+        "iPerf: {n_servers} server(s) spawned\nWaiting... (10s)"
+    ));
+    std::thread::sleep(Duration::from_secs(10));
+    print_banner("Go!");
+
+    if pause {
+        print_banner("Holding, type 'exit' to begin measurement.");
+        loop_til_exit();
+    }
+
+    // Ping to verify reachability.
+    let _ = &topol.nodes[0]
+        .zone
+        .zone
+        .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
+
+    for &n_flows in streams {
+        test_routecache(
+            &topol,
+            &target_ip.to_string(),
+            n_flows,
+            n_iters,
+            base_port,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// iperf3 caps at 128 parallel streams, so we launch multiple
+/// instances to reach the desired flow count.
+const IPERF_MAX_STREAMS: usize = 128;
+
+#[cfg(target_os = "illumos")]
+fn test_routecache(
+    topol: &Topology,
+    target_ip: &str,
+    n_flows: usize,
+    n_iters: usize,
+    base_port: u16,
+) -> Result<()> {
+    let expt_name = format!("routecache-{n_flows}");
+
+    // Split the desired flow count evenly across iperf instances,
+    // each connecting to a different server port.
+    let n_instances = n_flows.div_ceil(IPERF_MAX_STREAMS);
+    let base = n_flows / n_instances;
+    let extra = n_flows % n_instances;
+    let instance_streams: Vec<usize> = (0..n_instances)
+        .map(|i| base + if i < extra { 1 } else { 0 })
+        .collect();
+
+    let total: usize = instance_streams.iter().sum();
+    print_banner(&format!(
+        "Running experiment\n{expt_name}\n\
+         {n_instances} instance(s), {total} total flows\n\
+         streams per instance: {instance_streams:?}",
+    ));
+
+    // Start route-cache DTrace instrumentation.
+    let (kill, done) = spawn_local_instrument(
+        &expt_name,
+        Instrumentation::RouteCache,
+        Default::default(),
+    );
+
+    for i in 1..=n_iters {
+        print!("Run {i}/{n_iters}...");
+
+        // Launch all iperf client instances in parallel, each
+        // targeting a different server port.
+        let mut children = Vec::with_capacity(n_instances);
+        for (idx, &streams) in instance_streams.iter().enumerate() {
+            let port = base_port + idx as u16;
+            let cmd = format!(
+                "iperf -c {target_ip} -p {port} -J -P {streams}"
+            );
+            let mut cmd = topol.nodes[0].command(&cmd);
+            cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+            children.push(cmd.spawn()?);
+        }
+
+        // Collect results, sum throughput across all instances.
+        let mut total_mbps = 0.0_f64;
+        let mut failed = 0usize;
+        for child in children {
+            let output = child.wait_with_output()?;
+            if !output.status.success() {
+                failed += 1;
+                continue;
+            }
+            if let Ok(out) = std::str::from_utf8(&output.stdout) {
+                if let Ok(parsed) = serde_json::from_str::<Output>(out) {
+                    total_mbps +=
+                        parsed.end.sum_sent.bits_per_second / 1e6;
+                }
+            }
+        }
+
+        if failed > 0 {
+            println!("{total_mbps:.0}Mbps ({failed} instance(s) failed)");
+        } else {
+            println!("{total_mbps:.0}Mbps");
+        }
+    }
+
+    // Stop DTrace and print results.
+    print_banner("iPerf done...\nAwaiting out files...");
+    let _ = kill.send(());
+    let outdata = done.recv()??;
+    print_banner("done!");
+
+    if let Ok(histos) = std::fs::read_to_string(&outdata.histo_path) {
+        println!("{histos}");
+    }
+
+    // Build flamegraphs if stack data is available.
+    let config = IperfConfig {
+        instrumentation: Instrumentation::RouteCache,
+        n_iters,
+        mode: IperfMode::ClientSend,
+        proto: IperfProto::Tcp,
+        expt_name,
+        n_streams: Some(n_flows),
+    };
+    let _ = build_flamegraph(
+        &(&config).into(),
+        &outdata.stack_path,
+        &outdata.out_dir,
+        None,
+        None,
+    );
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "illumos"))]
+fn route_cache_bench(
+    _pause: bool,
+    _n_iters: usize,
+    _streams: &[usize],
+) -> Result<()> {
+    anyhow::bail!("route-cache benchmark must be run on Helios!")
+}
+
 fn dtrace_only(
     experiment_name: &str,
     capture_mode: Instrumentation,
@@ -376,7 +584,7 @@ fn dtrace_only(
     // Begin dtrace sessions in global zone.
     let waiters = match capture_mode {
         Instrumentation::None => None,
-        Instrumentation::Dtrace => {
+        Instrumentation::Dtrace | Instrumentation::RouteCache => {
             let a = spawn_local_instrument(
                 experiment_name,
                 capture_mode,
@@ -478,11 +686,13 @@ fn test_iperf(
 
     // Begin dtrace sessions in global zone.
     let dt_handles = match config.instrumentation {
-        Instrumentation::Dtrace => Some(spawn_local_instrument(
-            config.benchmark_group(),
-            config.instrumentation,
-            Default::default(),
-        )),
+        Instrumentation::Dtrace | Instrumentation::RouteCache => {
+            Some(spawn_local_instrument(
+                config.benchmark_group(),
+                config.instrumentation,
+                Default::default(),
+            ))
+        }
         Instrumentation::Lockstat => Some(spawn_local_instrument(
             config.benchmark_group(),
             config.instrumentation,

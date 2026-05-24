@@ -26,6 +26,7 @@ pub enum Instrumentation {
     None,
     Dtrace,
     Lockstat,
+    RouteCache,
 }
 
 impl std::fmt::Display for Instrumentation {
@@ -43,6 +44,9 @@ pub struct DtraceOutput {
 
 pub static DTRACE_STACK_PROG: &str =
     include_str!("../../../dtrace/opte-count-cycles.d");
+
+pub static DTRACE_ROUTECACHE_PROG: &str =
+    include_str!("../../../dtrace/opte-routecache-bench.d");
 
 pub fn run_local_dtraces(
     out_dir: PathBuf,
@@ -76,6 +80,44 @@ pub fn run_local_dtraces(
             "-n",
             "profile-201us /arg0/ { @[stack()] = count(); } tick-120s { exit(0); }",
             "-o", stack_path_str,
+        ])
+        .spawn()?;
+
+    Ok((vec![histo, stack], DtraceOutput { histo_path, stack_path, out_dir }))
+}
+
+pub fn run_routecache_dtraces(
+    out_dir: PathBuf,
+) -> Result<(Vec<Child>, DtraceOutput)> {
+    fs::create_dir_all(&out_dir)?;
+
+    let histo_path = out_dir.join("histos.out");
+    let _ = fs::remove_file(&histo_path);
+    let Some(histo_path_str) = histo_path.to_str() else {
+        anyhow::bail!("Illegal utf8 in histogram path.")
+    };
+    let histo = Command::new("dtrace")
+        .args([
+            "-qn",
+            DTRACE_ROUTECACHE_PROG.replace('\n', "").as_str(),
+            "-o",
+            histo_path_str,
+        ])
+        .spawn()?;
+
+    let stack_path = out_dir.join("raw.stacks");
+    let _ = fs::remove_file(&stack_path);
+    let Some(stack_path_str) = stack_path.to_str() else {
+        anyhow::bail!("Illegal utf8 in stack path.")
+    };
+    let stack = Command::new("dtrace")
+        .args([
+            "-x",
+            "stackframes=100",
+            "-n",
+            "profile-201us /arg0/ { @[stack()] = count(); } tick-120s { exit(0); }",
+            "-o",
+            stack_path_str,
         ])
         .spawn()?;
 
@@ -127,6 +169,9 @@ pub fn spawn_local_instrument(
 
         let (spawned, should_sigint) = match to_run {
             Instrumentation::Dtrace => (run_local_dtraces(out_dir), true),
+            Instrumentation::RouteCache => {
+                (run_routecache_dtraces(out_dir), true)
+            }
             Instrumentation::Lockstat => {
                 (run_local_lockstat(out_dir, est_duration), false)
             }
