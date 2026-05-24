@@ -23,7 +23,7 @@ sdt:xde::routecache-insert  { self->evt = "insert"; }
 sdt:xde::routecache-full    { self->evt = "full"; }
 
 fbt:xde:*RouteCache*next_hop*:return
-/self->ts/
+/self->ts && self->evt != NULL/
 {
 	@time[self->evt] = quantize(timestamp - self->ts);
 	@count_rc[self->evt] = count();
