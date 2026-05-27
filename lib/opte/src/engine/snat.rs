@@ -17,6 +17,7 @@ use super::packet::Packet;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use super::props::ActionProperties;
 use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
 use super::rule::FiniteHandle;
@@ -35,6 +36,7 @@ use crate::ddi::sync::KMutex;
 use crate::engine::icmp::QueryEcho;
 use crate::engine::nat::ExternalIpTag;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -297,6 +299,21 @@ impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
         write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
+    }
+}
+
+impl<T: ConcreteIpAddr + 'static> ActionProperties for SNat<T>
+where
+    SNat<T>: Display,
+{
+    fn property_names(&self) -> &'static [&'static str] {
+        &["priv_ip"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "priv_ip" => Some(self.priv_ip.to_string()),
+            _ => None,
+        }
     }
 }
 

@@ -169,6 +169,25 @@ impl Display for Dhcpv6Action {
     }
 }
 
+impl crate::engine::props::ActionProperties for Dhcpv6Action {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["client_mac", "server_mac", "addresses"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        match name {
+            "client_mac" => Some(self.client_mac.to_string()),
+            "server_mac" => Some(self.server_mac.to_string()),
+            "addresses" => Some(
+                self.addresses()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            _ => None,
+        }
+    }
+}
+
 /// A lifetime describes the duration over which data such as addresses are
 /// valid. These are encoded in messages as a u32.
 #[derive(Clone, Copy, Debug, PartialEq)]
