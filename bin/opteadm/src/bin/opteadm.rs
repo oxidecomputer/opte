@@ -18,8 +18,12 @@ use opte::api::MAJOR_VERSION;
 use opte::api::MacAddr;
 use opte::api::MulticastUnderlay;
 use opte::api::Vni;
+use opte::api::DumpLayerResp;
+use opte::print::collect_prop_rows;
 use opte::print::print_layer;
 use opte::print::print_list_layers;
+use opte::print::print_props;
+use opte::print::print_props_parseable;
 use opte::print::print_tcp_flows;
 use opte::print::print_uft;
 use opte_ioctl::OpteHdl;
@@ -98,6 +102,36 @@ enum Command {
         #[arg(short)]
         port: String,
         name: String,
+    },
+
+    /// Show K/V configuration properties exposed by rule actions.
+    ///
+    /// Like `dladm show-linkprop`. With no filters, lists every property
+    /// of every rule on every layer.
+    ShowProp {
+        #[arg(short)]
+        port: String,
+
+        /// Restrict output to a single layer.
+        #[arg(short = 'l', long)]
+        layer: Option<String>,
+
+        /// Restrict output to a single direction.
+        #[arg(short = 'd', long = "dir")]
+        direction: Option<Direction>,
+
+        /// Restrict output to a single rule id.
+        #[arg(short = 'r', long)]
+        rule_id: Option<u64>,
+
+        /// Comma-separated list of property names to show.
+        #[arg(short = 'p', long, value_delimiter = ',')]
+        prop: Vec<String>,
+
+        /// Emit `LAYER:DIR:RULE:PROPERTY:VALUE` lines, with `:` and `\`
+        /// in values backslash-escaped.
+        #[arg(short = 'c')]
+        parseable: bool,
     },
 
     /// Clear all entries from the Unified Flow Table.
@@ -764,6 +798,40 @@ fn main() -> anyhow::Result<()> {
             let resp = &hdl.dump_layer(&port, &name)?;
             print!("Port {port} - ");
             print_layer(resp)?;
+        }
+
+        Command::ShowProp {
+            port,
+            layer,
+            direction,
+            rule_id,
+            prop,
+            parseable,
+        } => {
+            let layers: Vec<DumpLayerResp> = match &layer {
+                Some(name) => vec![hdl.dump_layer(&port, name)?],
+                None => hdl
+                    .list_layers(&port)?
+                    .layers
+                    .iter()
+                    .map(|l| hdl.dump_layer(&port, &l.name))
+                    .collect::<Result<_, _>>()?,
+            };
+
+            let prop_filter: Option<&[String]> =
+                if prop.is_empty() { None } else { Some(&prop) };
+            let rows = collect_prop_rows(
+                &layers,
+                direction,
+                rule_id,
+                prop_filter,
+            );
+
+            if parseable {
+                print_props_parseable(&rows)?;
+            } else {
+                print_props(&rows)?;
+            }
         }
 
         Command::ClearUft { port } => {
