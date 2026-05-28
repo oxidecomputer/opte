@@ -1350,6 +1350,8 @@ dependencies = [
  "crc32fast",
  "derror-macro",
  "dyn-clone",
+ "foldhash",
+ "hashbrown 0.15.5",
  "heapless",
  "illumos-sys-hdrs",
  "ingot",

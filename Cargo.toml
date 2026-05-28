@@ -49,6 +49,8 @@ criterion = "0.8"
 ctor = "0.10"
 darling = "0.23"
 dyn-clone = "1.0"
+foldhash = { version = "0.1", default-features = false }
+hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }
 heapless = "0.8"
 ingot = "0.1.1"
 ipnetwork = { version = "0.21", default-features = false }
