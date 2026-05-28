@@ -3190,7 +3190,7 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
             end_time_ms: u64,
             delta_ms: u64,
         ) -> Option<NonZeroU16> {
-            assert!(MISBEHAVED_MAX >= MISBEHAVED_MIN);
+            debug_assert!(MISBEHAVED_MAX >= MISBEHAVED_MIN);
 
             if start_time_ms > end_time_ms {
                 return None;
@@ -3208,8 +3208,8 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 const ONE_SCALED: u64 = 1 << SCALE;
                 const FRACTION_MASK: u64 = ONE_SCALED - 1;
 
-                assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
-                assert_eq!(
+                debig_assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
+                debug_assert_eq!(
                     FRACTION_MASK.leading_zeros(),
                     u64::BITS - (SCALE as u32)
                 );
