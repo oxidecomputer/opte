@@ -38,6 +38,9 @@ pub const FLOW_DEF_TTL: Ttl = Ttl::new_seconds(FLOW_DEF_EXPIRE_SECS);
 
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
 
+/// Capacity below which a table's allocation is left alone during reclaim.
+const FT_MIN_CAPACITY: usize = 64;
+
 type Result<T> = core::result::Result<T, OpteError>;
 
 /// The Time To Live in milliseconds.
@@ -188,7 +191,19 @@ where
             true
         });
 
+        self.reclaim();
         expired
+    }
+
+    /// Shrinks the backing allocation toward `2 * len` once a table drains to
+    /// under a quarter full. Only firing on a deep drain keeps tables near
+    /// capacity from thrashing and bounds how often the rehash runs under the
+    /// port lock.
+    fn reclaim(&mut self) {
+        let target = self.map.len().saturating_mul(2).max(FT_MIN_CAPACITY);
+        if self.map.capacity() > target.saturating_mul(2) {
+            self.map.shrink_to(target);
+        }
     }
 
     /// Get the maximum number of entries this flow table may hold.
@@ -528,5 +543,26 @@ mod test {
         expected.sort_unstable();
         assert_eq!(dumped, expected);
         assert_eq!(dumped.len(), 5);
+    }
+
+    #[test]
+    fn flow_table_reclaims_after_drain() {
+        let limit = NonZeroU32::new(4096).unwrap();
+        let mut ft = FlowTable::new("port", "flow-reclaim-test", limit, None);
+
+        for dst_port in 0..2000u16 {
+            ft.add(flow_id(dst_port), ()).unwrap();
+        }
+        let grown = ft.map.capacity();
+        assert!(grown >= 2000);
+
+        let now = Moment::now() + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0);
+        ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        assert_eq!(ft.num_flows(), 0);
+
+        assert!(ft.map.capacity() < grown);
+
+        ft.add(flow_id(1), ()).unwrap();
+        assert!(ft.get(&flow_id(1)).is_some());
     }
 }
