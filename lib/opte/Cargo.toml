@@ -14,6 +14,8 @@ engine = [
 	"dep:cfg-if",
 	"dep:crc32fast",
 	"dep:derror-macro",
+	"dep:foldhash",
+	"dep:hashbrown",
 	"dep:heapless",
 	"dep:itertools",
 	"dep:smoltcp",
@@ -42,6 +44,8 @@ bitflags = { workspace = true , features = ["serde"] }
 cfg-if = { workspace = true, optional = true }
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true
+foldhash = { workspace = true, optional = true }
+hashbrown = { workspace = true, optional = true }
 heapless = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
 postcard.workspace = true

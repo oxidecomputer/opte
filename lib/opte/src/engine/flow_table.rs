@@ -13,7 +13,6 @@ use super::packet::InnerFlowId;
 use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -23,6 +22,8 @@ use core::num::NonZeroU32;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
+use foldhash::fast::FixedState;
+use hashbrown::HashMap;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::OpteError;
@@ -36,6 +37,9 @@ pub const FLOW_DEF_EXPIRE_SECS: u64 = 60;
 pub const FLOW_DEF_TTL: Ttl = Ttl::new_seconds(FLOW_DEF_EXPIRE_SECS);
 
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
+
+/// Capacity below which a table's allocation is left alone during reclaim.
+const FT_MIN_CAPACITY: usize = 64;
 
 type Result<T> = core::result::Result<T, OpteError>;
 
@@ -78,13 +82,16 @@ impl<S: Dump> ExpiryPolicy<S> for Ttl {
 
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
+/// Per-table flow hasher, seeded from the kernel PRNG in [`hash_seed`].
+type FlowHasher = FixedState;
+
 #[derive(Debug)]
 pub struct FlowTable<S: Dump> {
     port_c: CString,
     name_c: CString,
     limit: NonZeroU32,
     policy: Box<dyn ExpiryPolicy<S>>,
-    map: BTreeMap<InnerFlowId, Arc<FlowEntry<S>>>,
+    map: HashMap<InnerFlowId, Arc<FlowEntry<S>>, FlowHasher>,
 }
 
 impl<S> FlowTable<S>
@@ -150,6 +157,8 @@ where
         for (flow_id, entry) in &self.map {
             flows.push((*flow_id, entry.dump()));
         }
+        // HashMap order is arbitrary; sort for stable dumps.
+        flows.sort_unstable_by_key(|(flow_id, _)| *flow_id);
         flows
     }
 
@@ -182,7 +191,19 @@ where
             true
         });
 
+        self.reclaim();
         expired
+    }
+
+    /// Shrinks the backing allocation toward `2 * len` once a table drains to
+    /// under a quarter full. Only firing on a deep drain keeps tables near
+    /// capacity from thrashing and bounds how often the rehash runs under the
+    /// port lock.
+    fn reclaim(&mut self) {
+        let target = self.map.len().saturating_mul(2).max(FT_MIN_CAPACITY);
+        if self.map.capacity() > target.saturating_mul(2) {
+            self.map.shrink_to(target);
+        }
     }
 
     /// Get the maximum number of entries this flow table may hold.
@@ -220,7 +241,7 @@ where
             name_c: CString::new(name).unwrap(),
             limit,
             policy,
-            map: BTreeMap::new(),
+            map: HashMap::with_hasher(FixedState::with_seed(hash_seed())),
         }
     }
 
@@ -260,6 +281,23 @@ fn flow_expired_probe(
             );
         } else {
             let (_, _, _) = (port, name, flowid);
+        }
+    }
+}
+
+/// Returns a hasher seed: the kernel PRNG in the kmod, a fixed value under
+/// std/test.
+fn hash_seed() -> u64 {
+    cfg_if! {
+        if #[cfg(all(not(feature = "std"), not(test)))] {
+            let mut seed = [0u8; 8];
+            // SAFETY: writes exactly `seed.len()` bytes into a valid buffer.
+            unsafe {
+                random_get_pseudo_bytes(seed.as_mut_ptr(), seed.len());
+            }
+            u64::from_ne_bytes(seed)
+        } else {
+            0
         }
     }
 }
@@ -379,6 +417,11 @@ unsafe extern "C" {
         ifid: *const InnerFlowId,
         epoch: uintptr_t,
     );
+
+    fn random_get_pseudo_bytes(
+        ptr: *mut u8,
+        len: usize,
+    ) -> illumos_sys_hdrs::c_int;
 }
 
 impl Dump for () {
@@ -397,6 +440,17 @@ mod test {
     use core::time::Duration;
 
     pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
+
+    fn flow_id(dst_port: u16) -> InnerFlowId {
+        InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port }.into(),
+        }
+    }
 
     #[test]
     fn flow_expired() {
@@ -441,5 +495,74 @@ mod test {
         assert_eq!(ft.num_flows(), 1);
         ft.clear();
         assert_eq!(ft.num_flows(), 0);
+    }
+
+    #[test]
+    fn flow_add_get_remove() {
+        let flowid = flow_id(443);
+        let mut ft =
+            FlowTable::new("port", "flow-crud-test", FT_SIZE.unwrap(), None);
+
+        assert!(ft.get(&flowid).is_none());
+        ft.add(flowid, ()).unwrap();
+        assert!(ft.get(&flowid).is_some());
+        assert_eq!(ft.num_flows(), 1);
+
+        assert!(ft.remove(&flowid).is_some());
+        assert!(ft.get(&flowid).is_none());
+        assert_eq!(ft.num_flows(), 0);
+    }
+
+    #[test]
+    fn flow_table_enforces_limit() {
+        let limit = FT_SIZE.unwrap().get();
+        let mut ft =
+            FlowTable::new("port", "flow-limit-test", FT_SIZE.unwrap(), None);
+
+        for dst_port in 0..limit as u16 {
+            ft.add(flow_id(dst_port), ()).unwrap();
+        }
+        assert_eq!(ft.num_flows(), limit);
+
+        let err = ft.add(flow_id(limit as u16), ()).unwrap_err();
+        assert!(matches!(err, OpteError::MaxCapacity(_)));
+        assert_eq!(ft.num_flows(), limit);
+    }
+
+    #[test]
+    fn flow_dump_is_sorted() {
+        let mut ft =
+            FlowTable::new("port", "flow-dump-test", FT_SIZE.unwrap(), None);
+        for dst_port in [5u16, 1, 3, 2, 4] {
+            ft.add(flow_id(dst_port), ()).unwrap();
+        }
+
+        let dumped: Vec<InnerFlowId> =
+            ft.dump().into_iter().map(|(flow_id, _)| flow_id).collect();
+        let mut expected = dumped.clone();
+        expected.sort_unstable();
+        assert_eq!(dumped, expected);
+        assert_eq!(dumped.len(), 5);
+    }
+
+    #[test]
+    fn flow_table_reclaims_after_drain() {
+        let limit = NonZeroU32::new(4096).unwrap();
+        let mut ft = FlowTable::new("port", "flow-reclaim-test", limit, None);
+
+        for dst_port in 0..2000u16 {
+            ft.add(flow_id(dst_port), ()).unwrap();
+        }
+        let grown = ft.map.capacity();
+        assert!(grown >= 2000);
+
+        let now = Moment::now() + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0);
+        ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        assert_eq!(ft.num_flows(), 0);
+
+        assert!(ft.map.capacity() < grown);
+
+        ft.add(flow_id(1), ()).unwrap();
+        assert!(ft.get(&flow_id(1)).is_some());
     }
 }
