@@ -9,6 +9,7 @@
 use super::flow_table::Dump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
+use super::flow_table::FlowEntryInfo;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::packet::BodyTransformError;
@@ -185,7 +186,11 @@ impl Dump for LftOutEntry {
     }
 }
 
-impl FlowState for LftOutEntry {}
+impl FlowState for LftOutEntry {
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+        [].into_iter()
+    }
+}
 
 struct LayerFlowTable {
     limit: NonZeroU32,
@@ -399,7 +404,11 @@ impl Display for ActionDescEntry {
     }
 }
 
-impl FlowState for ActionDescEntry {}
+impl FlowState for ActionDescEntry {
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+        [].into_iter()
+    }
+}
 
 /// The actions of a layer.
 ///

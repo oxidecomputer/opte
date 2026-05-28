@@ -2444,7 +2444,7 @@ impl<N: NetworkImpl> Port<N> {
                     hte.tcp_flow = Some(Arc::downgrade(&flow));
                     match data.uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
-                            associate_lfts_upstack(&v, Direction::In);
+                            associate_lfts_upstack(data, &v, Direction::In);
                             Ok(InternalProcessResult::Modified)
                         }
                         Err(OpteError::MaxCapacity(limit)) => {
@@ -2484,7 +2484,7 @@ impl<N: NetworkImpl> Port<N> {
         } else {
             match data.uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
-                    associate_lfts_upstack(&v, Direction::In);
+                    associate_lfts_upstack(data, &v, Direction::In);
                     Ok(InternalProcessResult::Modified)
                 }
                 Err(OpteError::MaxCapacity(limit)) => {
@@ -2649,7 +2649,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
                 match data.uft_out.add(flow_before, hte) {
                     Ok(v) => {
-                        associate_lfts_upstack(&v, Direction::Out);
+                        associate_lfts_upstack(data, &v, Direction::Out);
                         Ok(InternalProcessResult::Modified)
                     }
                     Err(OpteError::MaxCapacity(limit)) => {
@@ -3015,6 +3015,7 @@ impl TcpFlowEntryState {
 /// Install all parent-child links between a UFT entry, the LFT entries which
 /// underpin it, and the TCP flow state entry if present.
 fn associate_lfts_upstack(
+    _data: &mut PortData,
     uft: &Arc<FlowEntry<UftEntry<InnerFlowId>>>,
     dir: Direction,
 ) {
@@ -3033,6 +3034,12 @@ fn associate_lfts_upstack(
     for lft in &uft.state().parents {
         lft.push_child(&uft_dyn);
     }
+
+    // Currently, we're explicitly holding a write lock on the parent port,
+    // and we ensure we hold this using `_data`. Because of this, there's no
+    // window for any thread (mainly cleanup) to see that an inconsistent
+    // parent/child relationship between the LFTs and TCP entry. We'll need to
+    // be more careful of that when we make these locks more granular.
     if let Some(tcp) = uft.state().tcp_flow.as_ref().and_then(Weak::upgrade) {
         let tcp_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(&tcp) as _;
         let mut parents = uft.state().parents.clone();
@@ -3156,6 +3163,79 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
         entry: &FlowEntry<TcpFlowEntryState>,
         now: Moment,
     ) -> Option<EvictionPriority> {
+        const MIDPOINT_TO_EXPIRY: u64 = 2;
+        let incipient_midpoint =
+            self.incipient_ttl.as_milliseconds() / MIDPOINT_TO_EXPIRY;
+
+        // We divide evictable non-closed flows into two priority spaces here:
+        //
+        // * Established flows are evictable at the minimum priority after a
+        //   certain age.
+        // * Incipient/quiescent flows scale along
+        //   MISBEHAVED_MIN..MISBEHAVED_MAX according to how long they have been
+        //   in a misbehaved state (up to their expiry time).
+        //
+        // This ensures that we will evict misbehaved flows in non-established
+        // states before well-behaved but inactive flows.
+        const MISBEHAVED_MIN: NonZeroU16 = NonZeroU16::MIN.saturating_add(1);
+        const MISBEHAVED_MAX: NonZeroU16 =
+            NonZeroU16::new(NonZeroU16::MAX.get() - 1).unwrap();
+
+        /// Choose a priority value between `MISBEHAVED_MIN..=MISBEHAVED_MAX`
+        /// based on `delta_ms`'s position between two timestamps.
+        ///
+        /// Returns `None` if start > end.
+        fn priority_lerp(
+            start_time_ms: u64,
+            end_time_ms: u64,
+            delta_ms: u64,
+        ) -> Option<NonZeroU16> {
+            assert!(MISBEHAVED_MAX >= MISBEHAVED_MIN);
+
+            if start_time_ms > end_time_ms {
+                return None;
+            }
+
+            Some(if delta_ms <= start_time_ms {
+                MISBEHAVED_MIN
+            } else if delta_ms >= end_time_ms {
+                MISBEHAVED_MAX
+            } else {
+                // Compute our priority using fixed point arithmetic.
+                // Since we're working in terms of 16-bit numbers, we need as
+                // many bits of fractional precision between 0.0 and 1.0.
+                const SCALE: u64 = 16;
+                const ONE_SCALED: u64 = 1 << SCALE;
+                const FRACTION_MASK: u64 = ONE_SCALED - 1;
+
+                assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
+                assert_eq!(
+                    FRACTION_MASK.leading_zeros(),
+                    u64::BITS - (SCALE as u32)
+                );
+
+                // Fixed-point division of a real by an integer is fairly
+                // straightforward -- don't convert the denominator into the
+                // target base.
+                let inner_pos = (delta_ms - start_time_ms) << SCALE;
+                let window_len = end_time_ms - start_time_ms;
+
+                let inner_frac = inner_pos / window_len;
+
+                let n_entries =
+                    u64::from(MISBEHAVED_MAX.get() - MISBEHAVED_MIN.get());
+
+                let entry_fixed_pt = n_entries * inner_frac;
+
+                let round_up = entry_fixed_pt & FRACTION_MASK >= ONE_SCALED / 2;
+                let entry = u16::try_from(entry_fixed_pt >> SCALE)
+                    .expect("start and end points of lerp are both u16s")
+                    + u16::from(round_up);
+
+                MISBEHAVED_MIN.saturating_add(entry)
+            })
+        }
+
         let delta = now.delta_as_millis(entry.last_hit());
         match entry.state().tcp_state() {
             TcpState::TimeWait
@@ -3167,7 +3247,14 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 // quickly, but leave them in place for the ~120s when we are
                 // not under pressure.
                 a if a > self.incipient_ttl.as_milliseconds() => {
-                    Some(EvictionPriority::Evictable(NonZeroU16::MIN))
+                    Some(EvictionPriority::Evictable(
+                        priority_lerp(
+                            self.incipient_ttl.as_milliseconds(),
+                            self.quiescent_ttl.as_milliseconds(),
+                            delta,
+                        )
+                        .expect("start < end"),
+                    ))
                 }
                 _ => Some(EvictionPriority::Protected),
             },
@@ -3178,8 +3265,15 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 // Ordinarily we will expire flows in these states quickly. If
                 // we are under table pressure, we can allow them to be
                 // explicitly selected for removal faster.
-                a if a > self.incipient_ttl.as_milliseconds() / 2 => {
-                    Some(EvictionPriority::Evictable(NonZeroU16::MIN))
+                a if a > incipient_midpoint => {
+                    Some(EvictionPriority::Evictable(
+                        priority_lerp(
+                            incipient_midpoint,
+                            self.incipient_ttl.as_milliseconds(),
+                            delta,
+                        )
+                        .expect("start < end"),
+                    ))
                 }
                 _ => Some(EvictionPriority::Protected),
             },
@@ -3244,4 +3338,128 @@ unsafe extern "C" {
         port: uintptr_t,
         ifid: *const InnerFlowId,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::PortInfo;
+    use crate::engine::packet::AddrPair;
+    use core::time::Duration;
+    use ingot::tcp::TcpFlags;
+
+    #[test]
+    fn opening_tcp_eviction_prio_increases_over_time() {
+        let flowid = InnerFlowId {
+            proto: ingot::ip::IpProtocol::TCP.0,
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let dummy_tcp_hdr =
+            ingot::tcp::Tcp { flags: TcpFlags::SYN, ..Default::default() };
+
+        let mut state = TcpFlowState::new();
+        state
+            .process::<&[u8]>(
+                c"myport",
+                Direction::Out,
+                &flowid,
+                &dummy_tcp_hdr,
+            )
+            .unwrap();
+        let tcp_state = TcpFlowEntryState::new_outbound(flowid, state, 52);
+
+        let policy = Arc::<TcpExpiry>::default();
+        let mut ft = FlowTable::new(
+            "myport",
+            "tcp",
+            16.try_into().unwrap(),
+            Some(policy.clone()),
+        );
+
+        let fe = ft.add(flowid, tcp_state).unwrap();
+        let t0 = fe.last_hit();
+        let t_bad = INCIPIENT_EXPIRE_TTL.as_milliseconds() / 2;
+        let t_fullbad = INCIPIENT_EXPIRE_TTL.as_milliseconds();
+
+        let mut prio = policy.eviction_priority(&fe, t0);
+        assert_eq!(prio, Some(EvictionPriority::Protected));
+
+        for ms_inc in (0..=10_000).step_by(50) {
+            let t_curr = t0 + Duration::from_millis(ms_inc);
+            let new_prio = policy.eviction_priority(&fe, t_curr);
+
+            if ms_inc <= t_bad || ms_inc > t_fullbad {
+                assert_eq!(new_prio, prio);
+            } else {
+                assert!(new_prio > prio);
+            }
+
+            prio = new_prio;
+        }
+    }
+
+    #[test]
+    fn established_tcp_eviction_prio_unchanging() {
+        let flowid = InnerFlowId {
+            proto: ingot::ip::IpProtocol::TCP.0,
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let dummy_tcp_hdr =
+            ingot::tcp::Tcp { flags: TcpFlags::SYN, ..Default::default() };
+        let dummy_reply_tcp_hdr = ingot::tcp::Tcp {
+            flags: TcpFlags::SYN | TcpFlags::ACK,
+            ..Default::default()
+        };
+
+        let mut state = TcpFlowState::new();
+        state
+            .process::<&[u8]>(
+                c"myport",
+                Direction::Out,
+                &flowid,
+                &dummy_tcp_hdr,
+            )
+            .unwrap();
+        state
+            .process::<&[u8]>(
+                c"myport",
+                Direction::In,
+                &flowid.mirror(),
+                &dummy_reply_tcp_hdr,
+            )
+            .unwrap();
+        let tcp_state = TcpFlowEntryState::new_outbound(flowid, state, 52);
+
+        let policy = Arc::<TcpExpiry>::default();
+        let mut ft = FlowTable::new(
+            "myport",
+            "tcp",
+            16.try_into().unwrap(),
+            Some(policy.clone()),
+        );
+
+        let fe = ft.add(flowid, tcp_state).unwrap();
+        let t0 = fe.last_hit();
+
+        for ms_inc in (0..=1_000_000).step_by(1_000) {
+            let t_curr = t0 + Duration::from_millis(ms_inc);
+
+            let expt = if ms_inc < FLOW_DEF_TTL.as_milliseconds() {
+                Some(EvictionPriority::Protected)
+            } else {
+                Some(EvictionPriority::Evictable(NonZeroU16::MIN))
+            };
+            assert_eq!(policy.eviction_priority(&fe, t_curr), expt);
+        }
+    }
 }

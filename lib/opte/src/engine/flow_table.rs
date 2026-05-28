@@ -506,9 +506,7 @@ pub trait Dump: fmt::Debug + Send + Sync {
 pub trait FlowState: Dump {
     /// Return an iterator containing references to all flow entries from other
     /// tables which underpin `self`.
-    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
-        [].into_iter()
-    }
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>>;
 }
 
 /// Lifecycle state for a flow entry or set of interlinked flow entries.
@@ -722,7 +720,11 @@ mod test {
         fn dump(&self, _hits: u64) {}
     }
 
-    impl FlowState for () {}
+    impl FlowState for () {
+        fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+            [].into_iter()
+        }
+    }
 
     #[derive(Debug, Clone)]
     struct ParentSet(Vec<Arc<dyn FlowEntryInfo>>);
