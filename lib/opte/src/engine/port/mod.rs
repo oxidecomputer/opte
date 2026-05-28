@@ -3208,7 +3208,7 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 const ONE_SCALED: u64 = 1 << SCALE;
                 const FRACTION_MASK: u64 = ONE_SCALED - 1;
 
-                debig_assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
+                debug_assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
                 debug_assert_eq!(
                     FRACTION_MASK.leading_zeros(),
                     u64::BITS - (SCALE as u32)
