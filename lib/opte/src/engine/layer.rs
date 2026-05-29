@@ -9,6 +9,7 @@
 use super::flow_table::Dump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
+use super::flow_table::FlowEntryInfo;
 use super::flow_table::FlowTable;
 use super::flow_table::FlowTableDump;
 use super::packet::BodyTransformError;
@@ -39,6 +40,7 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::FlowState;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -49,6 +51,8 @@ use core::fmt;
 use core::fmt::Display;
 use core::num::NonZeroU32;
 use core::result;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::ActionDescEntryDump;
@@ -182,6 +186,12 @@ impl Dump for LftOutEntry {
     }
 }
 
+impl FlowState for LftOutEntry {
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+        [].into_iter()
+    }
+}
+
 struct LayerFlowTable {
     limit: NonZeroU32,
     count: u32,
@@ -196,18 +206,25 @@ pub struct LftDump {
 }
 
 impl LayerFlowTable {
+    #[must_use]
     fn add_pair(
         &mut self,
         action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
-    ) {
-        // We add unchekced because the limit is now enforced by
-        // LayerFlowTable, not the individual flow tables.
-        self.ft_in.add_unchecked(in_flow, action_desc.clone());
+    ) -> (Arc<FlowEntry<ActionDescEntry>>, Arc<FlowEntry<LftOutEntry>>) {
+        // We add unchecked because the limit is now enforced by
+        // LayerFlowTable, not the individual flow tables. Because these flow
+        // entries must be retired in pairs (and we want, e.g., inbound flow
+        // hits to sustain the outbound flow and vice-versa) we create the out
+        // entry as a _partner_ of the inbound one.
+        let in_lft = self.ft_in.add_unchecked(in_flow, action_desc.clone());
         let out_entry = LftOutEntry { in_flow_pair: in_flow, action_desc };
-        self.ft_out.add_unchecked(out_flow, out_entry);
+        let out_lft =
+            self.ft_out.add_unchecked_partner(out_flow, out_entry, &in_lft);
         self.count += 1;
+
+        (in_lft, out_lft)
     }
 
     /// Clear all flow table entries.
@@ -222,18 +239,8 @@ impl LayerFlowTable {
     }
 
     fn expire_flows(&mut self, now: Moment) {
-        // XXX The two sides can have different traffic patterns and
-        // thus one side could be considered expired while the other
-        // is active. You could have one side seeing packets while the
-        // other side is idle; so what do we do? Currently this impl
-        // bases expiration on the outgoing side only, but expires
-        // both entries (just like it's imperative to add an entry as
-        // a pair, it's also imperative to remove an entry as a pair).
-        // Perhaps the two sides should share a single moment (though
-        // that would required mutex or atomic). Or perhaps both sides
-        // should be checked, and if either side is expired the pair
-        // is considered expired (or active). Maybe this should be
-        // configurable?
+        // Flow table in/out entries share a lifetime struct, so it's irrelevant
+        // which of these tables we check first.
         let to_expire =
             self.ft_out.expire_flows(now, LftOutEntry::extract_pair);
         for flow in to_expire {
@@ -242,14 +249,14 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&self, flow: &InnerFlowId) -> EntryState {
+    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
         match self.ft_in.get(flow) {
             Some(entry) => {
                 entry.hit();
                 if entry.is_dirty() {
-                    EntryState::Dirty(entry.state().clone())
+                    EntryState::Dirty(entry)
                 } else {
-                    EntryState::Clean(entry.state().clone())
+                    EntryState::Clean(entry)
                 }
             }
 
@@ -257,15 +264,14 @@ impl LayerFlowTable {
         }
     }
 
-    fn get_out(&self, flow: &InnerFlowId) -> EntryState {
+    fn get_out(&self, flow: &InnerFlowId) -> EntryState<'_, LftOutEntry> {
         match self.ft_out.get(flow) {
             Some(entry) => {
                 entry.hit();
-                let action = entry.state().action_desc.clone();
                 if entry.is_dirty() {
-                    EntryState::Dirty(action)
+                    EntryState::Dirty(entry)
                 } else {
-                    EntryState::Clean(action)
+                    EntryState::Clean(entry)
                 }
             }
 
@@ -331,14 +337,14 @@ impl LayerFlowTable {
 }
 
 /// The result of a flowtable lookup.
-pub enum EntryState {
+pub enum EntryState<'a, S: FlowState> {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
-    Clean(ActionDescEntry),
+    Clean(&'a Arc<FlowEntry<S>>),
     /// An existing flow table entry was found, but rule processing must be rerun
     /// to use the original action or invalidate the underlying entry.
-    Dirty(ActionDescEntry),
+    Dirty(&'a Arc<FlowEntry<S>>),
 }
 
 /// The default action of a layer.
@@ -395,6 +401,12 @@ impl Display for ActionDescEntry {
             Self::NoOp => write!(f, "no-op"),
             Self::Desc(desc) => write!(f, "{desc}"),
         }
+    }
+}
+
+impl FlowState for ActionDescEntry {
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+        [].into_iter()
     }
 }
 
@@ -489,6 +501,11 @@ struct LayerStats {
 
     /// The number of times set_rules() has been called.
     set_rules_called: KStatU64,
+}
+
+enum SpaceCreated {
+    AmpleSpace,
+    Evict { in_key: InnerFlowId, out_key: InnerFlowId },
 }
 
 pub struct Layer {
@@ -782,6 +799,43 @@ impl Layer {
         }
     }
 
+    /// Determine whether there is currently space for a new entry to be
+    /// inserted.
+    ///
+    /// If out of space, this method will attempt to evict an existing entry.
+    fn check_for_space(
+        &self,
+        dir: Direction,
+    ) -> result::Result<SpaceCreated, LayerError> {
+        if self.ft.count < self.ft.limit.get() {
+            return Ok(SpaceCreated::AmpleSpace);
+        }
+
+        // Both in/out share the same `killed` flag, children, and evictability,
+        // so we only need to check the outbound table.
+        if let Some((out_key, out_entry)) =
+            self.ft.ft_out.find_evictable_entry()
+        {
+            let in_key = out_entry.state().in_flow_pair;
+            Ok(SpaceCreated::Evict { out_key, in_key })
+        } else {
+            let stat = match dir {
+                Direction::In => &self.stats.vals.in_lft_full,
+                Direction::Out => &self.stats.vals.out_lft_full,
+            };
+            stat.incr(1);
+            Err(LayerError::FlowTableFull { layer: self.name, dir })
+        }
+    }
+
+    fn complete_eviction(&mut self, entry: SpaceCreated) {
+        if let SpaceCreated::Evict { in_key, out_key } = entry {
+            self.ft.ft_out.expire(&out_key);
+            self.ft.ft_in.expire(&in_key);
+            self.ft.count = self.ft.ft_out.num_flows();
+        }
+    }
+
     pub(crate) fn process(
         &mut self,
         ectx: &ExecCtx,
@@ -816,19 +870,26 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
         let action = match self.ft.get_in(&flow) {
-            EntryState::Dirty(ActionDescEntry::Desc(action))
-                if action.is_valid() =>
-            {
-                self.ft.mark_clean(Direction::In, &flow);
-                Some(ActionDescEntry::Desc(action))
+            EntryState::Dirty(action) => {
+                if let ActionDescEntry::Desc(desc) = action.state()
+                    && desc.is_valid()
+                {
+                    let desc = Arc::clone(desc);
+                    pkt.record_lft(Arc::clone(action) as _);
+                    self.ft.mark_clean(Direction::In, &flow);
+                    Some(ActionDescEntry::Desc(desc))
+                } else {
+                    // NoOps are included in this case as we can't ask the actor
+                    // whether it remains valid: the simplest method to do so is
+                    // to rerun lookup.
+                    self.ft.remove_in(&flow);
+                    None
+                }
             }
-            EntryState::Dirty(_) => {
-                // NoOps are included in this case as we can't ask the actor whether
-                // it remains valid: the simplest method to do so is to rerun lookup.
-                self.ft.remove_in(&flow);
-                None
+            EntryState::Clean(action) => {
+                pkt.record_lft(Arc::clone(action) as _);
+                Some(action.state().clone())
             }
-            EntryState::Clean(action) => Some(action),
             EntryState::None => None,
         };
 
@@ -895,13 +956,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
-                    return Err(LayerError::FlowTableFull {
-                        layer: self.name,
-                        dir: In,
-                    });
-                }
+                let write_to = self.check_for_space(In)?;
+                self.complete_eviction(write_to);
 
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
@@ -909,7 +965,8 @@ impl Layer {
                 // represents how the network sees the traffic.
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
-                self.ft.add_pair(desc, *pkt.flow(), flow_out);
+                let (in_lft, _) = self.ft.add_pair(desc, *pkt.flow(), flow_out);
+                pkt.record_lft(in_lft);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -1005,13 +1062,7 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.in_lft_full += 1;
-                    return Err(LayerError::FlowTableFull {
-                        layer: self.name,
-                        dir: In,
-                    });
-                }
+                let write_to = self.check_for_space(In)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1030,6 +1081,8 @@ impl Layer {
                         return Err(LayerError::GenDesc(e));
                     }
                 };
+
+                self.complete_eviction(write_to);
 
                 let flow_before = *pkt.flow();
                 let ht_in = desc.gen_ht(In, ameta);
@@ -1058,11 +1111,12 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_out = pkt.flow().mirror();
-                self.ft.add_pair(
+                let (in_lft, _) = self.ft.add_pair(
                     ActionDescEntry::Desc(desc),
                     flow_before,
                     flow_out,
                 );
+                pkt.record_lft(in_lft);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -1102,19 +1156,26 @@ impl Layer {
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
         let action = match self.ft.get_out(&flow) {
-            EntryState::Dirty(ActionDescEntry::Desc(action))
-                if action.is_valid() =>
-            {
-                self.ft.mark_clean(Direction::Out, &flow);
-                Some(ActionDescEntry::Desc(action))
+            EntryState::Dirty(action) => {
+                if let ActionDescEntry::Desc(desc) = &action.state().action_desc
+                    && desc.is_valid()
+                {
+                    let desc = Arc::clone(desc);
+                    pkt.record_lft(Arc::clone(action) as _);
+                    self.ft.mark_clean(Direction::Out, &flow);
+                    Some(ActionDescEntry::Desc(desc))
+                } else {
+                    // NoOps are included in this case as we can't ask the actor
+                    // whether it remains valid: the simplest method to do so is
+                    // to rerun lookup.
+                    self.ft.remove_out(&flow);
+                    None
+                }
             }
-            EntryState::Dirty(_) => {
-                // NoOps are included in this case as we can't ask the actor whether
-                // it remains valid: the simplest method to do so is to rerun lookup.
-                self.ft.remove_out(&flow);
-                None
+            EntryState::Clean(action) => {
+                pkt.record_lft(Arc::clone(action) as _);
+                Some(action.state().action_desc.clone())
             }
-            EntryState::Clean(action) => Some(action),
             EntryState::None => None,
         };
 
@@ -1181,13 +1242,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
-                    return Err(LayerError::FlowTableFull {
-                        layer: self.name,
-                        dir: Out,
-                    });
-                }
+                let write_to = self.check_for_space(Out)?;
+                self.complete_eviction(write_to);
 
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1197,7 +1253,12 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_in = pkt.flow().mirror();
-                self.ft.add_pair(ActionDescEntry::NoOp, flow_in, *pkt.flow());
+                let (_, out_lft) = self.ft.add_pair(
+                    ActionDescEntry::NoOp,
+                    flow_in,
+                    *pkt.flow(),
+                );
+                pkt.record_lft(out_lft);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -1293,13 +1354,7 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                if self.ft.count == self.ft.limit.get() {
-                    self.stats.vals.out_lft_full += 1;
-                    return Err(LayerError::FlowTableFull {
-                        layer: self.name,
-                        dir: Out,
-                    });
-                }
+                let write_to = self.check_for_space(Out)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1318,6 +1373,8 @@ impl Layer {
                         return Err(LayerError::GenDesc(e));
                     }
                 };
+
+                self.complete_eviction(write_to);
 
                 let flow_before = *pkt.flow();
                 let ht_out = desc.gen_ht(Out, ameta);
@@ -1347,11 +1404,12 @@ impl Layer {
                 // to mirror the IPs and ports to reflect the traffic
                 // direction change.
                 let flow_in = pkt.flow().mirror();
-                self.ft.add_pair(
+                let (_, out_lft) = self.ft.add_pair(
                     ActionDescEntry::Desc(desc),
                     flow_in,
                     flow_before,
                 );
+                pkt.record_lft(out_lft);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
             }
@@ -1521,13 +1579,17 @@ impl Layer {
 #[derive(Debug)]
 struct RuleTableEntry {
     id: RuleId,
-    hits: u64,
+    hits: AtomicU64,
     rule: Rule<rule::Finalized>,
 }
 
 impl From<&RuleTableEntry> for RuleTableEntryDump {
     fn from(rte: &RuleTableEntry) -> Self {
-        Self { id: rte.id, hits: rte.hits, rule: RuleDump::from(&rte.rule) }
+        Self {
+            id: rte.id,
+            hits: rte.hits.load(Ordering::Relaxed),
+            rule: RuleDump::from(&rte.rule),
+        }
     }
 }
 
@@ -1555,12 +1617,14 @@ impl RuleTable {
     fn add(&mut self, rule: Rule<rule::Finalized>) {
         match self.find_pos(&rule) {
             RulePlace::End => {
-                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
                 self.rules.push(rte);
             }
 
             RulePlace::Insert(idx) => {
-                let rte = RuleTableEntry { id: self.next_id, hits: 0, rule };
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
                 self.rules.insert(idx, rte);
             }
         }
@@ -1576,14 +1640,14 @@ impl RuleTable {
     }
 
     fn find_match(
-        &mut self,
+        &self,
         ifid: &InnerFlowId,
         pmeta: &MblkPacketData,
         ameta: &ActionMeta,
     ) -> Option<&Rule<rule::Finalized>> {
-        for rte in self.rules.iter_mut() {
+        for rte in self.rules.iter() {
             if rte.rule.is_match(pmeta, ameta) {
-                rte.hits += 1;
+                rte.hits.fetch_add(1, Ordering::Relaxed);
                 Self::rule_match_probe(
                     self.port_c.as_c_str(),
                     self.layer_c.as_c_str(),

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 
@@ -45,6 +45,7 @@ use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
+use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::geneve::GeneveMeta;
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -790,6 +791,7 @@ where
                 body_modified: false,
                 len,
                 inner_csum_dirty: false,
+                lfts: vec![],
             },
         }
     }
@@ -1387,6 +1389,14 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
             l3.compute_checksum();
         }
     }
+
+    pub fn record_lft(&mut self, lft: Arc<dyn FlowEntryInfo>) {
+        self.state.lfts.push(lft);
+    }
+
+    pub fn take_lfts(&mut self) -> Vec<Arc<dyn FlowEntryInfo>> {
+        self.state.lfts.drain(..).collect()
+    }
 }
 
 impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> PacketState
@@ -1435,6 +1445,9 @@ pub struct FullParsed<T: Read + Pullup> {
     /// Tracks whether any transform has been applied to this packet
     /// which would dirty the inner L3 and/or ULP header checksums.
     inner_csum_dirty: bool,
+    /// The set of all LFTs created or used by this packet as it
+    /// traverses the slow path.
+    lfts: Vec<Arc<dyn FlowEntryInfo>>,
 }
 
 /// Minimum-size zerocopy view onto a parsed packet, sufficient for fast
