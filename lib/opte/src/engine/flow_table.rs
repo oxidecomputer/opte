@@ -705,6 +705,65 @@ enum EvictionKey {
     Evictable(EvictionPriority, Moment),
 }
 
+pub mod util {
+    use std::num::NonZeroU16;
+
+    /// Choose a priority value between `start_prio..=end_prio`
+    /// based on `delta_ms`'s position between two timestamps.
+    ///
+    /// Returns `None` if start > end. Clamps to `start_prio` when delta
+    /// is before the time range, and to `end_prio` when delta falls after it.
+    pub fn priority_lerp(
+        start_time_ms: u64,
+        start_prio: NonZeroU16,
+        end_time_ms: u64,
+        end_prio: NonZeroU16,
+        delta_ms: u64,
+    ) -> Option<NonZeroU16> {
+        if start_time_ms > end_time_ms || end_prio < start_prio {
+            return None;
+        }
+
+        Some(if delta_ms <= start_time_ms {
+            start_prio
+        } else if delta_ms >= end_time_ms {
+            end_prio
+        } else {
+            // Compute our priority using fixed point arithmetic.
+            // Since we're working in terms of 16-bit numbers, we need as
+            // many bits of fractional precision between 0.0 and 1.0.
+            const SCALE: u64 = 16;
+            const ONE_SCALED: u64 = 1 << SCALE;
+            const FRACTION_MASK: u64 = ONE_SCALED - 1;
+
+            debug_assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
+            debug_assert_eq!(
+                FRACTION_MASK.leading_zeros(),
+                u64::BITS - (SCALE as u32)
+            );
+
+            // Fixed-point division of a real by an integer is fairly
+            // straightforward -- don't convert the denominator into the
+            // target base.
+            let inner_pos = (delta_ms - start_time_ms) << SCALE;
+            let window_len = end_time_ms - start_time_ms;
+
+            let inner_frac = inner_pos / window_len;
+
+            let n_entries = u64::from(end_prio.get() - start_prio.get());
+
+            let entry_fixed_pt = n_entries * inner_frac;
+
+            let round_up = entry_fixed_pt & FRACTION_MASK >= ONE_SCALED / 2;
+            let entry = u16::try_from(entry_fixed_pt >> SCALE)
+                .expect("start and end points of lerp are both u16s")
+                + u16::from(round_up);
+
+            start_prio.saturating_add(entry)
+        })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

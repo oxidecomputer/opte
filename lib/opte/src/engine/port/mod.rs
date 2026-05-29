@@ -71,6 +71,7 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
@@ -3181,61 +3182,6 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
         const MISBEHAVED_MAX: NonZeroU16 =
             NonZeroU16::new(NonZeroU16::MAX.get() - 1).unwrap();
 
-        /// Choose a priority value between `MISBEHAVED_MIN..=MISBEHAVED_MAX`
-        /// based on `delta_ms`'s position between two timestamps.
-        ///
-        /// Returns `None` if start > end.
-        fn priority_lerp(
-            start_time_ms: u64,
-            end_time_ms: u64,
-            delta_ms: u64,
-        ) -> Option<NonZeroU16> {
-            debug_assert!(MISBEHAVED_MAX >= MISBEHAVED_MIN);
-
-            if start_time_ms > end_time_ms {
-                return None;
-            }
-
-            Some(if delta_ms <= start_time_ms {
-                MISBEHAVED_MIN
-            } else if delta_ms >= end_time_ms {
-                MISBEHAVED_MAX
-            } else {
-                // Compute our priority using fixed point arithmetic.
-                // Since we're working in terms of 16-bit numbers, we need as
-                // many bits of fractional precision between 0.0 and 1.0.
-                const SCALE: u64 = 16;
-                const ONE_SCALED: u64 = 1 << SCALE;
-                const FRACTION_MASK: u64 = ONE_SCALED - 1;
-
-                debug_assert_eq!(FRACTION_MASK.count_ones(), SCALE as u32);
-                debug_assert_eq!(
-                    FRACTION_MASK.leading_zeros(),
-                    u64::BITS - (SCALE as u32)
-                );
-
-                // Fixed-point division of a real by an integer is fairly
-                // straightforward -- don't convert the denominator into the
-                // target base.
-                let inner_pos = (delta_ms - start_time_ms) << SCALE;
-                let window_len = end_time_ms - start_time_ms;
-
-                let inner_frac = inner_pos / window_len;
-
-                let n_entries =
-                    u64::from(MISBEHAVED_MAX.get() - MISBEHAVED_MIN.get());
-
-                let entry_fixed_pt = n_entries * inner_frac;
-
-                let round_up = entry_fixed_pt & FRACTION_MASK >= ONE_SCALED / 2;
-                let entry = u16::try_from(entry_fixed_pt >> SCALE)
-                    .expect("start and end points of lerp are both u16s")
-                    + u16::from(round_up);
-
-                MISBEHAVED_MIN.saturating_add(entry)
-            })
-        }
-
         let delta = now.delta_as_millis(entry.last_hit());
         match entry.state().tcp_state() {
             TcpState::TimeWait
@@ -3248,9 +3194,11 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 // not under pressure.
                 a if a > self.incipient_ttl.as_milliseconds() => {
                     Some(EvictionPriority::Evictable(
-                        priority_lerp(
+                        util::priority_lerp(
                             self.incipient_ttl.as_milliseconds(),
+                            MISBEHAVED_MIN,
                             self.quiescent_ttl.as_milliseconds(),
+                            MISBEHAVED_MAX,
                             delta,
                         )
                         .expect("start < end"),
@@ -3267,9 +3215,11 @@ impl ExpiryPolicy<TcpFlowEntryState> for TcpExpiry {
                 // explicitly selected for removal faster.
                 a if a > incipient_midpoint => {
                     Some(EvictionPriority::Evictable(
-                        priority_lerp(
+                        util::priority_lerp(
                             incipient_midpoint,
+                            MISBEHAVED_MIN,
                             self.incipient_ttl.as_milliseconds(),
+                            MISBEHAVED_MAX,
                             delta,
                         )
                         .expect("start < end"),
