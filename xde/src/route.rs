@@ -34,7 +34,7 @@ const EXPIRE_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
 const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 
 /// Maximum cache size, set to prevent excessive map modification latency.
-const MAX_CACHE_ENTRIES: usize = 512;
+const MAX_CACHE_ENTRIES: usize = 32;
 
 unsafe extern "C" {
     pub safe fn __dtrace_probe_next__hop(
