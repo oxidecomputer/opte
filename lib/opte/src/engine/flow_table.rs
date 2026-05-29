@@ -1174,4 +1174,69 @@ mod test {
             Some(EvictionPriority::Evictable(NonZeroU16::MAX)),
         );
     }
+
+    #[test]
+    fn priority_lerp() {
+        let low = 10.try_into().unwrap();
+        let high = 20.try_into().unwrap();
+
+        assert_eq!(
+            util::priority_lerp(500, low, 1_000, high, 750),
+            Some(15.try_into().unwrap()),
+        );
+
+        // Double check rounding.
+        assert_eq!(
+            util::priority_lerp(500, low, 1_000, high, 975),
+            Some(19.try_into().unwrap()),
+        );
+
+        assert_eq!(util::priority_lerp(500, low, 1_000, high, 976), Some(high));
+
+        // Show we don't shoot past [low, high] at boundaries.
+        assert_eq!(util::priority_lerp(500, low, 1_000, high, 501), Some(low));
+
+        assert_eq!(util::priority_lerp(500, low, 1_000, high, 999), Some(high));
+    }
+
+    #[test]
+    fn priority_lerp_clamps() {
+        let low = 10.try_into().unwrap();
+        let high = 20.try_into().unwrap();
+
+        assert_eq!(util::priority_lerp(500, low, 1_000, high, 200), Some(low));
+
+        assert_eq!(
+            util::priority_lerp(500, low, 1_000, high, 10_000),
+            Some(high),
+        );
+    }
+
+    #[test]
+    fn priority_lerp_rejects_bad_params() {
+        // Start > end time is an illegal parameter choice.
+        assert_eq!(
+            util::priority_lerp(
+                1_000,
+                1.try_into().unwrap(),
+                500,
+                2.try_into().unwrap(),
+                750
+            ),
+            None
+        );
+
+        // We could support linear interpolation down from a higher to lower
+        // value, but have no reason to do so today.
+        assert_eq!(
+            util::priority_lerp(
+                0,
+                2.try_into().unwrap(),
+                10,
+                1.try_into().unwrap(),
+                5
+            ),
+            None
+        );
+    }
 }
