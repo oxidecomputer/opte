@@ -34,7 +34,7 @@ const EXPIRE_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
 const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 
 /// Maximum cache size, set to prevent excessive map modification latency.
-const MAX_CACHE_ENTRIES: usize = 32;
+const MAX_CACHE_ENTRIES: usize = 8192;
 
 unsafe extern "C" {
     pub safe fn __dtrace_probe_next__hop(
@@ -491,14 +491,14 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
 /// per-packet' and 'holding a route until it is expired'. We choose, for now,
 /// to hold a route for 100ms.
 ///
-/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
-/// (faster) add/remove costs of a `HashMap`. As `BTreeMap` modification costs
-/// outpace the cost of `next_hop` between 256--512 entries, we currently set 512
-/// as a cap on cache size to prevent significant packet stalls. This may be tricky
-/// to tune.
+/// https://github.com/oxidecomputer/opte/issues/779#issuecomment-2991282673
+/// contains get/insert costs for 40B keys against `Arc<>`s. The key and value
+/// sizes are not quite the same here, but in general tables must be *large* to
+/// begin to approach 1us on get/insert, so we are unlikely to outpace the cost of
+/// `next_hop`.
 ///
-/// (See: https://github.com/oxidecomputer/opte/pull/499#discussion_r1581164767
-/// for some performance numbers.)
+/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
+/// (faster) add/remove costs of a `HashMap`.
 #[derive(Clone)]
 pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
