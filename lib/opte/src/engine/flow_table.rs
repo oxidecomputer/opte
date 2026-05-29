@@ -706,7 +706,7 @@ enum EvictionKey {
 }
 
 pub mod util {
-    use std::num::NonZeroU16;
+    use core::num::NonZeroU16;
 
     /// Choose a priority value between `start_prio..=end_prio`
     /// based on `delta_ms`'s position between two timestamps.
