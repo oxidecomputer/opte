@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! ICMPv6 headers and processing.
 
@@ -324,10 +324,7 @@ impl HairpinAction for RouterAdvertisement {
             reachable_time: ZERO_DURATION,
             retrans_time: ZERO_DURATION,
             lladdr: Some(RawHardwareAddress::from_bytes(&self.mac)),
-            // TODO-completeness: Don't hardcode this.
-            //
-            // See https://github.com/oxidecomputer/opte/issues/263.
-            mtu: Some(1500),
+            mtu: self.mtu,
             // Indicate that there are no addresses considered on-link, other
             // than the router's advertised link-local address. This will
             // require all traffic from the client to go through OPTE.

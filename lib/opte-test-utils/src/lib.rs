@@ -356,7 +356,7 @@ pub fn oxide_net_setup2(
         }
     };
 
-    let converted_cfg: oxide_vpc::cfg::VpcCfg = cfg.clone().into();
+    let converted_cfg = oxide_vpc::cfg::VpcCfg::with_mtu(cfg.clone(), 1500);
     let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());

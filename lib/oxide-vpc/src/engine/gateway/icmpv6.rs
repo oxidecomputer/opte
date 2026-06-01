@@ -62,6 +62,9 @@ pub(super) fn setup(
             // "Managed Configuration", indicating the guest needs to use DHCPv6 to
             // acquire an IPv6 address.
             true,
+            // Out current disposition is to always include an MTU announcement in
+            // the NDP RA.
+            Some(ctx.cfg.mtu),
         ))),
         // Map an NDP Neighbor Solicitation from the guest to a neighbor
         // advertisement from the OPTE virtual gateway. Note that this is required

@@ -1150,7 +1150,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             .clone()
     };
 
-    let cfg = VpcCfg::from(req.cfg.clone());
+    let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
+    let cfg = VpcCfg::with_mtu(req.cfg.clone(), mtu);
 
     // Because we hold the token, no one else will add to/remove from
     // the XdeDev map in parallel. Quickly check that there is no
@@ -1192,7 +1193,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     };
 
     let mut guest_addr = cfg.guest_mac.bytes();
-    let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
 
     let mut xde = Arc::new(XdeDev {
         devname: req.xde_devname.clone(),
