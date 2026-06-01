@@ -331,7 +331,7 @@ type McastForwardingTable = BTreeMap<
 >;
 
 // Entry limits for the various flow tables.
-const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
+const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(524288).unwrap();
 const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// The name of this driver.
@@ -2705,15 +2705,15 @@ unsafe extern "C" fn xde_mc_tx(
     let src_dev = unsafe { &*(arg as *mut XdeDev) };
 
     // ================================================================
-    // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
-    // Packet takes ownership of an mblk_t from mp_chain. When these
+    // IMPORTANT: MsgBlkChain now takes ownership of mp_chain, and each
+    // MsgBlk takes ownership of an mblk_t from mp_chain. When these
     // structs are dropped, so are any contained packets at those pointers.
     // Be careful with any calls involving mblk_t pointers (or their
     // uintptr_t numeric forms) after this point. They should only be calls
     // that read (i.e., SDT arguments), nothing that writes or frees. But
     // really you should think of mp_chain as &mut and avoid any reference
     // to it past this point. Ownership is taken back by calling
-    // Packet/PacketChain::unwrap_mblk().
+    // MsgBlk/MsgBlkChain::unwrap_mblk().
     //
     // XXX We may use Packet types with non-'static lifetimes in future.
     //     We *will* still need to remain careful here and `xde_rx` as
@@ -3247,12 +3247,12 @@ fn new_port(
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
-    firewall::setup(&mut pb, FW_FT_LIMIT)?;
-
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
+
+    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
+    firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
