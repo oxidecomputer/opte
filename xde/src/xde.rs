@@ -435,6 +435,9 @@ unsafe extern "C" {
     // Multicast dataplane problem probes
     pub safe fn __dtrace_probe_mcast__tx__pullup__fail(len: uintptr_t);
     pub safe fn __dtrace_probe_mcast__rx__pullup__fail(len: uintptr_t);
+    /// Fires when a multicast packet has no inner L3 header available for
+    /// source-filter evaluation, so the packet is dropped at TX.
+    pub safe fn __dtrace_probe_mcast__tx__no__inner__ip(mblk: uintptr_t);
     pub safe fn __dtrace_probe_mcast__no__fwd__entry(
         underlay: *const oxide_vpc::api::Ipv6Addr,
         vni: uintptr_t,
@@ -2955,6 +2958,7 @@ fn xde_mc_tx_one<'a>(
                         opte::engine::dbg!(
                             "mcast Tx: no inner L3 for source filtering"
                         );
+                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
                         return;
                     }
                 };
