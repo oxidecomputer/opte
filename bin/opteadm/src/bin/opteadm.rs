@@ -206,14 +206,17 @@ enum Command {
         #[arg(long)]
         src_underlay_addr: Ipv6Addr,
 
+        /// The MTU that should be assigned to the newly created OPTE port.
+        ///
+        /// If unset, this will default to the standard Ethernet MTU of 1500.
+        #[arg(long)]
+        mtu: Option<u32>,
+
         #[command(flatten)]
         external_net: ExternalNetConfig,
 
         #[command(flatten)]
         dhcp: DhcpConfig,
-
-        #[arg(long)]
-        passthrough: bool,
     },
 
     /// Delete an xde device
@@ -823,7 +826,7 @@ fn main() -> anyhow::Result<()> {
             src_underlay_addr,
             dhcp,
             external_net,
-            passthrough,
+            mtu,
         } => {
             let ip_cfg = match private_ip {
                 IpAddr::Ip4(private_ip) => {
@@ -877,7 +880,7 @@ fn main() -> anyhow::Result<()> {
                 dhcp: dhcp.into(),
             };
 
-            hdl.create_xde(&name, cfg, passthrough)?;
+            hdl.create_xde(&name, cfg, mtu)?;
         }
 
         Command::DeleteXde { name } => {

@@ -316,7 +316,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), None)?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -372,7 +372,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), None)?;
         Ok(OptePort {
             name: name.into(),
             cfg,

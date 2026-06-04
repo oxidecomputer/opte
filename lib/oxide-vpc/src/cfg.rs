@@ -110,9 +110,28 @@ pub struct VpcCfg {
 
     /// Configuration for DHCP responses created by OPTE.
     pub dhcp: DhcpCfg,
+
+    /// MTU value that this port has been configured with.
+    ///
+    /// This value must be explicitly filled by the driver to honour a request from
+    /// the control plane or according to the limits on the underlay devices
+    /// themselves.
+    pub mtu: u32,
 }
 
 impl VpcCfg {
+    pub fn with_mtu(value: api::VpcCfg, mtu: u32) -> Self {
+        Self {
+            ip_cfg: value.ip_cfg.into(),
+            guest_mac: value.guest_mac,
+            gateway_mac: value.gateway_mac,
+            vni: value.vni,
+            phys_ip: value.phys_ip,
+            dhcp: value.dhcp,
+            mtu,
+        }
+    }
+
     /// Return the IPv4 configuration, if it exists, or None.
     pub fn ipv4_cfg(&self) -> Option<&Ipv4Cfg> {
         match self.ip_cfg {
@@ -202,19 +221,6 @@ impl VpcCfg {
     }
 }
 
-impl From<api::VpcCfg> for VpcCfg {
-    fn from(value: api::VpcCfg) -> Self {
-        Self {
-            ip_cfg: value.ip_cfg.into(),
-            guest_mac: value.guest_mac,
-            gateway_mac: value.gateway_mac,
-            vni: value.vni,
-            phys_ip: value.phys_ip,
-            dhcp: value.dhcp,
-        }
-    }
-}
-
 impl From<api::IpCfg> for IpCfg {
     fn from(value: api::IpCfg) -> Self {
         match value {
@@ -258,12 +264,14 @@ mod tests {
     use super::*;
     use api::tests::test_vpc_cfg;
 
+    const ETHERNET_MTU: u32 = 1500;
+
     #[test]
     fn test_required_nat_space() {
         let cfg = test_vpc_cfg();
         // Each IPv4/v6 has the full port range.
         assert_eq!(
-            VpcCfg::from(cfg).required_nat_space(),
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
             u32::from(u16::MAX) * 2
         );
     }
@@ -273,7 +281,10 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let api::IpCfg::DualStack { ipv6, .. } = cfg.ip_cfg else { panic!() };
         cfg.ip_cfg = api::IpCfg::Ipv6(ipv6);
-        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
+        assert_eq!(
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
+            u32::from(u16::MAX)
+        );
     }
 
     #[test]
@@ -281,6 +292,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let api::IpCfg::DualStack { ipv4, .. } = cfg.ip_cfg else { panic!() };
         cfg.ip_cfg = api::IpCfg::Ipv4(ipv4);
-        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
+        assert_eq!(
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
+            u32::from(u16::MAX)
+        );
     }
 }

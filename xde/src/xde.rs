@@ -619,6 +619,7 @@ pub struct XdeDev {
     linkid: datalink_id_t,
     mh: *mut mac::mac_handle,
     link_state: mac::link_state_t,
+    mtu: u32,
 
     // The OPTE port associated with this xde device.
     //
@@ -628,10 +629,6 @@ pub struct XdeDev {
     pub port: Arc<Port<VpcNetwork>>,
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
-
-    // Pass the packets through to the underlay devices, skipping
-    // opte-core processing.
-    passthrough: bool,
 
     pub vni: Vni,
 
@@ -1156,7 +1153,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             .clone()
     };
 
-    let cfg = VpcCfg::from(req.cfg.clone());
+    let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
+    let cfg = VpcCfg::with_mtu(req.cfg.clone(), mtu);
 
     // Because we hold the token, no one else will add to/remove from
     // the XdeDev map in parallel. Quickly check that there is no
@@ -1204,6 +1202,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         linkid: req.linkid,
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
+        mtu,
         port: new_port(
             req.xde_devname.clone(),
             &cfg,
@@ -1216,7 +1215,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_v2p,
         vni: cfg.vni,
         port_igw_map: KMutex::new(None),
-        passthrough: req.passthrough,
         u1,
         u2,
         underlay_capab,
@@ -1244,7 +1242,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_priv_props = core::ptr::null_mut();
     mreg.m_instance = c_uint::MAX; // let mac handle this
     mreg.m_min_sdu = 1;
-    mreg.m_max_sdu = u32::from(ETHERNET_MTU); // TODO hardcode
+    mreg.m_max_sdu = mtu;
     mreg.m_multicast_sdu = 0;
     mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
@@ -2845,19 +2843,6 @@ fn xde_mc_tx_one<'a>(
         }
     };
 
-    // Send straight to underlay in passthrough mode.
-    if src_dev.passthrough {
-        // TODO We need to deal with flow control. This could actually
-        // get weird, this is the first provider to use mac_tx(). Is
-        // there something we can learn from aggr here? I need to
-        // refresh my memory on all of this.
-        //
-        // TODO Is there way to set mac_tx to must use result?
-        drop(parsed_pkt);
-        postbox.post_underlay(UnderlayIndex::U1, TxHint::NoneOrMixed, pkt);
-        return;
-    }
-
     let port = &src_dev.port;
 
     // The port processing code will fire a probe that describes what
@@ -3542,13 +3527,6 @@ fn xde_rx_one(
         None
     };
 
-    // We are in passthrough mode, skip OPTE processing.
-    if dev.passthrough {
-        drop(parsed_pkt);
-        postbox.post(port_key, pkt);
-        return None;
-    }
-
     let port = &dev.port;
 
     let res = port.process(Direction::In, parsed_pkt);
@@ -3654,13 +3632,6 @@ fn xde_rx_one_direct(
     } else {
         None
     };
-
-    // We are in passthrough mode, skip OPTE processing.
-    if dev.passthrough {
-        drop(parsed_pkt);
-        postbox.post(port_key, pkt);
-        return;
-    }
 
     let port = &dev.port;
 
