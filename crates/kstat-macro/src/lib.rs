@@ -54,7 +54,7 @@ pub fn derive_kstat_provider(input: TokenStream) -> TokenStream {
                 named.into_iter().collect()
             }
 
-            syn::Fields::Unnamed(FieldsUnnamed { unnamed: _, .. }) => {
+            syn::Fields::Unnamed(FieldsUnnamed { .. }) => {
                 panic!("A KStatProvider cannot have unnamed fields");
             }
 
