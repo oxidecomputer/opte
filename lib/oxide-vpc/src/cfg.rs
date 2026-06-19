@@ -206,15 +206,11 @@ impl VpcCfg {
     // addresses.
     pub fn required_nat_space(&self) -> u32 {
         let n_ipv4_ports = match &self.ip_cfg {
-            IpCfg::Ipv4(_) | IpCfg::DualStack { ipv4: _, .. } => {
-                u32::from(u16::MAX)
-            }
+            IpCfg::Ipv4(_) | IpCfg::DualStack { .. } => u32::from(u16::MAX),
             _ => 0,
         };
         let n_ipv6_ports = match &self.ip_cfg {
-            IpCfg::Ipv6(_) | IpCfg::DualStack { ipv6: _, .. } => {
-                u32::from(u16::MAX)
-            }
+            IpCfg::Ipv6(_) | IpCfg::DualStack { .. } => u32::from(u16::MAX),
             _ => 0,
         };
         n_ipv4_ports + n_ipv6_ports
