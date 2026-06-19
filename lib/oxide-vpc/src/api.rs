@@ -211,7 +211,7 @@ pub struct Ipv6Cfg {
 }
 
 /// Configuration of NAT assignments used by a VPC guest for external networking.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ExternalIpCfg<T> {
     /// The source NAT configuration for making outbound connections
     /// from the private network.
@@ -618,11 +618,10 @@ pub struct CreateXdeReq {
     /// details.
     pub cfg: VpcCfg,
 
-    /// This is a development tool for completely bypassing OPTE processing.
+    /// The MTU we should assign to the newly created OPTE port.
     ///
-    /// XXX Pretty sure we aren't making much use of this anymore, and
-    /// should go away before v1.
-    pub passthrough: bool,
+    /// If unset, this will default to the standard Ethernet MTU of 1500.
+    pub mtu: Option<u32>,
 }
 
 pub type SNat4Cfg = SNatCfg<Ipv4Addr>;

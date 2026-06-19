@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Routines for verifying various Port state.
 
@@ -314,8 +314,10 @@ macro_rules! decr_na {
 /// assert the port state.
 #[macro_export]
 macro_rules! decr {
-    ($pav:expr, $fields:expr) => {
-        decr_na!($pav, $fields);
+    ($pav:expr, $fields_slice:expr) => {
+        for fields_str in &$fields_slice {
+            decr_na!($pav, fields_str);
+        }
         assert_port!($pav);
     };
 }

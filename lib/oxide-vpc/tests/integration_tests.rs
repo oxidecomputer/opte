@@ -15,6 +15,7 @@
 
 use common::icmp::*;
 use common::*;
+use opte::api::L4Info;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::api::TcpState;
@@ -48,6 +49,7 @@ use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
 use opte::engine::port::ProcessResult;
 use opte::engine::rule::MappingResource;
+use opte::engine::tcp::INCIPIENT_EXPIRE_SECS;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::GeneveRef;
@@ -1374,10 +1376,17 @@ fn external_ip_epoch_affinity_preserved() {
         ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
     });
 
+    let (external_ips_v4, external_ips_v6) =
+        if let IpCfg::DualStack { ipv4, ipv6 } = &g1_cfg.ip_cfg {
+            (Some(ipv4.external_ips.clone()), Some(ipv6.external_ips.clone()))
+        } else {
+            panic!("port is built as dual-stack");
+        };
+
     let mut req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
-        external_ips_v4: None,
-        external_ips_v6: None,
+        external_ips_v4,
+        external_ips_v6,
 
         // This test does not focus on controlling EIP selection
         // based on destination prefix.
@@ -3505,22 +3514,31 @@ fn tcp_outbound() {
     // TCP flow expiry behaviour
     // ================================================================
     // - UFTs for individual flows live on the same cadence as other traffic.
+    //   We expect these to expire, as the TCP flow will not pin their
+    //   lifetime.
+    // - The presence of the TCP flow entry will keep the firewall entry alive.
+    //   If the UFT were present, it would serve the same purpose.
     // - TCP state machine info should be cleaned up after an active close.
+    //
     // TimeWait state has a ~2min lifetime before we flush it -- it should still
-    // be present at UFT expiry:
+    // be present at UFT expiry.
     let now = Moment::now();
     g1.port
         .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
-    zero_flows!(g1);
+    decr!(g1, ["uft.in, uft.out"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
     // The TCP flow state should then be flushed after 2 mins.
     // Note that this case applies to any active-close initiated by the
     // guest, irrespective of inbound/outbound.
+    //
+    // Once this flow is removed, the LFTs associated with the flow become
+    // eligible for time-based expiry.
     g1.port
         .expire_flows_at(now + Duration::new(TIME_WAIT_EXPIRE_SECS + 1, 0))
         .unwrap();
+    zero_flows!(g1);
     assert_eq!(None, g1.port.tcp_state(&flow));
 }
 
@@ -3699,6 +3717,103 @@ fn early_tcp_invalidation() {
         ]
     );
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+}
+
+// We have agressive TCP flow entry expiry for flows in the three-way
+// handshake, to ensure that they do not consume table entry space for
+// extremely long periods of time in potential SYN-flood DOS scenarios.
+//
+// However, a slow handshake should still function using the underlying
+// LFT entries where, e.g., the default firewall disposition is in use.
+#[test]
+fn tcp_invalidation_does_not_block_connection() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Ensure we only have the default rules: allow all outbound, block
+    // all inbound.
+    firewall::set_fw_rules(
+        &g1.port,
+        &SetFwRulesReq { port_name: g1.port.name().to_string(), rules: vec![] },
+    )
+    .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=0, firewall.rules.in=0",
+        ]
+    );
+
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let dst_ip = Ipv4Addr::from_const([172, 30, 0, 6]);
+    g1.vpc_map.add(dst_ip.into(), g1_cfg.phys_addr());
+
+    // Attempt to connect to a hypothetical TCP recipient in the same VPC,
+    // on the same sled. This will create new TCP state and setup inbound
+    // LFTs for a SYN-ACK to use.
+    let mut pkt1_m = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow();
+    let remote_port = if let Some(L4Info::Ports(a)) = flow.l4_info() {
+        a.src_port
+    } else {
+        panic!()
+    };
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+
+    // Assume that the recipient takes some time to get back to us, but not
+    // long enough to expire the UFT/LFTs. The TCP state will expire.
+    let t0 = Moment::now();
+    let t1 = t0 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t1).unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
+
+    // The SYN-ACK arrives, and we allow it through. This creates a new
+    // instance of TCP state.
+    let mut pkt2_m = http_syn_ack2(
+        BS_MAC_ADDR,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        remote_port,
+    );
+    pkt2_m = encap(pkt2_m, g1_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_miss, uft.in"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // Receiving a SYN-ACK moves the connection into established. We'd expect
+    // this normally from `SynSent`, if the state hadn't been lost. This state
+    // will survive a short wait.
+    let t2 = t1 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t2).unwrap();
+    assert_eq!(Some(TcpState::Established), g1.port.tcp_state(&flow));
 }
 
 #[test]
@@ -4714,23 +4829,32 @@ fn select_eip_conditioned_on_igw() {
     // * All EIPs are valid on IGW4.
     //   - Packets will choose a random FIP, by priority ordering.
 
+    let v4_ext = ExternalIpCfg {
+        snat: Some(SNat4Cfg {
+            external_ip: "10.77.77.13".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
+        floating_ips: vec![
+            "192.168.0.2".parse().unwrap(),
+            "192.168.0.3".parse().unwrap(),
+            "192.168.0.4".parse().unwrap(),
+        ],
+    };
+    let v6_ext = ExternalIpCfg {
+        snat: Some(SNat6Cfg {
+            external_ip: "2001:db8::1".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: None,
+        floating_ips: vec![],
+    };
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat4Cfg {
-                    external_ip: "10.77.77.13".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
-                floating_ips: vec![
-                    "192.168.0.2".parse().unwrap(),
-                    "192.168.0.3".parse().unwrap(),
-                    "192.168.0.4".parse().unwrap(),
-                ],
-            },
+            external_ips: v4_ext,
             attached_subnets: BTreeMap::new(),
             transit_ips: BTreeMap::new(),
         },
@@ -4739,14 +4863,7 @@ fn select_eip_conditioned_on_igw() {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat6Cfg {
-                    external_ip: "2001:db8::1".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: None,
-                floating_ips: vec![],
-            },
+            external_ips: v6_ext.clone(),
             attached_subnets: BTreeMap::new(),
             transit_ips: BTreeMap::new(),
         },
@@ -4827,7 +4944,7 @@ fn select_eip_conditioned_on_igw() {
     let req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
         external_ips_v4: new_v4_cfg,
-        external_ips_v6: None,
+        external_ips_v6: Some(v6_ext),
 
         // Setting the inet GW mappings for each external IP
         // enables the limiting we aim to test here.

@@ -332,7 +332,7 @@ type McastForwardingTable = BTreeMap<
 >;
 
 // Entry limits for the various flow tables.
-const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(8096).unwrap();
+const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(524288).unwrap();
 const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// The name of this driver.
@@ -436,6 +436,9 @@ unsafe extern "C" {
     // Multicast dataplane problem probes
     pub safe fn __dtrace_probe_mcast__tx__pullup__fail(len: uintptr_t);
     pub safe fn __dtrace_probe_mcast__rx__pullup__fail(len: uintptr_t);
+    /// Fires when a multicast packet has no inner L3 header available for
+    /// source-filter evaluation, so the packet is dropped at TX.
+    pub safe fn __dtrace_probe_mcast__tx__no__inner__ip(mblk: uintptr_t);
     pub safe fn __dtrace_probe_mcast__no__fwd__entry(
         underlay: *const oxide_vpc::api::Ipv6Addr,
         vni: uintptr_t,
@@ -617,6 +620,7 @@ pub struct XdeDev {
     linkid: datalink_id_t,
     mh: *mut mac::mac_handle,
     link_state: mac::link_state_t,
+    mtu: u32,
 
     // The OPTE port associated with this xde device.
     //
@@ -626,10 +630,6 @@ pub struct XdeDev {
     pub port: Arc<Port<VpcNetwork>>,
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
-
-    // Pass the packets through to the underlay devices, skipping
-    // opte-core processing.
-    passthrough: bool,
 
     pub vni: Vni,
 
@@ -1154,7 +1154,8 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             .clone()
     };
 
-    let cfg = VpcCfg::from(req.cfg.clone());
+    let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
+    let cfg = VpcCfg::with_mtu(req.cfg.clone(), mtu);
 
     // Because we hold the token, no one else will add to/remove from
     // the XdeDev map in parallel. Quickly check that there is no
@@ -1202,6 +1203,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         linkid: req.linkid,
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
+        mtu,
         port: new_port(
             req.xde_devname.clone(),
             &cfg,
@@ -1214,7 +1216,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         port_v2p,
         vni: cfg.vni,
         port_igw_map: KMutex::new(None),
-        passthrough: req.passthrough,
         u1,
         u2,
         underlay_capab,
@@ -1242,7 +1243,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     mreg.m_priv_props = core::ptr::null_mut();
     mreg.m_instance = c_uint::MAX; // let mac handle this
     mreg.m_min_sdu = 1;
-    mreg.m_max_sdu = u32::from(ETHERNET_MTU); // TODO hardcode
+    mreg.m_max_sdu = mtu;
     mreg.m_multicast_sdu = 0;
     mreg.m_margin = crate::sys::VLAN_TAGSZ;
     mreg.m_v12n = mac::MAC_VIRT_NONE as u32;
@@ -2356,6 +2357,7 @@ fn handle_mcast_tx<'a>(
 
     // Local same-sled delivery: always deliver to subscribers on this sled,
     // independent of the Tx-only Replication instruction (not an access control mechanism).
+    //
     // The Replication type only affects how switches handle the packet on Tx.
     // Subscription is keyed by underlay (outer) IPv6 multicast address.
     let underlay_addr =
@@ -2363,7 +2365,9 @@ fn handle_mcast_tx<'a>(
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
 
     if let Some(subscribers) = devs.mcast_subscribers(&group_key) {
-        let my_key = VniMac::new(ctx.vni, src_dev.port.mac_addr());
+        // Use the port's VPC VNI, not the multicast VNI from the
+        // Geneve header (ctx.vni), to match how DevMap keys on ports.
+        let my_key = VniMac::new(src_dev.vni, src_dev.port.mac_addr());
         for (key, filter) in subscribers {
             // Skip delivering to self
             if my_key == *key {
@@ -2727,15 +2731,15 @@ unsafe extern "C" fn xde_mc_tx(
     let src_dev = unsafe { &*(arg as *mut XdeDev) };
 
     // ================================================================
-    // IMPORTANT: PacketChain now takes ownership of mp_chain, and each
-    // Packet takes ownership of an mblk_t from mp_chain. When these
+    // IMPORTANT: MsgBlkChain now takes ownership of mp_chain, and each
+    // MsgBlk takes ownership of an mblk_t from mp_chain. When these
     // structs are dropped, so are any contained packets at those pointers.
     // Be careful with any calls involving mblk_t pointers (or their
     // uintptr_t numeric forms) after this point. They should only be calls
     // that read (i.e., SDT arguments), nothing that writes or frees. But
     // really you should think of mp_chain as &mut and avoid any reference
     // to it past this point. Ownership is taken back by calling
-    // Packet/PacketChain::unwrap_mblk().
+    // MsgBlk/MsgBlkChain::unwrap_mblk().
     //
     // XXX We may use Packet types with non-'static lifetimes in future.
     //     We *will* still need to remain careful here and `xde_rx` as
@@ -2862,19 +2866,6 @@ fn xde_mc_tx_one<'a>(
         }
     };
 
-    // Send straight to underlay in passthrough mode.
-    if src_dev.passthrough {
-        // TODO We need to deal with flow control. This could actually
-        // get weird, this is the first provider to use mac_tx(). Is
-        // there something we can learn from aggr here? I need to
-        // refresh my memory on all of this.
-        //
-        // TODO Is there way to set mac_tx to must use result?
-        drop(parsed_pkt);
-        postbox.post_underlay(UnderlayIndex::U1, TxHint::NoneOrMixed, pkt);
-        return;
-    }
-
     let port = &src_dev.port;
 
     // The port processing code will fire a probe that describes what
@@ -2975,6 +2966,7 @@ fn xde_mc_tx_one<'a>(
                         opte::engine::dbg!(
                             "mcast Tx: no inner L3 for source filtering"
                         );
+                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
                         return;
                     }
                 };
@@ -3282,12 +3274,12 @@ fn new_port(
         Err(_) => return Err(OpteError::BadName),
     };
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
-    firewall::setup(&mut pb, FW_FT_LIMIT)?;
-
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
+
+    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
+    firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
@@ -3518,13 +3510,6 @@ fn xde_rx_one(
         None
     };
 
-    // We are in passthrough mode, skip OPTE processing.
-    if dev.passthrough {
-        drop(parsed_pkt);
-        postbox.post(port_key, pkt);
-        return None;
-    }
-
     let port = &dev.port;
 
     let res = port.process(Direction::In, parsed_pkt);
@@ -3630,13 +3615,6 @@ fn xde_rx_one_direct(
     } else {
         None
     };
-
-    // We are in passthrough mode, skip OPTE processing.
-    if dev.passthrough {
-        drop(parsed_pkt);
-        postbox.post(port_key, pkt);
-        return;
-    }
 
     let port = &dev.port;
 

@@ -13,7 +13,6 @@ use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
 use oxide_vpc::api::ClearMcast2PhysReq;
 use oxide_vpc::api::ClearMcastForwardingReq;
-use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::DhcpCfg;
 use oxide_vpc::api::Direction;
 use oxide_vpc::api::ExternalIpCfg;
@@ -57,6 +56,10 @@ use std::time::Duration;
 use std::time::Instant;
 use zone::Zlogin;
 pub use ztest::*;
+
+/// VPC VNI for test ports, distinct from the multicast VNI so that
+/// port-keyed and multicast-keyed code paths are exercised separately.
+const TEST_VPC_VNI: u32 = 1000;
 
 /// Ensure a zone with the given name is not present.
 ///
@@ -308,12 +311,12 @@ impl OptePort {
             }),
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
-            vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
+            vni: Vni::new(TEST_VPC_VNI).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), None)?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -364,12 +367,12 @@ impl OptePort {
             },
             guest_mac: guest_mac.parse().unwrap(),
             gateway_mac: "a8:40:25:00:00:01".parse().unwrap(),
-            vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
+            vni: Vni::new(TEST_VPC_VNI).unwrap(),
             phys_ip: phys_ip.parse().unwrap(),
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), false)?;
+        adm.create_xde(name, cfg.clone(), None)?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -553,7 +556,7 @@ impl Xde {
             phys: PhysNet {
                 ether: ether.parse().unwrap(),
                 ip: ip.parse().unwrap(),
-                vni: Vni::new(DEFAULT_MULTICAST_VNI).unwrap(),
+                vni: Vni::new(TEST_VPC_VNI).unwrap(),
             },
         })?;
         Ok(())

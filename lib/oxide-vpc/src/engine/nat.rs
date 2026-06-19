@@ -519,36 +519,48 @@ fn setup_ipv6_nat(
     Ok(())
 }
 
+/// Replace all external IP-related rules in the NAT layer with a new set
+/// corresponding to `req.external_ips_v4` and  `req.external_ips_v6`.
+///
+/// Passing `None` (or `Some(ExternalIpCfg::default())`) will remove all IPs
+/// of the given family.
+///
+/// Passing `Some(_)` external IPs to a port which does not support that
+/// IP address family will return an error.
 pub fn set_external_ips(
     port: &Port<VpcNetwork>,
     req: SetExternalIpsReq,
 ) -> Result<(), OpteError> {
     let cfg = &port.network().cfg;
+
+    // Check for any cases where the control plane is trying to insert external
+    // IP state for network stack this port is not configured to support.
+    if (matches!(cfg.ip_cfg, IpCfg::Ipv4(_)) && req.external_ips_v6.is_some())
+        || (matches!(cfg.ip_cfg, IpCfg::Ipv6(_))
+            && req.external_ips_v4.is_some())
+    {
+        return Err(OpteError::InvalidIpCfg);
+    }
+
+    let v4_cfg = req.external_ips_v4.unwrap_or_default();
+    let v6_cfg = req.external_ips_v6.unwrap_or_default();
+
     // This procedure only holds one lock at a time: a `Dynamic`'s shared
     // space writelock, *or* the table lock via set_rules_soft.
     // The datapath will hold the table lock for processing, *and* the `Dynamic`'s
     // readlock when validating dirty match entries.
     // As such, the two should not deadlock.
-    match (&cfg.ip_cfg, req.external_ips_v4, req.external_ips_v6) {
-        (IpCfg::DualStack { ipv4, ipv6 }, Some(new_v4), Some(new_v6)) => {
-            ipv4.external_ips.store(new_v4);
-            ipv6.external_ips.store(new_v6);
+    match &cfg.ip_cfg {
+        IpCfg::DualStack { ipv4, ipv6 } => {
+            ipv4.external_ips.store(v4_cfg);
+            ipv6.external_ips.store(v6_cfg);
         }
-        (
-            IpCfg::Ipv4(ipv4) | IpCfg::DualStack { ipv4, .. },
-            Some(new_v4),
-            None,
-        ) => {
-            ipv4.external_ips.store(new_v4);
+        IpCfg::Ipv4(ipv4) => {
+            ipv4.external_ips.store(v4_cfg);
         }
-        (
-            IpCfg::Ipv6(ipv6) | IpCfg::DualStack { ipv6, .. },
-            None,
-            Some(new_v6),
-        ) => {
-            ipv6.external_ips.store(new_v6);
+        IpCfg::Ipv6(ipv6) => {
+            ipv6.external_ips.store(v6_cfg);
         }
-        _ => return Err(OpteError::InvalidIpCfg),
     }
 
     refresh_nat_rules(port, req.inet_gw_map.as_ref())

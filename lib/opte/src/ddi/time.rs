@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Moments, periodics, etc.
 use core::ops::Add;
@@ -27,7 +27,7 @@ pub const NANOS: u64 = 1_000_000_000;
 pub const NANOS_TO_MILLIS: u64 = 1_000_000;
 
 /// A moment in time.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Moment {
     #[cfg(all(not(feature = "std"), not(test)))]
     inner: ddi::hrtime_t,
