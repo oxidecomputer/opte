@@ -38,7 +38,7 @@ pub enum ParserKind {
 /// A family of related parse/process testcases to benchmark.
 pub trait BenchPacket {
     /// Label the output packet type in a human-friendly manner.
-    fn packet_label(&self) -> String;
+    fn packet_label(&self) -> &'static str;
 
     /// Return a list of discrete scenarios
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>>;
@@ -74,8 +74,8 @@ pub const ULP_FAST_PATH: UlpProcess = UlpProcess { fast_path: true };
 pub const ULP_SLOW_PATH: UlpProcess = UlpProcess { fast_path: false };
 
 impl BenchPacket for UlpProcess {
-    fn packet_label(&self) -> String {
-        if self.fast_path { "ULP-FastPath" } else { "ULP-SlowPath" }.into()
+    fn packet_label(&self) -> &'static str {
+        if self.fast_path { "ULP-FastPath" } else { "ULP-SlowPath" }
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -337,8 +337,8 @@ impl BenchPacketInstance for UlpProcessInstance {
 pub struct Dhcp4;
 
 impl BenchPacket for Dhcp4 {
-    fn packet_label(&self) -> String {
-        "Hairpin-DHCPv4".into()
+    fn packet_label(&self) -> &'static str {
+        "Hairpin-DHCPv4"
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -404,8 +404,8 @@ impl BenchPacketInstance for Dhcp4Instance {
 pub struct Dhcp6;
 
 impl BenchPacket for Dhcp6 {
-    fn packet_label(&self) -> String {
-        "Hairpin-DHCPv6".into()
+    fn packet_label(&self) -> &'static str {
+        "Hairpin-DHCPv6"
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -442,8 +442,8 @@ impl BenchPacketInstance for Dhcp6Instance {
 pub struct Icmp4;
 
 impl BenchPacket for Icmp4 {
-    fn packet_label(&self) -> String {
-        "Hairpin-ICMPv4".into()
+    fn packet_label(&self) -> &'static str {
+        "Hairpin-ICMPv4"
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
@@ -484,8 +484,8 @@ impl BenchPacketInstance for Icmp4 {
 pub struct Icmp6;
 
 impl BenchPacket for Icmp6 {
-    fn packet_label(&self) -> String {
-        "Hairpin-ICMPv6".into()
+    fn packet_label(&self) -> &'static str {
+        "Hairpin-ICMPv6"
     }
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
