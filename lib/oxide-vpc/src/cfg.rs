@@ -1,9 +1,18 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Copyright 2026 Oxide Computer Company
+
 //! Reconfigurable, internal configuration built from `oxide_vpc::api`.
 
 use crate::api;
+use crate::api::AttachedSubnetConfig;
 use crate::api::ExternalIpCfg;
 #[cfg(any(feature = "test-help", test))]
 use crate::api::PhysNet;
+use crate::api::TransitIpConfig;
+use alloc::collections::BTreeMap;
 use opte::api::*;
 use opte::dynamic::Dynamic;
 
@@ -25,6 +34,13 @@ pub struct Ipv4Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: Dynamic<ExternalIpCfg<Ipv4Addr>>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: Dynamic<BTreeMap<Ipv4Cidr, AttachedSubnetConfig>>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: Dynamic<BTreeMap<Ipv4Cidr, TransitIpConfig>>,
 }
 
 /// The IPv6 configuration of a VPC guest.
@@ -50,6 +66,13 @@ pub struct Ipv6Cfg {
 
     /// External IP assignments used for rack-external communication.
     pub external_ips: Dynamic<ExternalIpCfg<Ipv6Addr>>,
+
+    /// Subnets owned by this NIC.
+    pub attached_subnets: Dynamic<BTreeMap<Ipv6Cidr, AttachedSubnetConfig>>,
+
+    /// Exceptions to source/destination address filtering without the guarantee
+    /// of ownership provided by `attached_subnets`.
+    pub transit_ips: Dynamic<BTreeMap<Ipv6Cidr, TransitIpConfig>>,
 }
 
 /// The IP configuration of a VPC guest.
@@ -84,9 +107,31 @@ pub struct VpcCfg {
     /// The host (sled) IPv6 address. All guests on the same sled are
     /// sourced to a single IPv6 address.
     pub phys_ip: Ipv6Addr,
+
+    /// Configuration for DHCP responses created by OPTE.
+    pub dhcp: DhcpCfg,
+
+    /// MTU value that this port has been configured with.
+    ///
+    /// This value must be explicitly filled by the driver to honour a request from
+    /// the control plane or according to the limits on the underlay devices
+    /// themselves.
+    pub mtu: u32,
 }
 
 impl VpcCfg {
+    pub fn with_mtu(value: api::VpcCfg, mtu: u32) -> Self {
+        Self {
+            ip_cfg: value.ip_cfg.into(),
+            guest_mac: value.guest_mac,
+            gateway_mac: value.gateway_mac,
+            vni: value.vni,
+            phys_ip: value.phys_ip,
+            dhcp: value.dhcp,
+            mtu,
+        }
+    }
+
     /// Return the IPv4 configuration, if it exists, or None.
     pub fn ipv4_cfg(&self) -> Option<&Ipv4Cfg> {
         match self.ip_cfg {
@@ -161,30 +206,14 @@ impl VpcCfg {
     // addresses.
     pub fn required_nat_space(&self) -> u32 {
         let n_ipv4_ports = match &self.ip_cfg {
-            IpCfg::Ipv4(_) | IpCfg::DualStack { ipv4: _, .. } => {
-                u32::from(u16::MAX)
-            }
+            IpCfg::Ipv4(_) | IpCfg::DualStack { .. } => u32::from(u16::MAX),
             _ => 0,
         };
         let n_ipv6_ports = match &self.ip_cfg {
-            IpCfg::Ipv6(_) | IpCfg::DualStack { ipv6: _, .. } => {
-                u32::from(u16::MAX)
-            }
+            IpCfg::Ipv6(_) | IpCfg::DualStack { .. } => u32::from(u16::MAX),
             _ => 0,
         };
         n_ipv4_ports + n_ipv6_ports
-    }
-}
-
-impl From<api::VpcCfg> for VpcCfg {
-    fn from(value: api::VpcCfg) -> Self {
-        Self {
-            ip_cfg: value.ip_cfg.into(),
-            guest_mac: value.guest_mac,
-            gateway_mac: value.gateway_mac,
-            vni: value.vni,
-            phys_ip: value.phys_ip,
-        }
     }
 }
 
@@ -207,6 +236,8 @@ impl From<api::Ipv4Cfg> for Ipv4Cfg {
             private_ip: value.private_ip,
             gateway_ip: value.gateway_ip,
             external_ips: value.external_ips.into(),
+            attached_subnets: value.attached_subnets.into(),
+            transit_ips: value.transit_ips.into(),
         }
     }
 }
@@ -218,6 +249,8 @@ impl From<api::Ipv6Cfg> for Ipv6Cfg {
             private_ip: value.private_ip,
             gateway_ip: value.gateway_ip,
             external_ips: value.external_ips.into(),
+            attached_subnets: value.attached_subnets.into(),
+            transit_ips: value.transit_ips.into(),
         }
     }
 }
@@ -227,12 +260,14 @@ mod tests {
     use super::*;
     use api::tests::test_vpc_cfg;
 
+    const ETHERNET_MTU: u32 = 1500;
+
     #[test]
     fn test_required_nat_space() {
         let cfg = test_vpc_cfg();
         // Each IPv4/v6 has the full port range.
         assert_eq!(
-            VpcCfg::from(cfg).required_nat_space(),
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
             u32::from(u16::MAX) * 2
         );
     }
@@ -242,7 +277,10 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let api::IpCfg::DualStack { ipv6, .. } = cfg.ip_cfg else { panic!() };
         cfg.ip_cfg = api::IpCfg::Ipv6(ipv6);
-        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
+        assert_eq!(
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
+            u32::from(u16::MAX)
+        );
     }
 
     #[test]
@@ -250,6 +288,9 @@ mod tests {
         let mut cfg = test_vpc_cfg();
         let api::IpCfg::DualStack { ipv4, .. } = cfg.ip_cfg else { panic!() };
         cfg.ip_cfg = api::IpCfg::Ipv4(ipv4);
-        assert_eq!(VpcCfg::from(cfg).required_nat_space(), u32::from(u16::MAX));
+        assert_eq!(
+            VpcCfg::with_mtu(cfg, ETHERNET_MTU).required_nat_space(),
+            u32::from(u16::MAX)
+        );
     }
 }

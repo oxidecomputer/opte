@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 opte-ioctl.workspace = true
+opte-test-utils.workspace = true
 oxide-vpc.workspace = true
 
 anyhow.workspace = true

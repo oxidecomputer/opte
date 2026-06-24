@@ -2,7 +2,7 @@
 #:
 #: name = "opte-xde"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = true
 #: output_rules = [
 #:   "=/work/debug/xde.dbg",
@@ -14,6 +14,10 @@
 #:   "=/work/release/xde_link.so",
 #:   "=/work/release/xde_link.so.sha256",
 #:   "=/work/test/loopback",
+#:   "=/work/test/multicast_rx",
+#:   "=/work/test/multicast_multi_sub",
+#:   "=/work/test/multicast_validation",
+#:   "=/work/test/multicast_source_filter",
 #:   "=/work/xde.conf",
 #: ]
 #:
@@ -110,11 +114,35 @@ sha256sum $REL_TGT/xde_link.so > $REL_TGT/xde_link.so.sha256
 header "build xde integration tests"
 pushd xde-tests
 cargo +$NIGHTLY fmt -- --check
-cargo clippy --all-targets
+cargo clippy --all-targets -- --deny warnings
 cargo build --test loopback
 loopback_test=$(
     cargo build -q --test loopback --message-format=json |\
     jq -r "select(.profile.test == true) | .filenames[]"
 )
+cargo build --test multicast_rx
+multicast_rx_test=$(
+    cargo build -q --test multicast_rx --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+cargo build --test multicast_multi_sub
+multicast_multi_sub_test=$(
+    cargo build -q --test multicast_multi_sub --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+cargo build --test multicast_validation
+multicast_validation_test=$(
+    cargo build -q --test multicast_validation --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+cargo build --test multicast_source_filter
+multicast_source_filter_test=$(
+    cargo build -q --test multicast_source_filter --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
 mkdir -p /work/test
 cp $loopback_test /work/test/loopback
+cp $multicast_rx_test /work/test/multicast_rx
+cp $multicast_multi_sub_test /work/test/multicast_multi_sub
+cp $multicast_validation_test /work/test/multicast_validation
+cp $multicast_source_filter_test /work/test/multicast_source_filter

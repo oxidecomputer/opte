@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types for creating, reading, and writing network packets.
 
@@ -13,8 +13,10 @@ use super::checksum::Checksum;
 use super::ether::Ethernet;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
+use super::geneve::ArbitraryGeneveOption;
+use super::geneve::GeneveMetaRef;
+use super::geneve::ValidGeneveMeta;
 use super::headers::EncapMeta;
-use super::headers::EncapPush;
 use super::headers::IpPush;
 use super::headers::SizeHoldingEncap;
 use super::headers::ValidEncapMeta;
@@ -45,8 +47,8 @@ use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
+use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::geneve::GeneveMeta;
-use crate::engine::geneve::valid_geneve_has_oxide_external;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -60,8 +62,12 @@ use core::result;
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering;
 use dyn_clone::DynClone;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
+use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
@@ -83,6 +89,7 @@ use ingot::types::PacketParseError;
 use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
+use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
@@ -232,7 +239,7 @@ impl DError for MismatchError {
             *v = self.expected;
         }
         if let Some(v) = data.get_mut(1) {
-            *v = self.expected;
+            *v = self.actual;
         }
     }
 }
@@ -294,17 +301,17 @@ pub struct OpteMeta<T: ByteSlice> {
 }
 
 impl<T: ByteSlice> OpteMeta<T> {
-    /// Returns whether this packet is sourced from outside the rack,
-    /// in addition to its VNI.
-    pub fn outer_encap_geneve_vni_and_origin(&self) -> Option<(Vni, bool)> {
-        match &self.outer_encap {
+    pub fn outer_geneve(
+        &self,
+    ) -> Option<InlineHeader<&GeneveMeta, &ValidGeneveMeta<T>>> {
+        match self.outer_encap.as_ref() {
             Some(InlineHeader::Repr(EncapMeta::Geneve(g))) => {
-                Some((g.vni, g.oxide_external_pkt))
+                Some(InlineHeader::Repr(g))
             }
-            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(_, g))) => {
-                Some((g.vni(), valid_geneve_has_oxide_external(g)))
+            Some(InlineHeader::Raw(ValidEncapMeta::Geneve(g))) => {
+                Some(InlineHeader::Raw(g))
             }
-            None => None,
+            _ => None,
         }
     }
 
@@ -609,7 +616,7 @@ impl<T: Read + Pullup> Drop for PktBodyWalker<T> {
 pub struct PacketDataView<'a, T: Read + Pullup> {
     pub headers: &'a OpteMeta<T::Chunk>,
     pub initial_lens: &'a InitialLayerLens,
-    body: &'a PktBodyWalker<T>,
+    body: &'a mut PktBodyWalker<T>,
     stats: &'a mut FlowStatBuilder,
 }
 
@@ -718,7 +725,7 @@ impl<T: Read + Pullup> PacketData<T> {
         PacketDataView {
             headers: &self.headers,
             initial_lens: &self.initial_lens,
-            body: &self.body,
+            body: &mut self.body,
             stats: &mut self.stats,
         }
     }
@@ -840,6 +847,7 @@ where
                 body_modified: false,
                 len,
                 inner_csum_dirty: false,
+                lfts: vec![],
             },
         }
     }
@@ -1017,14 +1025,40 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                     || encap.packet_length() != init_lens.outer_encap =>
             {
                 push_spec.outer_encap = Some(match encap {
-                    InlineHeader::Repr(o) => *o,
-                    InlineHeader::Raw(ValidEncapMeta::Geneve(u, g)) => {
+                    InlineHeader::Repr(o) => o.clone(),
+                    InlineHeader::Raw(ValidEncapMeta::Geneve(g)) => {
+                        // We can probably devise a better way to pass through
+                        // Geneve options in the Raw case (i.e., we start and
+                        // end packet processing with a valid encap), but this
+                        // is not expected to be used in the product today.
+                        let opts: Vec<_> = match g.1.options_ref() {
+                            ingot::types::FieldRef::Repr(v) => v
+                                .iter()
+                                .map(|v| ArbitraryGeneveOption {
+                                    option_class: v.class,
+                                    option_type: v.option_type.0,
+                                    data: v.data.clone().into(),
+                                })
+                                .collect(),
+                            ingot::types::FieldRef::Raw(v) => v
+                                .iter(None)
+                                .map(|v| {
+                                    v.map(|opt| ArbitraryGeneveOption {
+                                        option_class: opt.class(),
+                                        option_type: opt.option_type().0,
+                                        data: opt
+                                            .data_ref()
+                                            .as_ref()
+                                            .to_vec()
+                                            .into(),
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        };
                         EncapMeta::Geneve(GeneveMeta {
-                            entropy: u.source(),
+                            entropy: g.entropy(),
                             vni: g.vni(),
-                            oxide_external_pkt: valid_geneve_has_oxide_external(
-                                g,
-                            ),
+                            options: opts.into(),
                         })
                     }
                 });
@@ -1063,7 +1097,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
                         v4.total_len = (v4.ihl as u16) * 4 + inner_sz;
                     }
                     Some(L3Repr::Ipv6(v6)) => {
-                        v6.payload_len = inner_sz;
+                        v6.payload_len = inner_sz.saturating_add(
+                            u16::try_from(v6.v6ext.packet_length())
+                                .unwrap_or(u16::MAX),
+                        );
                     }
                     _ => {}
                 }
@@ -1300,7 +1337,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         }
     }
 
-    pub fn body_csum(&mut self) -> Option<Checksum> {
+    pub fn body_csum(&self) -> Option<Checksum> {
         self.state.body_csum
     }
 
@@ -1326,32 +1363,48 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         T::Chunk: ByteSliceMut,
         T: Pullup,
     {
-        // If we know that no transform touched a field which features in
-        // an inner transport cksum (L4/L3 src/dst, most realistically),
-        // and no body transform occurred then we can exit early.
-        if !self.checksums_dirty() && !self.state.body_modified {
-            return;
-        }
-
-        // Flag to indicate if an IP header/ULP checksums were
-        // provided. If the checksum is zero, it's assumed heardware
-        // checksum offload is being used, and OPTE should not update
-        // the checksum.
-        let update_ip = self.state.meta.headers.has_ip_csum();
-        let update_ulp = self.state.meta.headers.has_ulp_csum();
-
-        // We expect that any body transform will necessarily invalidate
-        // the body_csum. Recompute from scratch.
-        if self.state.body_modified && (update_ip || update_ulp) {
+        // We expect that any body transform will necessarily invalidate the
+        // body_csum (and that of all headers). Recompute from scratch.
+        if self.state.body_modified {
             return self.compute_checksums();
         }
 
-        // Start by reusing the known checksum of the body.
-        let mut body_csum = self.body_csum().unwrap_or_default();
+        // If we know that no transform touched a field which features in an
+        // inner transport cksum (L4/L3 src/dst, most realistically) then we
+        // can exit early.
+        if !self.checksums_dirty() {
+            return;
+        }
 
-        // If a ULP exists, then compute and set its checksum.
-        if let (true, Some(ulp)) =
-            (update_ulp, &mut self.state.meta.headers.inner_ulp)
+        // In future we will want to factor in the offload information
+        // contained in the mblk_t. I would say that this gives us a perfect
+        // view on which checksums (other than UDP) have been omitted, but:
+        //
+        // * IP is in the unfortunate position where the `HCK_IPV4_HDRCKSUM`
+        //   (requesting offload) and `HCK_IPV4_HDRCKSUM_OK` (the NIC verified
+        //   the checksum) flags map to the same value, 0x01. We can't
+        //   differentiate them.
+        // * Interpretation of `HCK_FULLCKSUM` is direction-sensitive. When
+        //   going *to* the NIC, this means the checksum is omitted (and we can
+        //   avoid doing anything here). When coming *from* the NIC, this means
+        //   there is a checksum in place, and the recipient should verify it
+        //   (and we should update it!). These are *not the same* as
+        //   `Direction::Out/In` -- the port loopback path means that we can be
+        //   `Direction::In` without ever having touched the NIC.
+        //
+        // In any case, because we advertise full checksum offloads it doesn't
+        // matter if we have modified a zero-checksum-meaning-omitted -- the
+        // recipient (NIC, or `mac_hw_emul` before we handoff in local
+        // loopback) will disregard these contents.
+        //
+        // It's important to note that XDE/OPTE does not advertise support
+        // for partial checksums. In this case, we would need to check for the
+        // relevant flags and determine whether to invert the checksum as we
+        // start and end processing.
+
+        // If a ULP exists and provided a checksum, then update it.
+        if let Some(mut body_csum) = self.body_csum()
+            && let Some(ulp) = self.state.meta.headers.inner_ulp.as_mut()
         {
             let mut csum = body_csum;
             // Unwrap: Can't have a ULP without an IP.
@@ -1418,11 +1471,17 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         }
 
         // Compute and fill in the IPv4 header checksum.
-        if let (true, Some(l3)) =
-            (update_ip, &mut self.state.meta.headers.inner_l3)
-        {
+        if let Some(l3) = &mut self.state.meta.headers.inner_l3 {
             l3.compute_checksum();
         }
+    }
+
+    pub fn record_lft(&mut self, lft: Arc<dyn FlowEntryInfo>) {
+        self.state.lfts.push(lft);
+    }
+
+    pub fn take_lfts(&mut self) -> Vec<Arc<dyn FlowEntryInfo>> {
+        self.state.lfts.drain(..).collect()
     }
 }
 
@@ -1472,6 +1531,9 @@ pub struct FullParsed<T: Read + Pullup> {
     /// Tracks whether any transform has been applied to this packet
     /// which would dirty the inner L3 and/or ULP header checksums.
     inner_csum_dirty: bool,
+    /// The set of all LFTs created or used by this packet as it
+    /// traverses the slow path.
+    lfts: Vec<Arc<dyn FlowEntryInfo>>,
 }
 
 /// Minimum-size zerocopy view onto a parsed packet, sufficient for fast
@@ -1726,7 +1788,7 @@ impl EmitSpec {
     pub fn outer_encap_vni(&self) -> Option<Vni> {
         match &self.prepend {
             PushSpec::Fastpath(c) => match &c.encap {
-                CompiledEncap::Push { encap: EncapPush::Geneve(g), .. } => {
+                CompiledEncap::Push { encap: EncapMeta::Geneve(g), .. } => {
                     Some(g.vni)
                 }
                 _ => None,
@@ -1753,6 +1815,88 @@ impl EmitSpec {
                 Some(L3Repr::Ipv6(v6)) => Some((v6.source, v6.destination)),
                 _ => None,
             },
+            PushSpec::NoOp => None,
+        }
+    }
+
+    /// Returns the offload info in the illumos MEOI format for the encap layers
+    /// pushed onto the packet, without the `meoi_len` field set.
+    ///
+    /// MEOI (MAC ethernet offload information) contains the type and length of
+    /// every layer within a packet (including tunnel layers within L4). This is
+    /// used to allow NICs to perform checksum and TSO offloads by relying on
+    /// the host to signal where each header lies, without doing any reparsing in
+    /// the ASIC.
+    #[inline]
+    pub fn encap_meoi(&self) -> Option<mac_ether_offload_info_t> {
+        match &self.prepend {
+            PushSpec::Fastpath(c) => match &c.encap {
+                CompiledEncap::Push { meoi, .. } => Some(meoi.as_meoi()),
+                _ => None,
+            },
+            PushSpec::Slowpath(s) => {
+                match (&s.outer_eth, &s.outer_ip, &s.outer_encap) {
+                    (None, None, None) => None,
+                    (eth, ip, encap) => {
+                        let mut out = mac_ether_offload_info_t::default();
+
+                        if let Some(eth) = eth {
+                            out.meoi_flags |= MacEtherOffloadFlags::L2INFO_SET;
+                            let l2hlen = u8::try_from(eth.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l2hlen.expect("14B < u8::MAX");
+                            }
+                            out.meoi_l2hlen = l2hlen.ok()?;
+                            out.meoi_l3proto = eth.ethertype.0;
+                        }
+
+                        if let Some(ip) = ip {
+                            out.meoi_flags |= MacEtherOffloadFlags::L3INFO_SET;
+                            let l3hlen = u16::try_from(ip.packet_length());
+                            #[cfg(debug_assertions)]
+                            {
+                                l3hlen.expect(
+                                    "IPv4 is bounded, IPv6 validates to <= 65535",
+                                );
+                            }
+                            out.meoi_l3hlen = l3hlen.ok()?;
+                            out.meoi_l4proto = ip
+                                .next_layer()
+                                .expect(
+                                    "next_layer is not fallible for IP types",
+                                )
+                                .0;
+                        }
+
+                        if let Some(encap) = encap {
+                            out.meoi_flags |= MacEtherOffloadFlags::L4INFO_SET
+                                | MacEtherOffloadFlags::TUNINFO_SET;
+                            match encap {
+                                EncapMeta::Geneve(geneve_meta) => {
+                                    out.meoi_l4hlen =
+                                        u8::try_from(Udp::MINIMUM_LENGTH)
+                                            .expect("UDP = 8B");
+
+                                    out.meoi_tuntype = MacTunType::GENEVE;
+                                    let tunhlen = u16::try_from(
+                                        geneve_meta.hdr_len_inner(),
+                                    );
+                                    #[cfg(debug_assertions)]
+                                    {
+                                        tunhlen.expect(
+                                            "Geneve is bounded to 260B",
+                                        );
+                                    }
+                                    out.meoi_tunhlen = tunhlen.ok()?;
+                                }
+                            }
+                        }
+
+                        Some(out)
+                    }
+                }
+            }
             PushSpec::NoOp => None,
         }
     }

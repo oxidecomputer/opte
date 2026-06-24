@@ -61,7 +61,7 @@ cfg_if! {
 /// ```
 ///
 /// To register a provider see [`KStatNamed`].
-pub trait KStatProvider {
+pub trait KStatProvider: Send + Sync {
     const NUM_FIELDS: u32;
     type Snap;
 
@@ -306,3 +306,19 @@ impl From<alloc::ffi::NulError> for Error {
         Self::NulChar
     }
 }
+
+// SAFETY: KStatNamed<T> is safe for Send + Sync because:
+//
+// 1. The underlying T must itself be Send + Sync because it is fully visible to any
+//    user of the struct. We meet this through the new type bound on KStatProvider.
+//
+// 2. ksp is itself safe to move between threads, since KSTAT(9S) imposes no MT
+//    constraints on callers.
+//
+// 3. ksp is never exposed via a &ref (nor is it used by any
+//    methods taking &self), and is only used during drop.
+//
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: KStatProvider> Send for KStatNamed<T> {}
+#[cfg(all(not(feature = "std"), not(test)))]
+unsafe impl<T: KStatProvider> Sync for KStatNamed<T> {}

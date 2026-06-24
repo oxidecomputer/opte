@@ -7,6 +7,8 @@
 //! IPv4 headers.
 
 use crate::engine::checksum::Checksum;
+use crate::engine::headers::Validate;
+use crate::engine::headers::ValidateErr;
 use crate::engine::packet::MismatchError;
 use crate::engine::packet::ParseError;
 use crate::engine::predicate::MatchExact;
@@ -17,7 +19,7 @@ use crate::engine::predicate::MatchRangeVal;
 use ingot::Ingot;
 use ingot::ip::Ecn;
 use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4Flags;
+use ingot::ip::Ipv4Flags as IngotIpv4Flags;
 use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
@@ -47,7 +49,7 @@ pub struct Ipv4 {
 
     pub identification: u16be,
     #[ingot(is = "u3")]
-    pub flags: Ipv4Flags,
+    pub flags: IngotIpv4Flags,
     pub fragment_offset: u13be,
 
     #[ingot(default = 128)]
@@ -178,6 +180,22 @@ impl MatchExact<Protocol> for Protocol {
     }
 }
 
+bitflags::bitflags! {
+    /// Serialisable form of [`IngotIpv4Flags`].
+#[derive(Clone, Copy, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
+pub struct Ipv4Flags: u3 {
+    const RESERVED       = 0b100;
+    const DONT_FRAGMENT  = 0b010;
+    const MORE_FRAGMENTS = 0b001;
+}
+}
+
+impl From<Ipv4Flags> for IngotIpv4Flags {
+    fn from(value: Ipv4Flags) -> Self {
+        IngotIpv4Flags::from_bits_truncate(value.bits())
+    }
+}
+
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -185,6 +203,14 @@ pub struct Ipv4Push {
     pub src: Ipv4Addr,
     pub dst: Ipv4Addr,
     pub proto: Protocol,
+    pub flags: Ipv4Flags,
+}
+
+impl Validate for Ipv4Push {
+    fn validate(&self) -> Result<(), ValidateErr> {
+        // We do not yet define/support pushing any IPv4 options.
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -232,7 +258,7 @@ mod test {
             source: Ipv4Addr::from([10, 0, 0, 54]),
             destination: Ipv4Addr::from([52, 10, 128, 69]),
             protocol: IpProtocol::TCP,
-            flags: Ipv4Flags::DONT_FRAGMENT,
+            flags: IngotIpv4Flags::DONT_FRAGMENT,
             hop_limit: 64,
             identification: 2662,
             ihl: 5,

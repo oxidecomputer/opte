@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The Oxide Network VPC Router.
 //!
@@ -16,6 +16,7 @@ use crate::api::RouterClass;
 use crate::api::RouterTarget;
 use crate::api::stat::*;
 use crate::cfg::VpcCfg;
+use alloc::borrow::Cow;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -69,17 +70,6 @@ pub enum RouterTargetInternal {
 }
 
 impl RouterTargetInternal {
-    pub const IP_KEY: &'static str = "router-target-ip";
-    pub const GENERIC_META: &'static str = "ig";
-
-    pub fn generic_meta(&self) -> String {
-        Self::GENERIC_META.to_string()
-    }
-
-    pub fn ip_key(&self) -> String {
-        Self::IP_KEY.to_string()
-    }
-
     pub fn class(&self) -> RouterTargetClass {
         match self {
             RouterTargetInternal::InternetGateway(_) => {
@@ -128,16 +118,20 @@ impl ActionMetaValue for RouterTargetInternal {
         }
     }
 
-    fn as_meta(&self) -> String {
+    fn as_meta(&self) -> Cow<'static, str> {
         match self {
             Self::InternetGateway(ip) => match ip {
-                Some(ip) => format!("ig={ip}"),
-                None => String::from("ig"),
+                Some(ip) => format!("ig={ip}").into(),
+                None => "ig".into(),
             },
-            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={ip4}"),
-            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={ip6}"),
-            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => format!("sub4={cidr4}"),
-            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => format!("sub6={cidr6}"),
+            Self::Ip(IpAddr::Ip4(ip4)) => format!("ip4={ip4}").into(),
+            Self::Ip(IpAddr::Ip6(ip6)) => format!("ip6={ip6}").into(),
+            Self::VpcSubnet(IpCidr::Ip4(cidr4)) => {
+                format!("sub4={cidr4}").into()
+            }
+            Self::VpcSubnet(IpCidr::Ip6(cidr6)) => {
+                format!("sub6={cidr6}").into()
+            }
         }
     }
 }
@@ -172,7 +166,7 @@ impl ActionMetaValue for RouterTargetClass {
         }
     }
 
-    fn as_meta(&self) -> String {
+    fn as_meta(&self) -> Cow<'static, str> {
         match self {
             Self::InternetGateway => "ig".into(),
             Self::Ip => "ip".into(),
@@ -265,7 +259,19 @@ pub fn setup(
         ..Default::default()
     };
 
-    let layer = Layer::new(ROUTER_LAYER_NAME, pb, actions, ft_limit);
+    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb, actions, ft_limit);
+
+    // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
+    // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
+    // The overlay addresses use any valid multicast prefix; underlay restriction
+    // to ff04::/16 is enforced by M2P mapping validation.
+    let mut mcast_out = Rule::new(0, Action::Allow);
+    mcast_out.add_predicate(Predicate::Any(vec![
+        Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)]),
+        Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)]),
+    ]));
+    layer.add_rule(Direction::Out, mcast_out.finalize(), pb.stats_mut());
+
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
 
@@ -289,6 +295,23 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
 
 fn make_rule(route: Route) -> Result<Rule<Finalized>, OpteError> {
     let Route { dest, target, class, stat_id } = route;
+
+    // Reject router entries with multicast destination CIDRs.
+    // Multicast operates fleet-wide via M2P mappings and subscriptions,
+    // not through VPC routing. Router layer allows multicast through
+    // unconditionally without route lookup.
+    let is_mcast_dst = match dest {
+        IpCidr::Ip4(cidr) => cidr.ip().is_multicast(),
+        IpCidr::Ip6(cidr) => cidr.ip().is_multicast(),
+    };
+    if is_mcast_dst {
+        return Err(OpteError::InvalidRouterEntry {
+            dest,
+            target: "multicast destinations not allowed in router entries"
+                .to_string(),
+        });
+    }
+
     if !valid_router_dest_target_pair(&dest, &target) {
         return Err(OpteError::InvalidRouterEntry {
             dest,
@@ -448,13 +471,8 @@ impl MetaAction for RouterAction {
         _flow_id: &InnerFlowId,
         meta: &mut ActionMeta,
     ) -> ModMetaResult {
-        // TODO: I don't think we need IP_KEY.
-        if let RouterTargetInternal::InternetGateway(_) = self.target {
-            meta.insert(self.target.key(), self.target.as_meta());
-        }
-        meta.insert(self.target.ip_key(), self.target.as_meta());
-        let rt_class = self.target.class();
-        meta.insert(rt_class.key(), rt_class.as_meta());
+        meta.insert_typed(&self.target);
+        meta.insert_typed(&self.target.class());
         Ok(AllowOrDeny::Allow(()))
     }
 }

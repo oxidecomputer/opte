@@ -37,6 +37,13 @@ pub struct MacEtherOffloadFlags: u32 {
     /// The packet is fragmented at L3, and this packet is not the first
     /// fragment.
     const L3_FRAG_OFFSET = 1 << 6;
+
+    /// Layers L2-L4 are all set.
+    const FULL = Self::L2INFO_SET.bits()
+        | Self::L3INFO_SET.bits()
+        | Self::L4INFO_SET.bits();
+    /// Layers L2-L4 and tunnel info are all set.
+    const FULL_TUN = Self::FULL.bits() | Self::TUNINFO_SET.bits();
 }
 }
 

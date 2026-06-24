@@ -8,7 +8,7 @@ use super::*;
 use crate::dtrace::DTraceHisto;
 use clap::ValueEnum;
 use criterion::Criterion;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Distribution;
 use rand::distr::weighted::WeightedIndex;
 use rand::rng;

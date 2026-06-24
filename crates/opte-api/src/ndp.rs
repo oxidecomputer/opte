@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2022 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Types for working with the IPv6 Neighbor Discovery Protocol
 
@@ -30,6 +30,10 @@ pub struct RouterAdvertisement {
     /// Managed address configuration, indicating that the peer can use DHCPv6
     /// to acquire an IPv6 address.
     pub managed_cfg: bool,
+
+    /// Configures whether router advertisements should advertise a given MTU to
+    /// guests.
+    pub mtu: Option<u32>,
 }
 
 impl RouterAdvertisement {
@@ -46,9 +50,14 @@ impl RouterAdvertisement {
     ///
     /// `managed_cfg` is set to `true` to indicate that the host can get further
     /// configuration from a DHCPv6 server running on the network.
-    pub fn new(src_mac: MacAddr, mac: MacAddr, managed_cfg: bool) -> Self {
+    pub fn new(
+        src_mac: MacAddr,
+        mac: MacAddr,
+        managed_cfg: bool,
+        mtu: Option<u32>,
+    ) -> Self {
         let ip = Ipv6Addr::from_eui64(&mac);
-        Self { src_mac, mac, ip, managed_cfg }
+        Self { src_mac, mac, ip, managed_cfg, mtu }
     }
 
     /// Return the IPv6 address the router sends advertisements from.

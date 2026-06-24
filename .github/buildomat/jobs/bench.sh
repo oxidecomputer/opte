@@ -2,7 +2,7 @@
 #:
 #: name = "bench"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = true
 #: output_rules = [
 #:   "=/work/bench-results.tgz",
@@ -112,7 +112,7 @@ pfexec cp /input/xde/work/release/xde /kernel/drv/amd64
 pfexec add_drv xde
 
 banner "bench"
-cargo kbench local -b omicron1
+cargo kbench local
 cargo ubench
 
 cp -r target/criterion $OUT_DIR

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Rules and actions.
 
@@ -13,6 +13,7 @@ use super::ether::EthernetMut;
 use super::ether::EthernetPacket;
 use super::ether::ValidEthernet;
 use super::flow_table::StateSummary;
+use super::headers::EncapMeta;
 use super::headers::EncapMod;
 use super::headers::EncapPush;
 use super::headers::HeaderAction;
@@ -51,6 +52,9 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
 use illumos_sys_hdrs::c_char;
+use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
+use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Ref;
@@ -61,8 +65,10 @@ use ingot::icmp::IcmpV6Type;
 use ingot::ip::IpProtocol;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
+use ingot::types::HeaderLen;
 use ingot::types::InlineHeader;
 use ingot::types::Read;
+use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use opte_api::Direction;
 use opte_api::RuleDump;
@@ -168,9 +174,10 @@ where
 /// An Action Descriptor holds the information needed to create the
 /// [`HdrTransform`] which implements the desired action. An
 /// ActionDesc is created by a [`StatefulAction`] implementation.
-pub trait ActionDesc {
-    /// Generate the [`HdrTransform`] which implements this descriptor.
-    fn gen_ht(&self, dir: Direction) -> HdrTransform;
+pub trait ActionDesc: Send + Sync {
+    /// Generate the [`HdrTransform`] which implements this descriptor, and
+    /// apply any modifications to the [`ActionMeta`].
+    fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform;
 
     /// Generate a body transformation.
     ///
@@ -246,7 +253,7 @@ impl IdentityDesc {
 }
 
 impl ActionDesc for IdentityDesc {
-    fn gen_ht(&self, _dir: Direction) -> HdrTransform {
+    fn gen_ht(&self, _dir: Direction, _meta: &mut ActionMeta) -> HdrTransform {
         Default::default()
     }
 
@@ -463,17 +470,31 @@ impl CompiledTransform {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum CompiledEncap {
+    /// All outer layers of the packet should be removed.
     Pop,
     // TODO: can we cache these in an Arc'd buffer?
+    /// A full set of outer layers which should be pushed in front of the
+    /// packet after field modifications are applied.
     Push {
+        /// Outer Ethernet header.
         eth: EtherMeta,
+        /// Outer IP header, including extensions.
         ip: IpPush,
-        encap: EncapPush,
+        /// Outer encap layer(s).
+        encap: EncapMeta,
+        /// A cached serialised form of `(eth, ip, encap)`.
         bytes: Vec<u8>,
+        /// The offset of the payload/total length field in the IP header.
         l3_len_offset: usize,
+        /// Bytes consumed by the IP header and/or its extensions which must
+        /// be accounted for in the payload/total length.
         l3_extra_bytes: usize,
+        /// The offset of the total length field in the UDP header.
         l4_len_offset: usize,
+        /// The number of bytes consumed by encapsulation.
         encap_sz: usize,
+        /// Prebuilt offload information for illumos.
+        meoi: PresavedMeoi,
     },
 }
 
@@ -518,14 +539,14 @@ impl CompiledEncap {
             .try_into()
             .expect("exact no bytes");
 
-        *l3_len_slot = (l3_len as u16).to_be_bytes();
+        *l3_len_slot = u16::try_from(l3_len).unwrap_or(u16::MAX).to_be_bytes();
 
         let l4_len_slot: &mut [u8; core::mem::size_of::<u16>()] = (&mut target
             [*l4_len_offset..l4_len_offset + core::mem::size_of::<u16>()])
             .try_into()
             .expect("exact no bytes");
 
-        *l4_len_slot = (l4_len as u16).to_be_bytes();
+        *l4_len_slot = u16::try_from(l4_len).unwrap_or(u16::MAX).to_be_bytes();
 
         if let Some(mut prepend) = prepend {
             pkt.copy_offload_info_to(&mut prepend);
@@ -533,6 +554,38 @@ impl CompiledEncap {
             prepend
         } else {
             pkt
+        }
+    }
+}
+
+/// The compressed (serialisable) form of a [`mac_ether_offload_info_t`].
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+pub struct PresavedMeoi {
+    pub l2hlen: u8,
+    pub l3proto: u16,
+    pub l3hlen: u16,
+    pub l4proto: u8,
+    pub tunhlen: u16,
+}
+
+impl PresavedMeoi {
+    /// Returns a [`mac_ether_offload_info_t`] with all fields set
+    /// apart from `meoi_len`.
+    pub fn as_meoi(&self) -> mac_ether_offload_info_t {
+        mac_ether_offload_info_t {
+            meoi_flags: MacEtherOffloadFlags::L2INFO_SET
+                | MacEtherOffloadFlags::L3INFO_SET
+                | MacEtherOffloadFlags::L4INFO_SET
+                | MacEtherOffloadFlags::TUNINFO_SET,
+            meoi_l2hlen: self.l2hlen,
+            meoi_l3proto: self.l3proto,
+            meoi_l3hlen: self.l3hlen,
+            meoi_l4proto: self.l4proto,
+            meoi_l4hlen: u8::try_from(Udp::MINIMUM_LENGTH).expect("UDP = 8B"),
+            meoi_tuntype: MacTunType::GENEVE,
+            meoi_tunhlen: self.tunhlen,
+
+            meoi_len: 0,
         }
     }
 }
@@ -693,7 +746,7 @@ pub enum GenDescError {
 
 pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
-pub trait StatefulAction: Display {
+pub trait StatefulAction: Display + Send + Sync {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`ActionMeta`]. This action may also add, remove, or modify
     /// metadata to communicate data to downstream actions.
@@ -709,7 +762,7 @@ pub trait StatefulAction: Display {
         &self,
         flow_id: &InnerFlowId,
         pkt: MblkPacketDataView,
-        meta: &mut ActionMeta,
+        meta: &ActionMeta,
     ) -> GenDescResult;
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
@@ -723,7 +776,7 @@ pub enum GenHtError {
 
 pub type GenHtResult = ActionResult<HdrTransform, GenHtError>;
 
-pub trait StaticAction: Display {
+pub trait StaticAction: Display + Send + Sync {
     fn gen_ht(
         &self,
         dir: Direction,
@@ -746,7 +799,7 @@ pub type ModMetaResult = ActionResult<(), String>;
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
-pub trait MetaAction: Display {
+pub trait MetaAction: Display + Send + Sync {
     /// Return the predicates implicit to this action.
     ///
     /// Return both the header [`Predicate`] list and
@@ -794,7 +847,7 @@ impl From<smoltcp::wire::Error> for GenBtError {
 ///
 /// For example, you could use this to hairpin an ARP Reply in response
 /// to a guest's ARP request.
-pub trait HairpinAction: Display {
+pub trait HairpinAction: Display + Send + Sync {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, including any
     /// modifications made by previous layers up to this point.

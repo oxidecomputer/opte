@@ -11,11 +11,14 @@ use super::headers::HeaderActionError;
 use super::headers::HeaderActionModify;
 use super::headers::ModifyAction;
 use super::headers::PushAction;
+use super::headers::Valid;
+use super::headers::Validate;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use core::ops::Deref;
 use core::result;
 use core::str::FromStr;
 use ingot::Ingot;
@@ -119,8 +122,13 @@ impl EtherAddr {
     pub fn zero() -> Self {
         EtherAddr { bytes: [0u8; ETHER_ADDR_LEN] }
     }
-    pub fn as_ptr(&self) -> *const u8 {
-        &self.bytes as *const u8
+}
+
+impl Deref for EtherAddr {
+    type Target = [u8; 6];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
     }
 }
 
@@ -215,8 +223,14 @@ pub struct EtherMeta {
 }
 
 impl PushAction<EtherMeta> for EtherMeta {
-    fn push(&self) -> EtherMeta {
-        EtherMeta { dst: self.dst, src: self.src, ether_type: self.ether_type }
+    fn push(value: &Valid<Self>) -> EtherMeta {
+        **value
+    }
+}
+
+impl Validate for EtherMeta {
+    fn validate(&self) -> Result<(), super::headers::ValidateErr> {
+        Ok(())
     }
 }
 
@@ -332,23 +346,23 @@ impl<T: ByteSlice> PushAction<InlineHeader<Ethernet, ValidEthernet<T>>>
     for EtherMeta
 {
     #[inline]
-    fn push(&self) -> InlineHeader<Ethernet, ValidEthernet<T>> {
+    fn push(value: &Valid<Self>) -> InlineHeader<Ethernet, ValidEthernet<T>> {
         InlineHeader::Repr(Ethernet {
-            destination: self.dst,
-            source: self.src,
-            ethertype: Ethertype(u16::from(self.ether_type)),
+            destination: value.dst,
+            source: value.src,
+            ethertype: Ethertype(u16::from(value.ether_type)),
         })
     }
 }
 
 impl<T: ByteSlice> PushAction<EthernetPacket<T>> for EtherMeta {
     #[inline]
-    fn push(&self) -> EthernetPacket<T> {
+    fn push(value: &Valid<Self>) -> EthernetPacket<T> {
         Header::Repr(
             Ethernet {
-                destination: self.dst,
-                source: self.src,
-                ethertype: Ethertype(u16::from(self.ether_type)),
+                destination: value.dst,
+                source: value.src,
+                ethertype: Ethertype(u16::from(value.ether_type)),
             }
             .into(),
         )

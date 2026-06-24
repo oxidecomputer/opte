@@ -16,6 +16,7 @@ use core::cmp::Ordering;
 use core::marker::PhantomData;
 use core::mem::ManuallyDrop;
 use core::mem::MaybeUninit;
+use core::num::NonZeroUsize;
 use core::ops::Deref;
 use core::ops::DerefMut;
 use core::ptr;
@@ -83,7 +84,7 @@ struct MsgBlkChainInner {
 /// A chain of illumos MsgBlk/`mblk_t` buffers.
 ///
 /// Network packets are provided by illumos as a linked list of linked lists,
-/// using the `b_next` and `b_prev` fields.
+/// using the `b_next` and `b_cont` fields.
 ///
 /// See the documentation for [`crate::engine::packet::Packet`] and/or [`MsgBlk`]
 /// for full context.
@@ -138,11 +139,11 @@ impl MsgBlkChain {
                 let curr = curr_b.as_ptr();
                 let next = NonNull::new((*curr).b_next);
 
-                // Break the forward link on the packet we have access to,
-                // and the backward link on the next element if possible.
-                if let Some(next) = next {
-                    (*next.as_ptr()).b_prev = ptr::null_mut();
-                }
+                // `b_prev` on the next packet is nominally used to provide a
+                // doubly linked list of `mblk_t`s, but `mac` does not use it
+                // as such or expect that anyone will (to the point that its
+                // meaning is overloaded within some modules). Break *only* the
+                // forward link on the current packet.
                 (*curr).b_next = ptr::null_mut();
 
                 // Update the current head. If the next element is null,
@@ -173,8 +174,10 @@ impl MsgBlkChain {
         // We're guaranteeing today that a 'static Packet has
         // no neighbours and is not part of a chain.
         // This simplifies tail updates in both cases (no chain walk).
+        //
+        // See the commentary in `pop_front` on the role/non-use of
+        // `b_prev`.
         unsafe {
-            assert!((*pkt.as_ptr()).b_prev.is_null());
             assert!((*pkt.as_ptr()).b_next.is_null());
         }
 
@@ -183,7 +186,6 @@ impl MsgBlkChain {
             let tail_p = list.tail.as_ptr();
             unsafe {
                 (*tail_p).b_next = pkt_p;
-                (*pkt_p).b_prev = tail_p;
                 // pkt_p->b_next is already null.
             }
             list.tail = pkt;
@@ -298,6 +300,68 @@ impl MsgBlk {
         // Unwrap safety -- just allocated length of input buffer.
         out.write_bytes_back(buf).unwrap();
         out
+    }
+
+    /// Copy the first `n` bytes of this packet into a new `mblk_t`,
+    /// increasing the refcount of all remaining segments.
+    ///
+    /// On non-kernel platforms this will simple clone the underlying packet
+    /// with the desired segmentation.
+    pub fn pullup(
+        &self,
+        n: Option<NonZeroUsize>,
+    ) -> Result<Self, PktPullupError> {
+        let totlen = self.byte_len();
+
+        if let Some(n) = n
+            && n.get() > totlen
+        {
+            // The DDI function will bail out if this is the case, but
+            // we'll be none the wiser to *what* the failure mode was.
+            return Err(PktPullupError::TooLong);
+        }
+
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let out = unsafe {
+                    ddi::msgpullup(
+                        self.0.as_ptr(),
+                        n.map(|v| v.get() as isize).unwrap_or(-1),
+                    )
+                };
+
+                let mp = NonNull::new(out)
+                    .ok_or(PktPullupError::AllocFailed)?;
+
+                Ok(Self(mp))
+            } else {
+                // We aren't (currently?) simulating refcount tracking at all
+                // in our userland mblk abstraction.
+                // Do the segmentation right, but otherwise it's fully cloned.
+                let to_ensure = n.map(|v| v.get()).unwrap_or(totlen);
+                let mut top_mblk = MsgBlk::new(to_ensure);
+                let mut still_to_write = to_ensure;
+
+                for chunk in self.iter() {
+                    let mut left_in_chunk = chunk.len();
+                    let to_take = chunk.len().min(still_to_write);
+
+                    if still_to_write != 0 {
+                        top_mblk.write_bytes_back(&chunk[..to_take])
+                            .expect("to_take should be <= remaining capacity");
+                    }
+
+                    still_to_write -= to_take;
+                    left_in_chunk -= to_take;
+
+                    if left_in_chunk != 0 {
+                        top_mblk.append(MsgBlk::copy(&chunk[to_take..]));
+                    }
+                }
+
+                Ok(top_mblk)
+            }
+        }
     }
 
     /// Creates a new [`MsgBlk`] using a given set of packet headers.
@@ -704,7 +768,7 @@ impl MsgBlk {
         let inner_ref = inner.as_ptr();
 
         unsafe {
-            if (*inner_ref).b_next.is_null() && (*inner_ref).b_prev.is_null() {
+            if (*inner_ref).b_next.is_null() {
                 Ok(Self(inner))
             } else {
                 Err(WrapError::Chain)
@@ -1030,6 +1094,26 @@ impl core::fmt::Display for PktInfoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::PacketShared => "packet has a reference count > 1",
+        })
+    }
+}
+
+/// Reasons a [`MsgBlk`] could not be pulled up.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Hash)]
+pub enum PktPullupError {
+    /// Requested pullup was longer than the underlying packet.
+    TooLong,
+    /// The OS was unable to allocate a [`MsgBlk`].
+    AllocFailed,
+}
+
+impl core::error::Error for PktPullupError {}
+
+impl core::fmt::Display for PktPullupError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::TooLong => "requested pullup is longer than packet",
+            Self::AllocFailed => "failed to allocate an mblk_t",
         })
     }
 }
@@ -1482,7 +1566,6 @@ mod test {
         for (lhs, rhs) in els.iter().zip(els[1..].iter()) {
             unsafe {
                 (**lhs).b_next = *rhs;
-                (**rhs).b_prev = *lhs;
             }
         }
 
@@ -1538,9 +1621,9 @@ mod test {
         assert_eq!(chain_inner.tail.as_ptr(), new_el);
 
         // Last el has been linked to the new pkt, and it has a valid
-        // backward link.
+        // forward link. `b_prev` is unaltered.
         unsafe {
-            assert_eq!((*new_el).b_prev, els[2]);
+            assert!((*new_el).b_prev.is_null());
             assert!((*new_el).b_next.is_null());
             assert_eq!((*els[2]).b_next, new_el);
         }

@@ -55,6 +55,19 @@ impl MacAddr {
     pub const fn from_const(bytes: [u8; 6]) -> Self {
         Self { inner: bytes }
     }
+
+    /// Return whether this MAC address is a group address (I/G bit set).
+    ///
+    /// Per IEEE 802, the I/G (Individual/Group) bit is the LSB of the first octet.
+    /// When set to 1, the address is a group address, which includes both
+    /// multicast and broadcast (FF:FF:FF:FF:FF:FF) addresses.
+    ///
+    /// See [RFC 7042 §2.1] for details on IEEE 802 MAC address structure.
+    ///
+    /// [RFC 7042 §2.1]: https://www.rfc-editor.org/rfc/rfc7042#section-2.1
+    pub const fn is_group(&self) -> bool {
+        (self.inner[0] & 0b0000_0001) != 0
+    }
 }
 
 impl From<MacAddr> for smoltcp::wire::EthernetAddress {

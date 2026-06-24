@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Routines for building packet capture files.
 
@@ -24,7 +24,7 @@ fn get_header(offset: &[u8]) -> (&[u8], PcapHeader) {
 }
 
 #[allow(dead_code)]
-fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
+fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock<'_>) {
     match pcap::parse_pcap_frame(offset) {
         Ok((new_offset, block)) => {
             // We always want access to the entire packet.
@@ -36,9 +36,7 @@ fn next_block(offset: &[u8]) -> (&[u8], LegacyPcapBlock) {
     }
 }
 
-/// Build a packet capture file from a series of [`Packet<T>`].
-///
-/// [`Packet<T>`]: opte::engine::packet::Packet
+/// Build a packet capture file from a series of packets.
 pub struct PcapBuilder {
     file: File,
 }

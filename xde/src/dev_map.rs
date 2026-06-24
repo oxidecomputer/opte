@@ -7,12 +7,17 @@
 use crate::postbox::Postbox;
 use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use opte::api::MacAddr;
+use opte::api::MulticastUnderlay;
+use opte::api::OpteError;
 use opte::api::Vni;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::sync::KRwLockReadGuard;
+use oxide_vpc::api::SourceFilter;
 
 /// A map/set lookup key for ports indexed on `(Vni, MacAddr)`.
 ///
@@ -27,8 +32,19 @@ impl VniMac {
     pub fn new(vni: Vni, mac: MacAddr) -> Self {
         VniMac(vni.as_u32(), mac_to_u64(mac))
     }
+
+    #[inline]
+    pub fn vni(&self) -> Vni {
+        Vni::new(self.0).expect("VniMac contains valid VNI")
+    }
 }
 
+/// Shared ownership of an XDE port.
+///
+/// `Arc<XdeDev>` provides shared ownership within a `DevMap`. Safety during
+/// concurrent operations comes from callers holding read locks on the `DevMap`
+/// for the duration of packet processing, which prevents port removal from
+/// completing while any handler is active.
 type Dev = Arc<XdeDev>;
 
 /// `BTreeMap`-accelerated lookup of XDE ports.
@@ -37,10 +53,24 @@ type Dev = Arc<XdeDev>;
 /// pair. The former is used mostly by the control plane, and the latter by the
 /// data plane -- thus, querying by address provides a direct lookup. Any other
 /// lookups (e.g., multicast listeners) should return `FastKey`s or `&[FastKey]`s.
+///
+/// Multicast subscriptions in `mcast_groups` are port-local and sled-local:
+/// ports subscribe to underlay IPv6 multicast groups (ff04::/16) to receive
+/// packets for overlay multicast groups. Subscriptions are independent of the
+/// forwarding table and are automatically cleaned up when ports are removed.
 #[derive(Clone)]
 pub struct DevMap {
     devs: BTreeMap<VniMac, Dev>,
     names: BTreeMap<String, Dev>,
+    /// Subscriptions keyed by underlay IPv6 multicast group (admin-scoped ff04::/16).
+    /// Each port has its own source filter for per-member filtering.
+    /// This table is sled-local and independent of any per-VPC VNI. VNI validation
+    /// and VPC isolation are enforced during inbound overlay decapsulation on the
+    /// destination port, not here.
+    ///
+    /// Rationale: multicast groups are fleet-wide; ports opt-in to receive a given
+    /// underlay group, and the overlay layer subsequently filters by VNI as appropriate.
+    mcast_groups: BTreeMap<MulticastUnderlay, BTreeMap<VniMac, SourceFilter>>,
 }
 
 impl Default for DevMap {
@@ -51,7 +81,11 @@ impl Default for DevMap {
 
 impl DevMap {
     pub const fn new() -> Self {
-        Self { devs: BTreeMap::new(), names: BTreeMap::new() }
+        Self {
+            devs: BTreeMap::new(),
+            names: BTreeMap::new(),
+            mcast_groups: BTreeMap::new(),
+        }
     }
 
     /// Insert an `XdeDev`.
@@ -64,28 +98,110 @@ impl DevMap {
     }
 
     /// Remove an `XdeDev` using its name.
+    ///
+    /// This also cleans up all multicast subscriptions for the removed port.
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
         let key = get_key(&self.names.remove(name)?);
+
+        self.mcast_groups.retain(|_group, members| {
+            members.remove(&key);
+            !members.is_empty()
+        });
+
         self.devs.remove(&key)
+    }
+
+    /// Allow a port to receive on a given multicast group with source filtering.
+    ///
+    /// This takes the underlay IPv6 multicast group address (ff04::/16).
+    /// Callers at the ioctl boundary may pass an overlay group; the handler
+    /// translates overlay->underlay via the M2P table before calling here.
+    ///
+    /// The source filter determines which packet sources this port accepts:
+    /// - `Exclude` with empty sources: accept any source (*, G)
+    /// - `Include` with sources: accept only listed sources
+    ///
+    /// Re-subscribing with a different filter updates the existing subscription.
+    pub fn mcast_subscribe(
+        &mut self,
+        name: &str,
+        mcast_underlay: MulticastUnderlay,
+        filter: SourceFilter,
+    ) -> Result<(), OpteError> {
+        let port = self
+            .names
+            .get(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        self.mcast_groups
+            .entry(mcast_underlay)
+            .or_default()
+            .insert(key, filter);
+
+        Ok(())
+    }
+
+    /// Rescind a port's ability to receive on a given multicast group.
+    pub fn mcast_unsubscribe(
+        &mut self,
+        name: &str,
+        mcast_underlay: MulticastUnderlay,
+    ) -> Result<(), OpteError> {
+        let port = self
+            .names
+            .get(name)
+            .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
+        let key = get_key(port);
+
+        if let Entry::Occupied(mut entry) =
+            self.mcast_groups.entry(mcast_underlay)
+        {
+            entry.get_mut().remove(&key);
+            if entry.get().is_empty() {
+                entry.remove();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Unsubscribe all ports from a given underlay multicast group.
+    pub fn mcast_unsubscribe_all(&mut self, mcast_underlay: MulticastUnderlay) {
+        self.mcast_groups.remove(&mcast_underlay);
+    }
+
+    /// Find all subscribers for a given multicast group with their source filters.
+    pub fn mcast_subscribers(
+        &self,
+        mcast_underlay: &MulticastUnderlay,
+    ) -> Option<impl Iterator<Item = (&VniMac, &SourceFilter)>> {
+        self.mcast_groups.get(mcast_underlay).map(|v| v.iter())
+    }
+
+    /// Returns true if any multicast subscribers exist on this sled.
+    #[inline]
+    pub fn has_mcast_subscribers(&self) -> bool {
+        !self.mcast_groups.is_empty()
     }
 
     /// Return a reference to an `XdeDev` using its address.
     #[inline]
     #[must_use]
-    pub fn get_by_key(&self, key: VniMac) -> Option<&Dev> {
-        self.devs.get(&key)
+    pub fn get_by_key(&self, key: VniMac) -> Option<&XdeDev> {
+        self.devs.get(&key).map(Arc::as_ref)
     }
 
     /// Return a reference to an `XdeDev` using its name.
     #[inline]
     #[must_use]
-    pub fn get_by_name(&self, name: &str) -> Option<&Dev> {
-        self.names.get(name)
+    pub fn get_by_name(&self, name: &str) -> Option<&XdeDev> {
+        self.names.get(name).map(Arc::as_ref)
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
-    pub fn iter(&self) -> impl Iterator<Item = &Dev> {
-        self.devs.values()
+    pub fn iter(&self) -> impl Iterator<Item = &XdeDev> {
+        self.devs.values().map(Arc::as_ref)
     }
 
     /// Return an iterator over all `XdeDev`s, sorted by address.
@@ -102,6 +218,12 @@ impl DevMap {
     /// them to a matching XDE port.
     ///
     /// Any chains without a matching port are dropped.
+    ///
+    /// Safety: Callers must hold a read lock on this `DevMap` for the duration
+    /// of delivery. This prevents port removal from tearing down DLS/MAC
+    /// resources while delivery is in progress—management operations attempting
+    /// to remove a port will block when trying to acquire the write lock to
+    /// update the map.
     #[inline]
     pub fn deliver_all(&self, postbox: Postbox) {
         for (k, v) in postbox.drain() {
@@ -109,6 +231,25 @@ impl DevMap {
                 port.deliver(v);
             }
         }
+    }
+
+    /// Dump all multicast subscriptions as a vector of (group, subscribers) pairs.
+    pub fn dump_mcast_subscriptions(
+        &self,
+    ) -> Vec<(MulticastUnderlay, Vec<(String, SourceFilter)>)> {
+        let mut out = Vec::new();
+        for (group, subs) in self.mcast_groups.iter() {
+            let subscribers: Vec<(String, SourceFilter)> = subs
+                .iter()
+                .filter_map(|(vm, filter)| {
+                    self.devs
+                        .get(vm)
+                        .map(|d| (d.devname.clone(), filter.clone()))
+                })
+                .collect();
+            out.push((*group, subscribers));
+        }
+        out
     }
 }
 

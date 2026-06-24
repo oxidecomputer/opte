@@ -2,13 +2,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
 use super::Dhcpv6Action;
 use super::TransactionId;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::checksum::Checksum;
 use crate::engine::dhcpv6::ALL_RELAYS_AND_SERVERS;
 use crate::engine::dhcpv6::ALL_SERVERS;
 use crate::engine::dhcpv6::CLIENT_PORT;
@@ -609,18 +610,23 @@ fn generate_packet<'a>(
     meta: MblkPacketDataView,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
+    let src_ip = Ipv6Addr::from_eui64(&action.server_mac);
+    // Safety: We're only here if the predicates match, one of which is IPv6.
+    let dst_ip = meta.headers.inner_ip6().unwrap().source();
+    let udp_len = (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16;
+
+    // Build UDP header with checksum=0
+    // We compute it after assembling the packet
     let udp = Udp {
         source: SERVER_PORT,
         destination: CLIENT_PORT,
-        length: (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16,
-        ..Default::default()
+        length: udp_len,
+        checksum: 0,
     };
 
     let ip = Ipv6 {
-        source: Ipv6Addr::from_eui64(&action.server_mac),
-        // Safety: We're only here if the predicates match, one of which is
-        // IPv6.
-        destination: meta.headers.inner_ip6().unwrap().source(),
+        source: src_ip,
+        destination: dst_ip,
         next_header: IngotIpProto::UDP,
         payload_len: udp.length,
         ..Default::default()
@@ -642,7 +648,25 @@ fn generate_packet<'a>(
     let l = pkt.len();
     pkt.resize(total_sz)
         .expect("MsgBlk should have enough bytes by construction");
-    msg.copy_into(&mut pkt[l..]);
+    let copied = msg.copy_into(&mut pkt[l..]);
+    debug_assert!(copied.is_some());
+
+    // Compute UDP checksum over pseudo-header + UDP segment (header + payload).
+    // For IPv6, UDP checksum is necessary (RFC 2460). Compute offsets from the
+    // serialized header length to avoid depending on hardcoded minimum sizes.
+    let udp_start: usize = l - Udp::MINIMUM_LENGTH;
+    let udp_csum_off: usize = udp_start + 6; // checksum is 6 bytes into UDP header
+
+    let mut csum = Checksum::new();
+    // IPv6 pseudo-header: src IP, dst IP, UDP length (32-bit), next header
+    csum.add_bytes(src_ip.bytes().as_slice());
+    csum.add_bytes(dst_ip.bytes().as_slice());
+    csum.add_bytes(&(udp_len as u32).to_be_bytes());
+    csum.add_bytes(&[0, 0, 0, IngotIpProto::UDP.0]);
+    // UDP header + payload (checksum field is 0, contributes nothing)
+    csum.add_bytes(&pkt[udp_start..]);
+    pkt[udp_csum_off..udp_csum_off + 2]
+        .copy_from_slice(&csum.finalize_for_ingot().to_be_bytes());
 
     Ok(AllowOrDeny::Allow(pkt))
 }

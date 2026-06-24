@@ -41,27 +41,28 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
-cargo_metadata = "0.20"
+cargo_metadata = "0.23"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
-criterion = "0.6"
-ctor = "0.4"
-darling = "0.20"
+criterion = "0.8"
+ctor = "0.10"
+darling = "0.23"
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = "0.1.0"
+ingot = "0.1.1"
 ipnetwork = { version = "0.21", default-features = false }
-itertools = { version = "0.14", default-features = false }
+itertools = { version = "0.15", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-nix = { version = "0.30", features = ["signal", "user"] }
-pcap-parser = "0.16"
+nix = { version = "0.31", features = ["signal", "user"] }
+pcap-parser = "0.17"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 proc-macro2 = { version = "1" }
 quote = "1.0"
-rand = "0.9.1"
-ron = "0.10"
+rand = "0.10.0"
+ref-cast = "1.0.25"
+ron = "0.12"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }
 slog = { version = "2.7", features = ["max_level_trace", "release_max_level_trace"] }
@@ -72,14 +73,17 @@ smoltcp = { version = "0.11", default-features = false }
 syn = "2"
 tabwriter = { version = "1", features = ["ansi_formatting"] }
 thiserror = "2.0"
-toml = "0.8"
+toml = "1.0"
 uuid = { version = "1.0", default-features = false, features = ["serde"]}
-usdt = "0.5"
+usdt = "0.6"
 version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "multipath" }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
+
+[profile.dev]
+opt-level = 1
 
 [profile.release]
 debug = 2

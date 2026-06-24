@@ -1,6 +1,7 @@
 #!/bin/bash
 
-export PUBLISHER=helios-dev
+export PUBLISHER=helios
+export HELIOS_RELEASE=`awk -F= '/^VERSION=/{print $2}' /etc/os-release`
 export COMMIT_COUNT=`git rev-list --count HEAD`
 export REPO=packages/repo
 
@@ -26,12 +27,17 @@ else
     INC_DEBUG="#"
 fi
 
+# This allows us to append a secondary version identifier to the package
+# version in the event of backports, or other scenarios which would otherwise
+# lead to a version conflict in the helios repository.
+typeset -ri TAG=0
+
 API_VSN=$(./print-api-version.sh)
+PKG_VERSION="0.$API_VSN.$COMMIT_COUNT-$HELIOS_RELEASE.$TAG"
 
 # create the package
 sed -e "s/%PUBLISHER%/$PUBLISHER/g" \
-    -e "s/%COMMIT_COUNT%/$COMMIT_COUNT/g" \
-    -e "s/%API_VSN%/$API_VSN/g" \
+    -e "s/%PKG_VERSION%/$PKG_VERSION/g" \
     opte.template.p5m | pkgmogrify -v -D inc_debug="$INC_DEBUG" -O opte.base.p5m
 
 pkgdepend generate -d proto opte.base.p5m > opte.generate.p5m
@@ -45,5 +51,5 @@ pkgrepo create $REPO
 pkgrepo add-publisher -s $REPO $PUBLISHER
 
 pkgsend publish -d proto -s $REPO opte.final.p5m
-pkgrecv -a -d packages/repo/opte-0.$API_VSN.$COMMIT_COUNT.p5p -s $REPO \
+pkgrecv -a -d packages/repo/opte-$PKG_VERSION.p5p -s $REPO \
 	-v -m latest '*'

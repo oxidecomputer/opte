@@ -2,7 +2,7 @@
 #:
 #: name = "opte-api"
 #: variety = "basic"
-#: target = "helios-2.0"
+#: target = "helios-3.0"
 #: rust_toolchain = true
 #: output_rules = []
 #:
@@ -28,7 +28,7 @@ header "analyze std"
 ptime -m cargo clippy --all-targets
 
 header "analyze no_std"
-ptime -m cargo clippy --no-default-features --all-targets
+ptime -m cargo clippy --no-default-features --all-targets -- --deny warnings
 
 header "test"
 ptime -m cargo test

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Integration tests.
 //!
@@ -15,6 +15,7 @@
 
 use common::icmp::*;
 use common::*;
+use opte::api::L4Info;
 use opte::api::MacAddr;
 use opte::api::OpteError;
 use opte::api::TcpState;
@@ -36,6 +37,7 @@ use opte::engine::ip::v4::Ipv4Addr;
 use opte::engine::ip::v4::Ipv4Ref;
 use opte::engine::ip::v4::ValidIpv4;
 use opte::engine::ip::v6::Ipv6;
+use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Ref;
 use opte::engine::ip::v6::ValidIpv6;
 use opte::engine::packet::InnerFlowId;
@@ -43,10 +45,16 @@ use opte::engine::packet::MblkFullParsed;
 use opte::engine::packet::MismatchError;
 use opte::engine::packet::Packet;
 use opte::engine::parse::ValidUlp;
+use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
+use opte::engine::port::ProcessResult;
+use opte::engine::rule::MappingResource;
+use opte::engine::tcp::INCIPIENT_EXPIRE_SECS;
 use opte::engine::tcp::TIME_WAIT_EXPIRE_SECS;
+use opte::ingot::ethernet::Ethertype;
 use opte::ingot::geneve::GeneveRef;
 use opte::ingot::icmp::IcmpV6Ref;
+use opte::ingot::ip::IpProtocol;
 use opte::ingot::tcp::TcpRef;
 use opte::ingot::types::Emit;
 use opte::ingot::types::HeaderLen;
@@ -54,12 +62,17 @@ use opte::ingot::types::HeaderParse;
 use opte::ingot::udp::Udp;
 use opte::ingot::udp::UdpRef;
 use opte_test_utils as common;
+use oxide_vpc::api::AttachSubnetReq;
+use oxide_vpc::api::AttachedSubnetConfig;
 use oxide_vpc::api::BOUNDARY_SERVICES_VNI;
+use oxide_vpc::api::DetachSubnetReq;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::FirewallRule;
 use oxide_vpc::api::Route;
 use oxide_vpc::api::RouterClass;
 use oxide_vpc::api::VpcCfg;
+use oxide_vpc::engine::attached_subnets;
+use oxide_vpc::engine::geneve;
 use pcap::*;
 use smoltcp::phy::ChecksumCapabilities as CsumCapab;
 use smoltcp::wire::Icmpv4Packet;
@@ -99,6 +112,8 @@ fn lab_cfg() -> VpcCfg {
             ephemeral_ip: None,
             floating_ips: vec![],
         },
+        attached_subnets: BTreeMap::new(),
+        transit_ips: BTreeMap::new(),
     });
     VpcCfg {
         ip_cfg,
@@ -115,6 +130,7 @@ fn lab_cfg() -> VpcCfg {
         phys_ip: Ipv6Addr::from([
             0xFD00, 0x0000, 0x00F7, 0x0101, 0x0000, 0x0000, 0x0000, 0x0001,
         ]),
+        dhcp: base_dhcp_config(),
     }
 }
 
@@ -405,7 +421,7 @@ fn gateway_icmp4_ping() {
     let meta = reply.headers();
     assert!(meta.outer_eth.is_none());
     assert!(meta.outer_l3.is_none());
-    assert!(meta.outer_encap_geneve_vni_and_origin().is_none());
+    assert!(meta.outer_encap.is_none());
 
     let eth = &meta.inner_eth;
     assert_eq!(eth.source(), g1_cfg.gateway_mac);
@@ -498,7 +514,7 @@ fn guest_to_guest_no_route() {
     g1.vpc_map.add(g2_cfg.ipv4().private_ip.into(), g2_cfg.phys_addr());
     g1.port.start();
     set!(g1, "port_state=running");
-    // Make sure the router is configured to drop all packets.
+    // Make sure the router is configured to drop all packets except multicast.
     router::del_entry(
         &g1.port,
         Route {
@@ -511,7 +527,7 @@ fn guest_to_guest_no_route() {
         },
     )
     .unwrap();
-    update!(g1, ["incr:epoch", "set:router.rules.out=0"]);
+    update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
     let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
     let res = g1.port.process(Out, pkt1);
@@ -1028,6 +1044,8 @@ fn multi_external_setup(
                 ephemeral_ip: v4_eph,
                 floating_ips: v4s[first_float..].to_vec(),
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -1041,6 +1059,8 @@ fn multi_external_setup(
                 ephemeral_ip: v6_eph,
                 floating_ips: v6s[first_float..].to_vec(),
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -1110,11 +1130,6 @@ fn check_external_ip_inbound_behaviour(
     ext_v4: &[Ipv4Addr],
     ext_v6: &[Ipv6Addr],
 ) {
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
     let g1_phys =
         TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
 
@@ -1145,7 +1160,7 @@ fn check_external_ip_inbound_behaviour(
             flow_port,
             80,
         );
-        let mut pkt1_m = encap_external(pkt1, bsvc_phys, g1_phys);
+        let mut pkt1_m = encap_external(pkt1, *BSVC_PHYS, g1_phys);
         let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
         let res = port.port.process(In, pkt1);
@@ -1373,11 +1388,6 @@ fn external_ip_balanced_over_floating_ips() {
 #[test]
 fn external_ip_epoch_affinity_preserved() {
     let (mut g1, g1_cfg, ext_v4, ext_v6) = multi_external_ip_setup(2, true);
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
     let g1_phys = TestIpPhys {
         ip: g1_cfg.phys_ip,
         mac: g1_cfg.guest_mac,
@@ -1397,10 +1407,17 @@ fn external_ip_epoch_affinity_preserved() {
         ExternalIpCfg { floating_ips, ..v.external_ips.clone() }
     });
 
+    let (external_ips_v4, external_ips_v6) =
+        if let IpCfg::DualStack { ipv4, ipv6 } = &g1_cfg.ip_cfg {
+            (Some(ipv4.external_ips.clone()), Some(ipv6.external_ips.clone()))
+        } else {
+            panic!("port is built as dual-stack");
+        };
+
     let mut req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
-        external_ips_v4: None,
-        external_ips_v6: None,
+        external_ips_v4,
+        external_ips_v6,
 
         // This test does not focus on controlling EIP selection
         // based on destination prefix.
@@ -1429,7 +1446,7 @@ fn external_ip_epoch_affinity_preserved() {
         };
 
         let pkt1 = http_syn2(BS_MAC_ADDR, partner_ip, g1_cfg.guest_mac, ext_ip);
-        let mut pkt1_m = encap_external(pkt1, bsvc_phys, g1_phys);
+        let mut pkt1_m = encap_external(pkt1, *BSVC_PHYS, g1_phys);
         let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
 
         let res = g1.port.process(In, pkt1);
@@ -1449,8 +1466,8 @@ fn external_ip_epoch_affinity_preserved() {
         // Bumping epoch on other layers (e.g., firewall) is typically fine,
         // since that won't affect the internal flowtable for NAT.
         // ====================================================================
-        nat::set_nat_rules(&g1.cfg, &g1.port, req.clone()).unwrap();
-        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7",]);
+        nat::set_external_ips(&g1.port, req.clone()).unwrap();
+        update!(g1, ["incr:epoch", "set:nat.rules.in=4, nat.rules.out=7"]);
 
         // ================================================================
         // The reply packet must still originate from the ephemeral port
@@ -1523,7 +1540,7 @@ fn external_ip_reconfigurable() {
         // based on destination prefix.
         inet_gw_map: None,
     };
-    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    nat::set_external_ips(&g1.port, req).unwrap();
     update!(
         g1,
         [
@@ -1794,12 +1811,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         mac: g1_cfg.guest_mac,
         vni: g1_cfg.vni,
     };
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-    pkt2_m = encap_external(pkt2_m, bsvc_phys, g1_phys);
+    pkt2_m = encap_external(pkt2_m, *BSVC_PHYS, g1_phys);
     pcap.add_pkt(&pkt2_m);
 
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
@@ -1854,7 +1866,7 @@ fn snat_icmp_shared_echo_rewrite(dst_ip: IpAddr) {
         &data[..],
         2,
     );
-    pkt4_m = encap_external(pkt4_m, bsvc_phys, g1_phys);
+    pkt4_m = encap_external(pkt4_m, *BSVC_PHYS, g1_phys);
     pcap.add_pkt(&pkt4_m);
     let pkt4 = parse_inbound(&mut pkt4_m, VpcParser {}).unwrap();
 
@@ -2574,8 +2586,8 @@ fn test_gateway_neighbor_advert_reply() {
                         .unwrap_or_else(|| String::from("Drop"));
                 panic!(
                     "Generated unexpected packet from NS: {}\n\
-                    Result: {:?}\nExpected: {}",
-                    d.ns, res, na,
+                    Result: {res:?}\nExpected: {na}",
+                    d.ns
                 );
             }
         };
@@ -2811,6 +2823,14 @@ fn verify_dhcpv6_essentials<'a>(
     assert_eq!(request_udp.destination(), dhcpv6::SERVER_PORT);
     assert_eq!(reply_udp.destination(), dhcpv6::CLIENT_PORT);
     assert_eq!(reply_udp.source(), dhcpv6::SERVER_PORT);
+
+    // Verify UDP checksum is set.
+    // A checksum of 0 means "not computed" which is invalid for IPv6.
+    assert_ne!(
+        reply_udp.checksum(),
+        0,
+        "DHCPv6 reply UDP checksum must be non-zero (mandatory for IPv6)"
+    );
 
     // Verify the details of the DHCPv6 exchange itself.
     assert_eq!(reply.xid, request.xid);
@@ -3537,7 +3557,6 @@ fn tcp_outbound() {
     let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
     g1.port.start();
     set!(g1, "port_state=running");
-    // let now = Moment::now();
 
     // Add default route.
     router::add_entry(
@@ -3561,22 +3580,31 @@ fn tcp_outbound() {
     // TCP flow expiry behaviour
     // ================================================================
     // - UFTs for individual flows live on the same cadence as other traffic.
+    //   We expect these to expire, as the TCP flow will not pin their
+    //   lifetime.
+    // - The presence of the TCP flow entry will keep the firewall entry alive.
+    //   If the UFT were present, it would serve the same purpose.
     // - TCP state machine info should be cleaned up after an active close.
+    //
     // TimeWait state has a ~2min lifetime before we flush it -- it should still
-    // be present at UFT expiry:
+    // be present at UFT expiry.
     let now = Moment::now();
     g1.port
         .expire_flows_at(now + Duration::new(FLOW_DEF_EXPIRE_SECS + 1, 0))
         .unwrap();
-    zero_flows!(g1);
+    decr!(g1, ["uft.in, uft.out"]);
     assert_eq!(TcpState::TimeWait, g1.port.tcp_state(&flow).unwrap());
 
     // The TCP flow state should then be flushed after 2 mins.
     // Note that this case applies to any active-close initiated by the
     // guest, irrespective of inbound/outbound.
+    //
+    // Once this flow is removed, the LFTs associated with the flow become
+    // eligible for time-based expiry.
     g1.port
         .expire_flows_at(now + Duration::new(TIME_WAIT_EXPIRE_SECS + 1, 0))
         .unwrap();
+    zero_flows!(g1);
     assert_eq!(None, g1.port.tcp_state(&flow));
 }
 
@@ -3766,6 +3794,103 @@ fn early_tcp_invalidation() {
     assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
 }
 
+// We have agressive TCP flow entry expiry for flows in the three-way
+// handshake, to ensure that they do not consume table entry space for
+// extremely long periods of time in potential SYN-flood DOS scenarios.
+//
+// However, a slow handshake should still function using the underlying
+// LFT entries where, e.g., the default firewall disposition is in use.
+#[test]
+fn tcp_invalidation_does_not_block_connection() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Ensure we only have the default rules: allow all outbound, block
+    // all inbound.
+    firewall::set_fw_rules(
+        &g1.port,
+        SetFwRulesReq { port_name: g1.port.name().to_string(), rules: vec![] },
+    )
+    .unwrap();
+    update!(
+        g1,
+        [
+            "incr:epoch",
+            "set:firewall.flows.in=0, firewall.flows.out=0",
+            "set:firewall.rules.out=0, firewall.rules.in=0",
+        ]
+    );
+
+    let g1_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    let dst_ip = Ipv4Addr::from_const([172, 30, 0, 6]);
+    g1.vpc_map.add(dst_ip.into(), g1_cfg.phys_addr());
+
+    // Attempt to connect to a hypothetical TCP recipient in the same VPC,
+    // on the same sled. This will create new TCP state and setup inbound
+    // LFTs for a SYN-ACK to use.
+    let mut pkt1_m = http_syn2(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        GW_MAC_ADDR,
+        dst_ip,
+    );
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let flow = pkt1.flow();
+    let remote_port = if let Some(L4Info::Ports(a)) = flow.l4_info() {
+        a.src_port
+    } else {
+        panic!()
+    };
+    let res = g1.port.process(Out, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    assert_eq!(TcpState::SynSent, g1.port.tcp_state(&flow).unwrap());
+
+    // Assume that the recipient takes some time to get back to us, but not
+    // long enough to expire the UFT/LFTs. The TCP state will expire.
+    let t0 = Moment::now();
+    let t1 = t0 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t1).unwrap();
+    assert_eq!(None, g1.port.tcp_state(&flow));
+
+    // The SYN-ACK arrives, and we allow it through. This creates a new
+    // instance of TCP state.
+    let mut pkt2_m = http_syn_ack2(
+        BS_MAC_ADDR,
+        dst_ip,
+        g1_cfg.guest_mac,
+        g1_cfg.ipv4().private_ip,
+        remote_port,
+    );
+    pkt2_m = encap(pkt2_m, g1_phys, g1_phys);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.in_modified, stats.port.in_uft_miss, uft.in"]);
+    assert_eq!(TcpState::Established, g1.port.tcp_state(&flow).unwrap());
+
+    // Receiving a SYN-ACK moves the connection into established. We'd expect
+    // this normally from `SynSent`, if the state hadn't been lost. This state
+    // will survive a short wait.
+    let t2 = t1 + Duration::from_secs(INCIPIENT_EXPIRE_SECS + 1);
+    g1.port.expire_flows_at(t2).unwrap();
+    assert_eq!(Some(TcpState::Established), g1.port.tcp_state(&flow));
+}
+
 #[test]
 fn ephemeral_ip_preferred_over_snat_outbound() {
     let ip_cfg = IpCfg::DualStack {
@@ -3781,6 +3906,8 @@ fn ephemeral_ip_preferred_over_snat_outbound() {
                 ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -3794,6 +3921,8 @@ fn ephemeral_ip_preferred_over_snat_outbound() {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -3876,6 +4005,8 @@ fn tcp_inbound() {
                 ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -3889,6 +4020,8 @@ fn tcp_inbound() {
                 ephemeral_ip: None,
                 floating_ips: vec![],
             },
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -4475,12 +4608,309 @@ fn port_as_router_target() {
     let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
 
     let res = g2.port.process(Out, pkt2);
-    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out",]);
+    incr!(g2, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
     expect_modified!(res, pkt2_m);
 
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
     let res = g1.port.process(In, pkt2);
     expect_modified!(res, pkt2_m);
+
+    // Removing CIDR blocks should piecewise remove the gateway rules.
+    gateway::remove_cidr(&g2.port, cidr, Direction::In, g2.vpc_map.clone())
+        .unwrap();
+    update!(g2, ["incr:epoch", "decr:gateway.rules.in"]);
+    gateway::remove_cidr(&g2.port, cidr, Direction::Out, g2.vpc_map.clone())
+        .unwrap();
+    update!(g2, ["incr:epoch", "decr:gateway.rules.out"]);
+}
+
+// RFD 599 defines two mechanisms relating to attaching subnets to
+// instances: attached external and attached VPC subnets.
+// Both of these require in/out exceptions in the gateway layer, but differ
+// on some points:
+//  - Attached VPC subnets require the control plane to insert a system
+//    router rule mapping cidr(subnet)->primary_ip(instance) on all other ports.
+//    This is the moral equivalent of the `port_as_router_target` test above,
+//    without manual user configuration. What we want to test here is how they
+//    differ, and that rules do not interfere with transit IPs bound to the
+//    same blocks.
+//  - Attached external subnets should exempt any matching inbound traffic
+//    from undergoing NAT, and must ensure that outbound traffic cannot be
+//    directly sent to a VPC-private address.
+#[test]
+fn internal_attached_subnets() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    let cidr = "10.0.0.0/8".parse().unwrap();
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr,
+            cfg: AttachedSubnetConfig { is_external: false },
+        },
+    )
+    .unwrap();
+
+    update!(g1, ["set:epoch=5", "incr:gateway.rules.in, gateway.rules.out"]);
+
+    // Suppose there is another port (same non-attached subnet) on G1's node.
+    let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
+    g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
+
+    let my_ip = "10.0.123.45".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // We can receive traffic on this attached subnet.
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let partner_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: ox_vpc_mac([0xF0, 0x00, 0x66]),
+        vni: g1_cfg.vni,
+    };
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        partner_phys.mac,
+        g1_cfg.guest_mac,
+        partner_ip,
+        my_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    pkt1_m = encap(pkt1_m, partner_phys, guest_phys);
+
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+
+    // And we can send traffic from an arbitrary IP in the subnet.
+    let mut pkt2_m = gen_icmpv4_echo_reply(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
+
+    // Add/remove of an identical transit IP range should be a NO-OP.
+    // (`incr` here implicitly asserts that the gateway rule count is unchanged).
+    gateway::allow_cidr(&g1.port, cidr, Direction::In, g1.vpc_map.clone())
+        .unwrap();
+    gateway::allow_cidr(&g1.port, cidr, Direction::Out, g1.vpc_map.clone())
+        .unwrap();
+    incr!(g1, ["epoch, epoch"]);
+    gateway::remove_cidr(&g1.port, cidr, Direction::In, g1.vpc_map.clone())
+        .unwrap();
+    gateway::remove_cidr(&g1.port, cidr, Direction::Out, g1.vpc_map.clone())
+        .unwrap();
+    incr!(g1, ["epoch, epoch"]);
+
+    // ...until we remove the attachment itself.
+    attached_subnets::detach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        DetachSubnetReq { port_name: g1.port.name().into(), cidr },
+    )
+    .unwrap();
+    update!(g1, ["set:epoch=11", "decr:gateway.rules.in, gateway.rules.out"]);
+}
+
+#[test]
+fn external_attached_subnets_dont_apply_nat() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr: "8.0.0.0/8".parse().unwrap(),
+            cfg: AttachedSubnetConfig { is_external: true },
+        },
+    )
+    .unwrap();
+
+    update!(
+        g1,
+        [
+            "set:epoch=5",
+            "incr:gateway.rules.in, gateway.rules.out",
+            "incr:nat.rules.in, nat.rules.out"
+        ]
+    );
+
+    // Add default route.
+    router::add_entry(
+        &g1.port,
+        Route {
+            dest: IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
+            target: RouterTarget::InternetGateway(None),
+            class: RouterClass::System,
+            stat_id: None,
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "router.rules.out"]);
+
+    let my_ext_ip = "8.8.8.8".parse().unwrap();
+    let partner_ip = "1.1.1.1".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // Have the guest receive a packet on an external IP in its owned
+    // 8.0.0.0/8 range.
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        BS_MAC_ADDR,
+        g1_cfg.guest_mac,
+        partner_ip,
+        my_ext_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    pkt1_m = encap_external(pkt1_m, *BSVC_PHYS, guest_phys);
+
+    let pkt1 = parse_inbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(In, pkt1);
+    expect_modified!(res, pkt1_m);
+    incr!(
+        g1,
+        [
+            "firewall.flows.in, firewall.flows.out",
+            "stats.port.in_modified, stats.port.in_uft_miss, uft.in",
+        ]
+    );
+
+    // This packet must not have had its source/dest IP addresses altered.
+    let pkt1 =
+        parse_outbound(&mut pkt1_m, VpcParser {}).unwrap().to_full_meta();
+    assert_eq!(pkt1.headers().inner_ip4().unwrap().source(), partner_ip);
+    assert_eq!(pkt1.headers().inner_ip4().unwrap().destination(), my_ext_ip);
+
+    // A reply packet from the guest on these IPs should also be unchanged,
+    // and must be directed at boundary services.
+    let mut pkt2_m = gen_icmpv4_echo_reply(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ext_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+    let pkt2 = parse_outbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt2);
+    expect_modified!(res, pkt2_m);
+    incr!(g1, ["stats.port.out_modified, stats.port.out_uft_miss, uft.out"]);
+    let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap().to_full_meta();
+    let L3::Ipv6(outer_ip6) = pkt2.headers().outer_l3.as_ref().unwrap() else {
+        panic!("Encapsulation must be IPv6.");
+    };
+    assert_eq!(outer_ip6.source(), g1_cfg.phys_ip);
+    assert_eq!(outer_ip6.destination(), BSVC_PHYS.ip);
+    assert_eq!(pkt2.headers().inner_ip4().unwrap().source(), my_ext_ip);
+    assert_eq!(pkt2.headers().inner_ip4().unwrap().destination(), partner_ip);
+}
+
+#[test]
+fn external_attached_subnets_cannot_reach_internal() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Attach the subnet.
+    attached_subnets::attach_subnet(
+        &g1.port,
+        None,
+        &g1.vpc_map,
+        AttachSubnetReq {
+            port_name: g1.port.name().into(),
+            cidr: "8.0.0.0/8".parse().unwrap(),
+            cfg: AttachedSubnetConfig { is_external: true },
+        },
+    )
+    .unwrap();
+
+    update!(
+        g1,
+        [
+            "set:epoch=5",
+            "incr:gateway.rules.in, gateway.rules.out",
+            "incr:nat.rules.in, nat.rules.out"
+        ]
+    );
+
+    // Suppose there is another port (same non-attached subnet) on G1's node.
+    let partner_ip: Ipv4Addr = "172.30.0.6".parse().unwrap();
+    g1.vpc_map.add(partner_ip.into(), g1_cfg.phys_addr());
+
+    let my_ext_ip = "8.8.8.8".parse().unwrap();
+
+    let data = b"1234\0";
+
+    // Have the guest attempt to sent a packet from an external IP in its owned
+    // 8.0.0.0/8 range to a VPC-private address. As the source address is
+    // logically outside of the VPC-private scope we need to refuse to select a
+    // V2P mapping.
+    let mut pkt1_m = gen_icmpv4_echo_req(
+        g1_cfg.guest_mac,
+        g1_cfg.gateway_mac,
+        my_ext_ip,
+        partner_ip,
+        7777,
+        1,
+        data,
+        1,
+    );
+
+    let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let res = g1.port.process(Out, pkt1);
+    assert_drop!(
+        res,
+        DropReason::Layer { name: "overlay", reason: DenyReason::Action }
+    );
 }
 
 #[test]
@@ -4514,37 +4944,43 @@ fn select_eip_conditioned_on_igw() {
     // * All EIPs are valid on IGW4.
     //   - Packets will choose a random FIP, by priority ordering.
 
+    let v4_ext = ExternalIpCfg {
+        snat: Some(SNat4Cfg {
+            external_ip: "10.77.77.13".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
+        floating_ips: vec![
+            "192.168.0.2".parse().unwrap(),
+            "192.168.0.3".parse().unwrap(),
+            "192.168.0.4".parse().unwrap(),
+        ],
+    };
+    let v6_ext = ExternalIpCfg {
+        snat: Some(SNat6Cfg {
+            external_ip: "2001:db8::1".parse().unwrap(),
+            ports: 1025..=4096,
+        }),
+        ephemeral_ip: None,
+        floating_ips: vec![],
+    };
     let ip_cfg = IpCfg::DualStack {
         ipv4: Ipv4Cfg {
             vpc_subnet: "172.30.0.0/22".parse().unwrap(),
             private_ip: "172.30.0.5".parse().unwrap(),
             gateway_ip: "172.30.0.1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat4Cfg {
-                    external_ip: "10.77.77.13".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: Some("192.168.0.1".parse().unwrap()),
-                floating_ips: vec![
-                    "192.168.0.2".parse().unwrap(),
-                    "192.168.0.3".parse().unwrap(),
-                    "192.168.0.4".parse().unwrap(),
-                ],
-            },
+            external_ips: v4_ext,
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
         // Not really testing V6 here. Same principles apply.
         ipv6: Ipv6Cfg {
             vpc_subnet: "fd00::/64".parse().unwrap(),
             private_ip: "fd00::5".parse().unwrap(),
             gateway_ip: "fd00::1".parse().unwrap(),
-            external_ips: ExternalIpCfg {
-                snat: Some(SNat6Cfg {
-                    external_ip: "2001:db8::1".parse().unwrap(),
-                    ports: 1025..=4096,
-                }),
-                ephemeral_ip: None,
-                floating_ips: vec![],
-            },
+            external_ips: v6_ext.clone(),
+            attached_subnets: BTreeMap::new(),
+            transit_ips: BTreeMap::new(),
         },
     };
 
@@ -4638,13 +5074,13 @@ fn select_eip_conditioned_on_igw() {
     let req = oxide_vpc::api::SetExternalIpsReq {
         port_name: g1.port.name().to_string(),
         external_ips_v4: new_v4_cfg,
-        external_ips_v6: None,
+        external_ips_v6: Some(v6_ext),
 
         // Setting the inet GW mappings for each external IP
         // enables the limiting we aim to test here.
         inet_gw_map: Some(inet_gw_map),
     };
-    nat::set_nat_rules(&g1.cfg, &g1.port, req).unwrap();
+    nat::set_external_ips(&g1.port, req).unwrap();
     update!(g1, ["incr:epoch", "set:nat.rules.out=8"]);
 
     // Send an ICMP packet for each destination, and verify that the
@@ -4806,7 +5242,7 @@ fn icmp_inner_has_nat_applied() {
         header: smoltcp::wire::Ipv4Repr {
             src_addr: remote_addr.into(),
             dst_addr: g1_cfg.ipv4().private_ip.into(),
-            next_header: IpProtocol::Udp,
+            next_header: smoltcp::wire::IpProtocol::Udp,
             payload_len: 256,
             hop_limit: 0,
         },
@@ -4875,7 +5311,7 @@ fn icmpv6_inner_has_nat_applied() {
         header: smoltcp::wire::Ipv6Repr {
             src_addr: eph_ip.into(),
             dst_addr: remote_addr.into(),
-            next_header: IpProtocol::Udp,
+            next_header: smoltcp::wire::IpProtocol::Udp,
             // Unimportant -- header is truncated.
             payload_len: 256,
             hop_limit: 255,
@@ -4907,16 +5343,10 @@ fn icmpv6_inner_has_nat_applied() {
         ..Default::default()
     };
 
-    let bsvc_phys = TestIpPhys {
-        ip: BS_IP_ADDR,
-        mac: BS_MAC_ADDR,
-        vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-    };
-
     let pkt_m = MsgBlk::new_ethernet_pkt((&eth, &ip, &body_bytes));
     let mut pkt_m = encap_external(
         pkt_m,
-        bsvc_phys,
+        *BSVC_PHYS,
         TestIpPhys {
             ip: g1_cfg.phys_ip,
             mac: g1_cfg.guest_mac,
@@ -4938,4 +5368,399 @@ fn icmpv6_inner_has_nat_applied() {
     let body = meta.body().unwrap();
     let (v6, ..) = ValidIpv6::parse(body).unwrap();
     assert_eq!(v6.source(), g1_cfg.ipv6().private_ip);
+}
+
+// Test that IPv6 multicast packets get encapsulated with Geneve
+#[test]
+fn test_ipv6_multicast_encapsulation() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    // Create an IPv6 multicast packet (ff04::1:3 - admin-local multicast)
+    let mcast_dst = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x03,
+    ]);
+
+    // Create a multicast underlay address (must be multicast for forwarding)
+    let mcast_underlay = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    // Add multicast forwarding entry BEFORE starting the port
+    g1.m2p.set(
+        mcast_dst.into(),
+        opte::api::MulticastUnderlay::new(mcast_underlay)
+            .expect("ff04::/16 is admin-scoped multicast"),
+    );
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Multicast traffic is detected automatically by the gateway layer (checking
+    // if the destination IP is multicast), but still requires explicit firewall
+    // permission. This unit test bypasses the firewall by calling port.process()
+    // directly. In production (and XDE tests), `add_multicast_router_entry()` is
+    // required to allow multicast CIDRs through the overlay firewall.
+
+    // Build a UDP packet to the multicast address
+    let eth = Ethernet {
+        destination: MacAddr::from([0x33, 0x33, 0x00, 0x01, 0x00, 0x03]),
+        source: g1_cfg.guest_mac,
+        ethertype: Ethertype::IPV6,
+    };
+    let ip = Ipv6 {
+        source: g1_cfg.ipv6().private_ip,
+        destination: mcast_dst,
+        next_header: IpProtocol::UDP,
+        payload_len: (Udp::MINIMUM_LENGTH) as u16,
+        hop_limit: 64,
+        ..Default::default()
+    };
+    let udp = Udp {
+        source: 12345,
+        destination: 5353, // mDNS port as an example multicast UDP service
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
+    let mut pkt_m = ulp_pkt(eth, ip, udp, &[]);
+
+    let pkt = parse_outbound(&mut pkt_m, GenericUlp {}).unwrap();
+    let res = g1.port.process(Out, pkt).expect("process should succeed");
+
+    // Verify packet was encapsulated
+    let Modified(spec) = res else {
+        panic!("Expected Modified result, got {res:?}");
+    };
+    let mut pkt_m = spec.apply(pkt_m);
+
+    // Parse the encapsulated packet as inbound (it's now on the wire with Geneve)
+    let parsed = Packet::parse_inbound(pkt_m.iter_mut(), VpcParser {}).unwrap();
+    let meta = parsed.headers();
+
+    // Verify the outer IPv6 destination is the multicast underlay address
+    assert_eq!(
+        meta.outer_v6.destination(),
+        mcast_underlay,
+        "Outer IPv6 destination should be multicast underlay address"
+    );
+
+    // Verify the outer IPv6 source is the physical IP of the guest
+    assert_eq!(
+        meta.outer_v6.source(),
+        g1_cfg.phys_ip,
+        "Outer IPv6 source should be the physical IP"
+    );
+
+    // Verify the outer Ethernet destination MAC is the IPv6 multicast MAC
+    // For IPv6 multicast, MAC is 33:33:xx:xx:xx:xx where xx:xx:xx:xx are the
+    // last 4 bytes of the IPv6 address
+    let expected_outer_mac = mcast_underlay.multicast_mac().unwrap();
+    assert_eq!(
+        meta.outer_eth.destination(),
+        expected_outer_mac,
+        "Outer Ethernet MAC should be IPv6 multicast MAC"
+    );
+
+    // Verify we have Geneve encapsulation with the correct VNI (fleet multicast VNI)
+    assert_eq!(
+        meta.outer_encap.vni(),
+        Vni::new(oxide_vpc::api::DEFAULT_MULTICAST_VNI).unwrap(),
+        "Geneve VNI should match DEFAULT_MULTICAST_VNI"
+    );
+
+    // Verify the Geneve multicast option is present with External replication
+    let replication = geneve::extract_multicast_replication(&meta.outer_encap)
+        .expect("Geneve packet should have multicast option");
+    assert_eq!(
+        replication,
+        oxide_vpc::api::Replication::External,
+        "Multicast option should have External replication"
+    );
+}
+
+// Test that TCP + multicast packets are denied (TCP is incompatible with multicast)
+#[test]
+fn test_tcp_multicast_denied() {
+    let g1_cfg = g1_cfg();
+    let mut g1 = oxide_net_setup("g1_port", &g1_cfg, None, None);
+
+    // Create an IPv6 multicast address
+    let mcast_dst = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0x00, 0x03,
+    ]);
+
+    let mcast_underlay = Ipv6Addr::from([
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    g1.m2p.set(
+        mcast_dst.into(),
+        opte::api::MulticastUnderlay::new(mcast_underlay)
+            .expect("ff04::/16 is admin-scoped multicast"),
+    );
+
+    g1.port.start();
+    set!(g1, "port_state=running");
+
+    // Build a TCP packet to the multicast address (should be denied)
+    let mut pkt_m = http_syn3(
+        g1_cfg.guest_mac,
+        g1_cfg.ipv6().private_ip,
+        MacAddr::from([0x33, 0x33, 0x00, 0x01, 0x00, 0x03]),
+        mcast_dst,
+        12345,
+        80,
+    );
+
+    let pkt = parse_outbound(&mut pkt_m, GenericUlp {}).unwrap();
+    let res = g1.port.process(Out, pkt);
+
+    // Verify packet was denied (TCP + multicast is incompatible)
+    assert!(
+        matches!(
+            res,
+            Ok(ProcessResult::Drop { reason: DropReason::Layer { .. } })
+        ),
+        "Expected Drop with Layer reason, got: {res:?}"
+    );
+}
+
+#[test]
+fn test_drop_on_unknown_critical_option() {
+    // Ensure packets with unknown critical Geneve options are rejected during
+    // inbound parsing (fail-closed on unrecognised critical options).
+    //
+    // This test verifies that `parse_inbound()` properly validates Geneve options.
+    //
+    // Structure: Eth + IPv6 + UDP + Geneve + unknown_critical_opt + inner(Eth+IPv4+UDP)
+
+    // Inner packet headers
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x02]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: "10.0.0.1".parse().unwrap(),
+        destination: "10.0.0.2".parse().unwrap(),
+        protocol: IngotIpProto::UDP,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: 0x1337,
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
+
+    // Build inner packet first
+    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    let inner_len = inner_pkt.byte_len();
+
+    // Create an unknown critical Geneve option (class=0xffff, type=0x80)
+    let unknown_critical_opt = GeneveOpt {
+        class: 0xffff,            // Unknown to OPTE
+        option_type: 0x80.into(), // Critical bit set (bit 7)
+        length: 0,                // No option data (0 words)
+        ..Default::default()
+    };
+
+    // Geneve header with the unknown critical option
+    let mut outer_geneve = Geneve {
+        vni: Vni::new(0u32).unwrap(),
+        flags: opte::ingot::geneve::GeneveFlags::CRITICAL_OPTS,
+        ..Default::default()
+    };
+    outer_geneve.opt_len = (unknown_critical_opt.packet_length() >> 2) as u8;
+    outer_geneve.options.push(unknown_critical_opt);
+
+    // UDP length = UDP header + Geneve (header + options) + inner packet
+    let outer_udp = Udp {
+        source: 0x1e61,
+        destination: opte::engine::geneve::GENEVE_PORT,
+        length: (Udp::MINIMUM_LENGTH + outer_geneve.packet_length() + inner_len)
+            as u16,
+        ..Default::default()
+    };
+
+    // IPv6 payload_len = UDP length (everything after IPv6 header)
+    let outer_ip = Ipv6 {
+        source: "fd00::1".parse().unwrap(),
+        destination: "ff05::1:3".parse().unwrap(),
+        next_header: IngotIpProto::UDP,
+        payload_len: outer_udp.length,
+        ..Default::default()
+    };
+
+    // Outer Ethernet header
+    let outer_eth = Ethernet {
+        destination: MacAddr::from([0x33, 0x33, 0x00, 0x00, 0x00, 0x01]),
+        source: MacAddr::from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        ethertype: Ethertype::IPV6,
+    };
+
+    // Use ingot's `Emit` trait to build the outer packet, then append inner packet
+    let mut pkt = MsgBlk::new_ethernet_pkt((
+        outer_eth,
+        outer_ip,
+        outer_udp,
+        outer_geneve,
+    ));
+    pkt.append(inner_pkt);
+
+    // Attempt to parse the packet through VpcParser's parse_inbound, which
+    // invokes validate_options via OxideGeneve::validate
+    let parse_result = common::parse_inbound(&mut pkt, VpcParser {});
+
+    // The parser should reject this packet due to the unrecognised critical option
+    let err = match parse_result {
+        Ok(_) => panic!(
+            "Expected parse error due to unknown critical option, but parsing succeeded"
+        ),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(
+            err,
+            ParseError::UnrecognisedTunnelOpt { class: 0xffff, ty: 0x80 }
+        ),
+        "Expected UnrecognisedTunnelOpt with class=0xffff and ty=0x80, got: {err:?}"
+    );
+}
+
+// Ensure Geneve parsing works correctly when an IPv6 extension header is present
+// before UDP (e.g., Hop-by-Hop). Verifies that the parser correctly follows the
+// IPv6 Next Header chain through extension headers to find Geneve + options.
+//
+// NOTE: This test uses manual byte construction to create a deterministic packet
+// with a minimal 8-byte Hop-by-Hop extension header. This ensures the parser
+// correctly walks the Next Header chain: IPv6 -> HopByHop -> UDP -> Geneve.
+// Manual construction allows us to validate exact wire layout.
+//
+// Packet structure:
+//   - Ethernet header (14 bytes)
+//   - IPv6 header (40 bytes, Next Header = 0x00 Hop-by-Hop)
+//   - Hop-by-Hop extension header (8 bytes, Next Header = 0x11 UDP)
+//   - UDP header (8 bytes, dst port 6081 Geneve)
+//   - Geneve header with multicast option (16 bytes)
+//   - Inner packet (Ethernet + IPv4 + UDP)
+//
+// The test verifies parse success and correct extraction of the Geneve multicast
+// replication option, confirming ingot's parser navigates extension headers correctly.
+#[test]
+fn test_v6_ext_hdr_geneve_offset_ok() {
+    let mut buf: Vec<u8> = Vec::new();
+
+    // Ethernet header (14 bytes)
+    buf.extend_from_slice(&[
+        0x33, 0x33, 0x00, 0x00, 0x00, 0x01, // dst MAC (IPv6 multicast)
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src MAC
+        0x86, 0xdd, // ethertype (IPv6)
+    ]);
+
+    // IPv6 header (40 bytes)
+    let ip6_hdr_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x60, 0x00, 0x00, 0x00, // version(6), class(0), label(0)
+        0x00, 0x00, // payload length (placeholder - updated later)
+        0x00, // next header: Hop-by-Hop (0x00)
+        0x40, // hop limit
+        // source address: fd00::1
+        0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x01, // destination address: ff04::1:ffff
+        0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x01, 0xff, 0xff,
+    ]);
+
+    // Hop-by-Hop extension header (8 bytes)
+    // Format: next_header, hdr_ext_len, options...
+    buf.extend_from_slice(&[
+        0x11, // next header: UDP (0x11)
+        0x00, // header extension length: 0 (means 8 bytes total)
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding options
+    ]);
+
+    // UDP header (8 bytes)
+    let udp_pos = buf.len();
+    buf.extend_from_slice(&[
+        0x1e, 0x61, // source port
+        0x17, 0xc1, // destination port (6081 - Geneve)
+        0x00, 0x00, // length (placeholder - updated later)
+        0x00, 0x00, // checksum
+    ]);
+
+    // Geneve header (8 bytes) with options
+    buf.extend_from_slice(&[
+        0x02, // version(0) + opt_len(2) = 8 bytes of options
+        0x00, // flags
+        0x65, 0x58, // protocol type (0x6558 = Ethernet)
+        0x00, 0x00, 0x00, 0x00, // VNI (0) + reserved
+    ]);
+
+    // Multicast option (8 bytes): class=0x0129 (Oxide), type=0x01, len=1 (4B data)
+    buf.extend_from_slice(&[
+        0x01,
+        0x29, // option class (Oxide)
+        0x01, // option type
+        0x01, // reserved(3 bits) + length(5 bits) = 1 (4 bytes)
+        (oxide_vpc::api::Replication::External as u8) << 6, // replication type
+        0x00,
+        0x00,
+        0x00, // padding
+    ]);
+
+    // Build inner packet using ingot types to ensure proper structure
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x02]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: "10.0.0.1".parse().unwrap(),
+        destination: "10.0.0.2".parse().unwrap(),
+        protocol: IngotIpProto::UDP,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH) as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: 0x1337,
+        length: Udp::MINIMUM_LENGTH as u16,
+        ..Default::default()
+    };
+
+    // Append inner packet bytes
+    let inner_pkt = MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    for chunk in inner_pkt.iter() {
+        buf.extend_from_slice(chunk);
+    }
+
+    // Set UDP and IPv6 payload lengths
+    let udp_len = (buf.len() - udp_pos) as u16;
+    buf[udp_pos + 4] = (udp_len >> 8) as u8;
+    buf[udp_pos + 5] = (udp_len & 0xff) as u8;
+
+    let ip6_payload_len = (buf.len() - (ip6_hdr_pos + 40)) as u16;
+    buf[ip6_hdr_pos + 4] = (ip6_payload_len >> 8) as u8;
+    buf[ip6_hdr_pos + 5] = (ip6_payload_len & 0xff) as u8;
+
+    // Parse through the full pipeline using `parse_inbound()` with VpcParser
+    // This tests that the parser correctly handles IPv6 extension headers and
+    // finds the Geneve header after navigating the extension header chain
+    let mut pkt = MsgBlk::copy(&buf);
+    let parse_result = common::parse_inbound(&mut pkt, VpcParser {});
+
+    // Parsing should succeed
+    let parsed = parse_result.expect("packet should parse successfully");
+
+    // Verify we can extract the multicast replication option
+    let repl =
+        geneve::extract_multicast_replication(&parsed.headers().outer_encap)
+            .expect("multicast option present");
+    assert_eq!(repl, oxide_vpc::api::Replication::External);
 }

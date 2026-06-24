@@ -278,3 +278,9 @@ pub type DumpLayerResp = opte_api::DumpLayerResp<InnerFlowId>;
 pub type DumpUftResp = opte_api::DumpUftResp<InnerFlowId>;
 pub type DumpTcpFlowsResp = opte_api::DumpTcpFlowsResp<InnerFlowId>;
 pub type TcpFlowEntryDump = opte_api::TcpFlowEntryDump<InnerFlowId>;
+
+// Implement ResourceEntry for MulticastUnderlay when the engine feature is enabled.
+// This allows MulticastUnderlay to be used as a MappingResource::Entry in the
+// Mcast2Phys table (see oxide-vpc/engine/overlay.rs).
+#[cfg(feature = "engine")]
+impl crate::engine::rule::ResourceEntry for MulticastUnderlay {}

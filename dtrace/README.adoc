@@ -64,7 +64,15 @@ a|`opte-rule-match.d`
 
 a|`opte-tcp-flow-state.d`
 |Track the TCP flow state changes as they happen. Printing the state
- transition as well as the flow ID.
+transition as well as the flow ID.
+
+a|`opte-mcast-delivery.d`
+|Track multicast Tx/Rx, local same-sled delivery, underlay forwarding, and
+ external forwarding. Also tracks multicast control-plane operations (map
+ set/clear, fwd set/clear, subscribe/unsubscribe, and dumps) to help correlate
+ config changes with dataplane events. Optional toggles are in the script's
+ BEGIN block: `flow_debug` (adds xde_mc_tx entry/return), `suppress_output`
+ (suppress per-event output), and `show_summary` (show aggregations at END).
 
 a|`opte-uft-invalidate.d`
 |Track Unified Flow Table invalidation as it happens. A UFT entry is

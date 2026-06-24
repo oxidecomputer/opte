@@ -14,11 +14,11 @@ use super::headers::HeaderActionModify;
 use super::headers::IpMod;
 use super::headers::IpPush;
 use super::headers::PushAction;
+use super::headers::Valid;
 use super::packet::ParseError;
 use ingot::choice;
 use ingot::ethernet::Ethertype;
 use ingot::ip::IpProtocol;
-use ingot::ip::Ipv4Flags;
 use ingot::types::ByteSlice;
 use ingot::types::Header;
 use ingot::types::InlineHeader;
@@ -118,16 +118,6 @@ impl<V: ByteSlice> ValidL3<V> {
             ValidL3::Ipv6(_) => 0,
         }
         .to_be_bytes()
-    }
-
-    /// Return whether the IP layer has a checksum both structurally
-    /// and that it is non-zero (i.e., not offloaded).
-    #[inline]
-    pub fn has_ip_csum(&self) -> bool {
-        match self {
-            ValidL3::Ipv4(i4) => i4.checksum() != 0,
-            _ => false,
-        }
     }
 
     #[inline]
@@ -275,27 +265,7 @@ impl<T: ByteSlice> HasInnerCksum for L3<T> {
 }
 
 impl<T: ByteSlice> PushAction<L3<T>> for IpPush {
-    fn push(&self) -> L3<T> {
-        match self {
-            IpPush::Ip4(v4) => L3::Ipv4(
-                Ipv4 {
-                    protocol: IpProtocol(u8::from(v4.proto)),
-                    source: v4.src,
-                    destination: v4.dst,
-                    flags: Ipv4Flags::DONT_FRAGMENT,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-            IpPush::Ip6(v6) => L3::Ipv6(
-                Ipv6 {
-                    next_header: IpProtocol(u8::from(v6.proto)),
-                    source: v6.src,
-                    destination: v6.dst,
-                    ..Default::default()
-                }
-                .into(),
-            ),
-        }
+    fn push(value: &Valid<Self>) -> L3<T> {
+        L3Repr::from(value).into()
     }
 }

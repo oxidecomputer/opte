@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use opte::ddi::mblk::MsgBlk;
 use opte::engine::Direction;
@@ -27,6 +27,7 @@ use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
 use opte_test_utils::*;
 use oxide_vpc::api::Route;
+use std::collections::BTreeMap;
 
 pub type TestCase = (MsgBlk, Direction);
 
@@ -92,6 +93,8 @@ impl BenchPacket for UlpProcess {
                     ephemeral_ip: Some("10.60.1.20".parse().unwrap()),
                     floating_ips: vec![],
                 },
+                attached_subnets: BTreeMap::default(),
+                transit_ips: BTreeMap::default(),
             },
             ipv6: Ipv6Cfg {
                 vpc_subnet: "fd00::/64".parse().unwrap(),
@@ -105,6 +108,8 @@ impl BenchPacket for UlpProcess {
                     ephemeral_ip: Some("2001:db8::2".parse().unwrap()),
                     floating_ips: vec![],
                 },
+                attached_subnets: BTreeMap::default(),
+                transit_ips: BTreeMap::default(),
             },
         };
 
@@ -270,18 +275,13 @@ impl BenchPacketInstance for UlpProcessInstance {
         let out_pkt = match self.direction {
             Direction::Out => inner_pkt,
             Direction::In => {
-                let bsvc_phys = TestIpPhys {
-                    ip: BS_IP_ADDR,
-                    mac: BS_MAC_ADDR,
-                    vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
-                };
                 let guest_phys = TestIpPhys {
                     ip: self.cfg.phys_ip,
                     mac: self.cfg.guest_mac,
                     vni: self.cfg.vni,
                 };
 
-                encap_external(inner_pkt, bsvc_phys, guest_phys)
+                encap_external(inner_pkt, *BSVC_PHYS, guest_phys)
             }
         };
 
