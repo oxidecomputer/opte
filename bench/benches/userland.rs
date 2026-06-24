@@ -36,11 +36,8 @@ use std::hint::black_box;
 //
 // Timing/memory measurements are selected by `config` in the below
 // `criterion_group!` invocations.
-pub fn block<M: MeasurementInfo + 'static>(
-    c: &mut Criterion<M>,
-    do_parse: bool,
-) {
-    let all_tests: Vec<Box<dyn BenchPacket>> = vec![
+pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
+    let all_tests: &[Box<dyn BenchPacket>] = &[
         Box::new(Dhcp4),
         Box::new(Dhcp6),
         Box::new(Icmp4),
@@ -49,7 +46,7 @@ pub fn block<M: MeasurementInfo + 'static>(
         Box::new(ULP_SLOW_PATH),
     ];
 
-    for experiment in &all_tests {
+    for experiment in all_tests {
         for case in experiment.test_cases() {
             if do_parse {
                 test_parse(c, &**experiment, &*case);
@@ -59,16 +56,16 @@ pub fn block<M: MeasurementInfo + 'static>(
     }
 }
 
-pub fn parse_and_process<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
+pub fn parse_and_process<M: MeasurementInfo>(c: &mut Criterion<M>) {
     block(c, true)
 }
 
-pub fn process_only<M: MeasurementInfo + 'static>(c: &mut Criterion<M>) {
+pub fn process_only<M: MeasurementInfo>(c: &mut Criterion<M>) {
     block(c, false)
 }
 
 // Run benchmarks for parsing a given type of packet.
-pub fn test_parse<M: MeasurementInfo + 'static>(
+pub fn test_parse<M: MeasurementInfo>(
     c: &mut Criterion<M>,
     experiment: &dyn BenchPacket,
     case: &dyn BenchPacketInstance,
@@ -131,7 +128,7 @@ pub fn test_parse<M: MeasurementInfo + 'static>(
 
 // Run benchmarks for processing (e.g., generating hairpins, rewriting
 // fields, encapsulation) for a given type of packet.
-pub fn test_handle<M: MeasurementInfo + 'static>(
+pub fn test_handle<M: MeasurementInfo>(
     c: &mut Criterion<M>,
     experiment: &dyn BenchPacket,
     case: &dyn BenchPacketInstance,
