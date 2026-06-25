@@ -211,7 +211,6 @@ use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
-use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
 use opte::api::CmdOk;
@@ -266,6 +265,7 @@ use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
 use opte::engine::rule::MappingResource;
+use opte::provider::Providers;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::ClearMcast2PhysReq;
@@ -535,7 +535,7 @@ pub struct XdeUnderlayPort {
 
 struct XdeState {
     management_lock: TokenLock<XdeMgmt>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
     vpc_map: Arc<overlay::VpcMappings>,
     m2p: Arc<overlay::Mcast2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
@@ -581,7 +581,8 @@ fn get_xde_state() -> &'static XdeState {
 
 impl XdeState {
     fn new() -> Self {
-        let ectx = Arc::new(ExecCtx { log: Box::new(opte::KernelLog {}) });
+        let ectx =
+            Arc::new(Providers { log: Box::new(opte::provider::KernelLog) });
         let dev_map = Arc::new(KRwLock::new(DevMap::default()));
         let devs = ReadOnlyDevMap::new(dev_map.clone());
 
@@ -1115,6 +1116,26 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::DumpMcast2Phys => {
             let resp = dump_m2p_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ListRootStat => {
+            let resp = list_root_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ListFlowStat => {
+            let resp = list_flow_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpRootStat => {
+            let resp = dump_root_stats_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpFlowStat => {
+            let resp = dump_flow_stats_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -2116,7 +2137,7 @@ fn guest_loopback(
         }
     };
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
@@ -2811,7 +2832,7 @@ fn xde_mc_tx_one<'a>(
     };
     let old_len = parsed_pkt.len();
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
 
     // Extract inner source and destination IPs for potential multicast processing
     let (inner_src_ip, inner_dst_ip) = match &meta.inner_l3 {
@@ -3243,7 +3264,7 @@ fn new_port(
     m2p: Arc<overlay::Mcast2Phys>,
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
-    ectx: Arc<ExecCtx>,
+    ectx: Arc<Providers>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
     let name_cstr = match CString::new(name.as_str()) {
@@ -3260,10 +3281,10 @@ fn new_port(
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE)?;
-    router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&mut pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE)?;
+    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&mut pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -3408,7 +3429,7 @@ fn xde_rx_one(
         }
     };
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ip6_dst = meta.outer_v6.destination();
@@ -3597,7 +3618,7 @@ fn xde_rx_one_direct(
     let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
         .expect("this is a reparse of a known-valid packet");
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {
@@ -3687,7 +3708,7 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::add_entry(&dev.port, req.dest, req.target, req.class)
+    router::add_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -3701,7 +3722,7 @@ fn del_router_entry_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::del_entry(&dev.port, req.dest, req.target, req.class)
+    router::del_entry(&dev.port, req.route)
 }
 
 #[unsafe(no_mangle)]
@@ -3713,7 +3734,7 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::add_fw_rule(&dev.port, &req)?;
+    firewall::add_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -3726,7 +3747,7 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::rem_fw_rule(&dev.port, &req)?;
+    firewall::rem_fw_rule(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -3739,7 +3760,7 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::set_fw_rules(&dev.port, &req)?;
+    firewall::set_fw_rules(&dev.port, req)?;
     Ok(NoResp::default())
 }
 
@@ -4393,6 +4414,88 @@ fn detach_subnet_hdlr(
         &state.vpc_map,
         req,
     )
+}
+
+#[unsafe(no_mangle)]
+fn list_root_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::ListRootStatResp, OpteError> {
+    let req: opte::api::ListRootStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    Ok(opte::api::ListRootStatResp {
+        root_ids: dev.port.read_stats(|stats| stats.all_root_ids().collect()),
+    })
+}
+
+#[unsafe(no_mangle)]
+fn list_flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::ListFlowStatResp<InnerFlowId>, OpteError> {
+    let req: opte::api::ListFlowStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    Ok(opte::api::ListFlowStatResp {
+        flow_ids: dev.port.read_stats(|stats| stats.all_flow_pairs().collect()),
+    })
+}
+
+#[unsafe(no_mangle)]
+fn dump_root_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::DumpRootStatResp, OpteError> {
+    let req: opte::api::DumpRootStatReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let root_stats = dev.port.read_stats(|stats| {
+        if req.root_ids.is_empty() {
+            stats.all_root_stats().collect()
+        } else {
+            req.root_ids
+                .iter()
+                .filter_map(|k| stats.root_stat(k).map(|v| (*k, v)))
+                .collect()
+        }
+    });
+
+    Ok(opte::api::DumpRootStatResp { root_stats })
+}
+
+#[unsafe(no_mangle)]
+fn dump_flow_stats_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<opte::api::DumpFlowStatResp<InnerFlowId>, OpteError> {
+    let req: opte::api::DumpFlowStatReq<InnerFlowId> = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+
+    let flow_stats = dev.port.read_stats(|stats| {
+        if req.flow_ids.is_empty() {
+            stats.all_flow_stats().collect()
+        } else {
+            req.flow_ids
+                .iter()
+                .filter_map(|k| stats.flow_stat(k).map(|v| (*k, v)))
+                .collect()
+        }
+    });
+
+    Ok(opte::api::DumpFlowStatResp { flow_stats })
 }
 
 #[unsafe(no_mangle)]

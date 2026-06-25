@@ -11,8 +11,10 @@
 use super::VpcNetwork;
 use super::firewall as fw;
 use crate::api::DelRouterEntryResp;
+use crate::api::Route;
 use crate::api::RouterClass;
 use crate::api::RouterTarget;
+use crate::api::stat::*;
 use crate::cfg::VpcCfg;
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -241,7 +243,7 @@ fn compute_rule_priority(cidr: &IpCidr, class: RouterClass) -> u16 {
 }
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     _cfg: &VpcCfg,
     ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
@@ -251,12 +253,13 @@ pub fn setup(
     // Outbound: If there is no matching route, then the packet should
     // make it no further.
     let actions = LayerActions {
-        actions: vec![],
         default_in: DefaultAction::Allow,
         default_out: DefaultAction::Deny,
+        default_out_stat_id: Some(ROUTER_NOROUTE),
+        ..Default::default()
     };
 
-    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb, actions, ft_limit);
 
     // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
     // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
@@ -267,7 +270,7 @@ pub fn setup(
         Predicate::InnerDstIp4(vec![Ipv4AddrMatch::Prefix(Ipv4Cidr::MCAST)]),
         Predicate::InnerDstIp6(vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::MCAST)]),
     ]));
-    layer.add_rule(Direction::Out, mcast_out.finalize());
+    layer.add_rule(Direction::Out, mcast_out.finalize(), pb.stats_mut());
 
     pb.add_layer(layer, Pos::After(fw::FW_LAYER_NAME))
 }
@@ -290,11 +293,9 @@ fn valid_router_dest_target_pair(dest: &IpCidr, target: &RouterTarget) -> bool {
     )
 }
 
-fn make_rule(
-    dest: IpCidr,
-    target: RouterTarget,
-    class: RouterClass,
-) -> Result<Rule<Finalized>, OpteError> {
+fn make_rule(route: Route) -> Result<Rule<Finalized>, OpteError> {
+    let Route { dest, target, class, stat_id } = route;
+
     // Reject router entries with multicast destination CIDRs.
     // Multicast operates fleet-wide via M2P mappings and subscriptions,
     // not through VPC routing. Router layer allows multicast through
@@ -382,7 +383,7 @@ fn make_rule(
     };
 
     let priority = compute_rule_priority(&dest, class);
-    let mut rule = Rule::new(priority, action);
+    let mut rule = Rule::new_with_id(priority, action, stat_id);
     rule.add_predicate(predicate);
 
     Ok(rule.finalize())
@@ -394,11 +395,9 @@ fn make_rule(
 /// destination [`IpCidr`] as well as its paired [`RouterTarget`].
 pub fn del_entry(
     port: &Port<VpcNetwork>,
-    dest: IpCidr,
-    target: RouterTarget,
-    class: RouterClass,
+    route: Route,
 ) -> Result<DelRouterEntryResp, OpteError> {
-    let rule = make_rule(dest, target, class)?;
+    let rule = make_rule(route)?;
     let maybe_id = port.find_rule(ROUTER_LAYER_NAME, Direction::Out, &rule)?;
     match maybe_id {
         Some(id) => {
@@ -415,11 +414,9 @@ pub fn del_entry(
 /// Route the [`IpCidr`] to the specified [`RouterTarget`].
 pub fn add_entry(
     port: &Port<VpcNetwork>,
-    dest: IpCidr,
-    target: RouterTarget,
-    class: RouterClass,
+    route: Route,
 ) -> Result<NoResp, OpteError> {
-    let rule = make_rule(dest, target, class)?;
+    let rule = make_rule(route)?;
     port.add_rule(ROUTER_LAYER_NAME, Direction::Out, rule)?;
     Ok(NoResp::default())
 }
@@ -427,14 +424,12 @@ pub fn add_entry(
 /// Replace the current set of router entries with the set passed in.
 pub fn replace(
     port: &Port<VpcNetwork>,
-    entries: Vec<(IpCidr, RouterTarget, RouterClass)>,
+    entries: &[Route],
 ) -> Result<NoResp, OpteError> {
-    let mut out_rules = Vec::with_capacity(entries.len());
-    for (cidr, target, class) in entries {
-        out_rules.push(make_rule(cidr, target, class)?);
-    }
+    let out_rules: Result<Vec<_>, _> =
+        entries.iter().copied().map(make_rule).collect();
 
-    port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules)?;
+    port.set_rules(ROUTER_LAYER_NAME, vec![], out_rules?)?;
     Ok(NoResp::default())
 }
 

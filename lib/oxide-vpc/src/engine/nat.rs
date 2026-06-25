@@ -11,6 +11,7 @@ use super::router::RouterTargetInternal;
 use crate::api::ExternalIpCfg;
 use crate::api::InternetGatewayMap;
 use crate::api::SetExternalIpsReq;
+use crate::api::stat::*;
 use crate::cfg::IpCfg;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
@@ -104,14 +105,16 @@ pub fn setup(
     // but no valid replacement source IP must be dropped, otherwise it will
     // be forwarded to boundary services.
     let actions = LayerActions {
-        actions: vec![],
         default_in: DefaultAction::Allow,
+        default_in_stat_id: Some(NAT_NONE),
         default_out: DefaultAction::Allow,
+        default_out_stat_id: Some(NAT_NONE),
+        ..Default::default()
     };
 
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAT_LAYER_NAME, pb, actions, ft_limit);
     let (in_rules, out_rules) = create_nat_rules(cfg, None)?;
-    layer.set_rules(in_rules, out_rules);
+    layer.set_rules(in_rules, out_rules, pb.stats_mut());
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
 }
 
@@ -315,8 +318,11 @@ fn setup_ipv4_nat(
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
-            let mut rule =
-                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+            let mut rule = Rule::new_with_id(
+                SNAT_PRIORITY,
+                Action::Stateful(snat.clone()),
+                Some(NAT_SNAT_V4),
+            );
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV4),
@@ -501,8 +507,11 @@ fn setup_ipv6_nat(
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
-            let mut rule =
-                Rule::new(SNAT_PRIORITY, Action::Stateful(snat.clone()));
+            let mut rule = Rule::new_with_id(
+                SNAT_PRIORITY,
+                Action::Stateful(snat.clone()),
+                Some(NAT_SNAT_V6),
+            );
 
             rule.add_predicate(Predicate::InnerEtherType(vec![
                 EtherTypeMatch::Exact(ETHER_TYPE_IPV6),

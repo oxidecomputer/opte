@@ -58,6 +58,7 @@
 use crate::api::AttachedSubnetConfig;
 use crate::api::MacAddr;
 use crate::api::TransitIpConfig;
+use crate::api::stat::*;
 use crate::cfg::Ipv4Cfg;
 use crate::cfg::Ipv6Cfg;
 use crate::cfg::VpcCfg;
@@ -80,7 +81,7 @@ use opte::engine::layer::DefaultAction;
 use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::MblkPacketData;
+use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
@@ -120,7 +121,7 @@ struct BuildCtx<'a> {
 }
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
@@ -134,12 +135,14 @@ pub fn setup(
     // Since we are acting as a gateway we also rewrite the source MAC address
     // for inbound traffic to be that of the gateway.
     let actions = LayerActions {
-        actions: vec![],
         default_in: DefaultAction::Deny,
+        default_in_stat_id: Some(GATEWAY_NOSPOOF_IN),
         default_out: DefaultAction::Deny,
+        default_out_stat_id: Some(GATEWAY_NOSPOOF_IN),
+        ..Default::default()
     };
 
-    let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAME, pb, actions, ft_limit);
 
     let mut ctx = BuildCtx {
         in_rules: vec![],
@@ -156,7 +159,7 @@ pub fn setup(
         setup_ipv6(&mut ctx, ipv6_cfg)?;
     }
 
-    layer.set_rules(ctx.in_rules, ctx.out_rules);
+    layer.set_rules(ctx.in_rules, ctx.out_rules, pb.stats_mut());
 
     pb.add_layer(layer, Pos::Before("firewall"))
 }
@@ -200,7 +203,7 @@ impl StaticAction for RewriteSrcMac {
         &self,
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        _packet_meta: &MblkPacketData,
+        _packet_meta: MblkPacketDataView,
         _action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         Ok(AllowOrDeny::Allow(HdrTransform {

@@ -16,8 +16,8 @@ use super::packet::BodyTransformError;
 use super::packet::FLOW_ID_DEFAULT;
 use super::packet::InnerFlowId;
 use super::packet::MblkFullParsed;
-use super::packet::MblkPacketData;
 use super::packet::Packet;
+use super::port::PortBuilder;
 use super::port::Transforms;
 use super::port::meta::ActionMeta;
 use super::rule;
@@ -29,8 +29,9 @@ use super::rule::GenBtError;
 use super::rule::HdrTransformError;
 use super::rule::Rule;
 use super::rule::ht_probe;
-use crate::ExecCtx;
-use crate::LogLevel;
+use super::stat::InternalStat;
+use super::stat::RootStat;
+use super::stat::StatTree;
 use crate::api::DumpLayerResp;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
@@ -40,7 +41,10 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::ExecCtx;
 use crate::engine::flow_table::FlowState;
+use crate::provider::LogLevel;
+use crate::provider::Providers;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -60,6 +64,7 @@ use opte_api::Direction;
 use opte_api::RuleDump;
 use opte_api::RuleId;
 use opte_api::RuleTableEntryDump;
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum LayerError {
@@ -161,9 +166,36 @@ pub enum LftError {
 }
 
 #[derive(Clone, Debug)]
+struct LftInEntry {
+    action_desc: ActionDescEntry,
+    stat: Arc<InternalStat>,
+}
+
+impl Display for LftInEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.action_desc)
+    }
+}
+
+impl Dump for LftInEntry {
+    type DumpVal = ActionDescEntryDump;
+
+    fn dump(&self, hits: u64) -> Self::DumpVal {
+        ActionDescEntryDump { hits, summary: self.to_string() }
+    }
+}
+
+impl FlowState for LftInEntry {
+    fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
+        [].into_iter()
+    }
+}
+
+#[derive(Clone, Debug)]
 struct LftOutEntry {
     in_flow_pair: InnerFlowId,
     action_desc: ActionDescEntry,
+    stat: Arc<InternalStat>,
 }
 
 impl LftOutEntry {
@@ -195,7 +227,7 @@ impl FlowState for LftOutEntry {
 struct LayerFlowTable {
     limit: NonZeroU32,
     count: u32,
-    ft_in: FlowTable<ActionDescEntry>,
+    ft_in: FlowTable<LftInEntry>,
     ft_out: FlowTable<LftOutEntry>,
 }
 
@@ -212,14 +244,20 @@ impl LayerFlowTable {
         action_desc: ActionDescEntry,
         in_flow: InnerFlowId,
         out_flow: InnerFlowId,
-    ) -> (Arc<FlowEntry<ActionDescEntry>>, Arc<FlowEntry<LftOutEntry>>) {
+        stat: Arc<InternalStat>,
+    ) -> (Arc<FlowEntry<LftInEntry>>, Arc<FlowEntry<LftOutEntry>>) {
         // We add unchecked because the limit is now enforced by
         // LayerFlowTable, not the individual flow tables. Because these flow
         // entries must be retired in pairs (and we want, e.g., inbound flow
         // hits to sustain the outbound flow and vice-versa) we create the out
         // entry as a _partner_ of the inbound one.
-        let in_lft = self.ft_in.add_unchecked(in_flow, action_desc.clone());
-        let out_entry = LftOutEntry { in_flow_pair: in_flow, action_desc };
+        let in_entry = LftInEntry {
+            action_desc: action_desc.clone(),
+            stat: Arc::clone(&stat),
+        };
+        let in_lft = self.ft_in.add_unchecked(in_flow, in_entry);
+        let out_entry =
+            LftOutEntry { in_flow_pair: in_flow, action_desc, stat };
         let out_lft =
             self.ft_out.add_unchecked_partner(out_flow, out_entry, &in_lft);
         self.count += 1;
@@ -249,7 +287,7 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
+    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, LftInEntry> {
         match self.ft_in.get(flow) {
             Some(entry) => {
                 entry.hit();
@@ -282,7 +320,7 @@ impl LayerFlowTable {
     fn remove_in(
         &mut self,
         flow: &InnerFlowId,
-    ) -> Option<Arc<FlowEntry<ActionDescEntry>>> {
+    ) -> Option<Arc<FlowEntry<LftInEntry>>> {
         self.ft_in.remove(flow)
     }
 
@@ -354,8 +392,9 @@ pub enum EntryState<'a, S: FlowState> {
 /// reasonable to open this up to be any [`Action`], if such a use
 /// case were to present itself. For now, we stay conservative, and
 /// supply only what the current consumers need.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default)]
 pub enum DefaultAction {
+    #[default]
     Allow,
     StatefulAllow,
     Deny,
@@ -414,7 +453,7 @@ impl FlowState for ActionDescEntry {
 ///
 /// This describes the actions a layer's rules can take as well as the
 /// [`DefaultAction`] to take when a rule doesn't match.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LayerActions {
     /// The list of actions shared among the layer's rules. An action
     /// doesn't have to be shared, each rule is free to create its
@@ -426,9 +465,15 @@ pub struct LayerActions {
     /// direction.
     pub default_in: DefaultAction,
 
+    /// The stats ID to attach to the default-in action.
+    pub default_in_stat_id: Option<Uuid>,
+
     /// The default action to take if no rule matches in the outbound
     /// direction.
     pub default_out: DefaultAction,
+
+    /// The stats ID to attach to the default-in action.
+    pub default_out_stat_id: Option<Uuid>,
 }
 
 #[derive(KStatProvider)]
@@ -515,8 +560,10 @@ pub struct Layer {
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
+    default_in_stat: Arc<RootStat>,
     default_out: DefaultAction,
     default_out_hits: u64,
+    default_out_stat: Arc<RootStat>,
     ft: LayerFlowTable,
     ft_cstr: CString,
     rules_in: RuleTable,
@@ -530,15 +577,20 @@ impl Layer {
         self.actions.get(idx).cloned()
     }
 
-    pub fn add_rule(&mut self, dir: Direction, rule: Rule<Finalized>) {
+    pub fn add_rule(
+        &mut self,
+        dir: Direction,
+        rule: Rule<Finalized>,
+        stats: &mut StatTree,
+    ) {
         match dir {
             Direction::Out => {
-                self.rules_out.add(rule);
+                self.rules_out.add(rule, stats);
                 self.stats.vals.out_rules += 1;
             }
 
             Direction::In => {
-                self.rules_in.add(rule);
+                self.rules_in.add(rule, stats);
                 self.stats.vals.in_rules += 1;
             }
         }
@@ -749,18 +801,24 @@ impl Layer {
 
     pub fn new(
         name: &'static str,
-        port: &str,
+        port: &mut PortBuilder,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
-        let port_c = CString::new(port).unwrap();
+        let stats = port.stats_mut();
+        let default_in_stat = stats.new_root(actions.default_in_stat_id);
+        let default_out_stat = stats.new_root(actions.default_out_stat_id);
+
+        let port_name = port.name();
+
+        let port_c = CString::new(port_name).unwrap();
         let name_c = CString::new(name).unwrap();
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
         let stats = KStatNamed::new(
             "xde",
-            &format!("{port}_{name}"),
+            &format!("{port_name}_{name}"),
             LayerStats::new(),
         )
         .unwrap();
@@ -771,15 +829,17 @@ impl Layer {
             actions: actions.actions,
             default_in: actions.default_in,
             default_in_hits: 0,
+            default_in_stat,
             default_out: actions.default_out,
             default_out_hits: 0,
+            default_out_stat,
             name,
             name_c,
             port_c,
-            ft: LayerFlowTable::new(port, name, ft_limit),
+            ft: LayerFlowTable::new(port_name, name, ft_limit),
             ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
-            rules_in: RuleTable::new(port, name, Direction::In),
-            rules_out: RuleTable::new(port, name, Direction::Out),
+            rules_in: RuleTable::new(port_name, name, Direction::In),
+            rules_out: RuleTable::new(port_name, name, Direction::Out),
             rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
         }
@@ -838,18 +898,18 @@ impl Layer {
 
     pub(crate) fn process(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         dir: Direction,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
-        use Direction::*;
         let flow_before = *pkt.flow();
         self.layer_process_entry_probe(dir, pkt.flow());
+        pkt.meta_internal_mut().stats.new_layer();
         let res = match dir {
-            Out => self.process_out(ectx, pkt, xforms, ameta),
-            In => self.process_in(ectx, pkt, xforms, ameta),
+            Direction::Out => self.process_out(ectx, pkt, xforms, ameta),
+            Direction::In => self.process_in(ectx, pkt, xforms, ameta),
         };
         self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
@@ -857,13 +917,13 @@ impl Layer {
 
     fn process_in(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *pkt.flow() == FLOW_ID_DEFAULT {
+        if pkt.flow() == &FLOW_ID_DEFAULT {
             return self.process_in_rules(ectx, pkt, xforms, ameta);
         }
 
@@ -871,13 +931,14 @@ impl Layer {
         let flow = *pkt.flow();
         let action = match self.ft.get_in(&flow) {
             EntryState::Dirty(action) => {
-                if let ActionDescEntry::Desc(desc) = action.state()
+                let state = action.state();
+                if let ActionDescEntry::Desc(desc) = &state.action_desc
                     && desc.is_valid()
                 {
-                    let desc = Arc::clone(desc);
+                    let state = state.clone();
                     pkt.record_lft(Arc::clone(action) as _);
                     self.ft.mark_clean(Direction::In, &flow);
-                    Some(ActionDescEntry::Desc(desc))
+                    Some(state)
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
@@ -894,13 +955,18 @@ impl Layer {
         };
 
         match action {
-            Some(ActionDescEntry::NoOp) => {
+            Some(LftInEntry { action_desc: ActionDescEntry::NoOp, stat }) => {
                 self.stats.vals.in_lft_hit += 1;
+                pkt.meta_internal_mut().stats.push(stat.into());
                 Ok(LayerResult::Allow)
             }
 
-            Some(ActionDescEntry::Desc(desc)) => {
+            Some(LftInEntry {
+                action_desc: ActionDescEntry::Desc(desc),
+                stat,
+            }) => {
                 self.stats.vals.in_lft_hit += 1;
+                pkt.meta_internal_mut().stats.push(stat.into());
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In, ameta);
                 pkt.hdr_transform(&ht)?;
@@ -913,10 +979,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body()
-                    && let Some(bt) =
-                        desc.gen_bt(Direction::In, pkt.meta(), body_segs)?
-                {
+                if let Some(bt) = desc.gen_bt(Direction::In, pkt.meta())? {
                     pkt.body_transform(Direction::In, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -933,7 +996,7 @@ impl Layer {
 
     fn process_in_rules(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -941,16 +1004,19 @@ impl Layer {
         use Direction::In;
 
         self.stats.vals.in_lft_miss += 1;
-        let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
+        let rule = self.rules_in.find_match(pkt.flow(), pkt, ameta);
 
-        let action = if let Some(rule) = rule {
+        let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.in_rule_match += 1;
-            rule.action()
+            (rule.rule.action(), Arc::clone(&rule.stat))
         } else {
             self.stats.vals.in_rule_nomatch += 1;
             self.default_in_hits += 1;
-            self.default_in.into()
+            (self.default_in.into(), Arc::clone(&self.default_in_stat))
         };
+
+        pkt.meta_internal_mut().stats.push(stat.into());
+        let flow_before = *pkt.flow();
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -959,13 +1025,21 @@ impl Layer {
                 let write_to = self.check_for_space(In)?;
                 self.complete_eviction(write_to);
 
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
+
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
                 // the traffic, and the "bottom" of the layer
                 // represents how the network sees the traffic.
+                //
+                // No transformation occurs in a `StatefulAllow`, unlike
+                // `Stateful(x)`. The mirror flow is computed from the
+                // initial state.
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
-                let (in_lft, _) = self.ft.add_pair(desc, *pkt.flow(), flow_out);
+                let (in_lft, _) =
+                    self.ft.add_pair(desc, *pkt.flow(), flow_out, stat);
                 pkt.record_lft(in_lft);
                 self.stats.vals.flows += 1;
                 Ok(LayerResult::Allow)
@@ -974,7 +1048,7 @@ impl Layer {
             Action::Deny => {
                 self.stats.vals.in_deny += 1;
                 let reason = if rule.is_some() {
-                    self.rule_deny_probe(In, pkt.flow());
+                    self.rule_deny_probe(In, &flow_before);
                     DenyReason::Rule
                 } else {
                     DenyReason::Default
@@ -983,42 +1057,48 @@ impl Layer {
                 Ok(LayerResult::Deny { name: self.name, reason })
             }
 
-            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
-                Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
+            Action::Meta(action) => {
+                match action.mod_meta(&flow_before, ameta) {
+                    Ok(res) => match res {
+                        AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Action,
-                    }),
-                },
-
-                Err(msg) => Err(LayerError::ModMeta(msg)),
-            },
-
-            Action::Static(action) => {
-                let ht = match action.gen_ht(In, pkt.flow(), pkt.meta(), ameta)
-                {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(ht) => ht,
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
-                        }
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
                     },
 
-                    Err(e) => {
-                        self.record_gen_ht_failure(ectx, In, pkt.flow(), &e);
-                        return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
-                            err: e,
-                        });
-                    }
-                };
+                    Err(msg) => Err(LayerError::ModMeta(msg)),
+                }
+            }
 
-                let flow_before = *pkt.flow();
+            Action::Static(action) => {
+                let ht =
+                    match action.gen_ht(In, &flow_before, pkt.meta(), ameta) {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(ht) => ht,
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_ht_failure(
+                                ectx.user_ctx,
+                                In,
+                                &flow_before,
+                                &e,
+                            );
+                            return Err(LayerError::GenHdrTransform {
+                                layer: self.name,
+                                err: e,
+                            });
+                        }
+                    };
+
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1064,7 +1144,8 @@ impl Layer {
                 // available, then we must fail until one opens up.
                 let write_to = self.check_for_space(In)?;
 
-                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
+                let flow = *pkt.flow();
+                let desc = match action.gen_desc(&flow, pkt.meta(), ameta) {
                     Ok(aord) => match aord {
                         AllowOrDeny::Allow(desc) => desc,
 
@@ -1077,15 +1158,24 @@ impl Layer {
                     },
 
                     Err(e) => {
-                        self.record_gen_desc_failure(ectx, In, pkt.flow(), &e);
+                        self.record_gen_desc_failure(
+                            ectx.user_ctx,
+                            In,
+                            pkt.flow(),
+                            &e,
+                        );
                         return Err(LayerError::GenDesc(e));
                     }
                 };
 
                 self.complete_eviction(write_to);
 
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
+
                 let flow_before = *pkt.flow();
                 let ht_in = desc.gen_ht(In, ameta);
+
                 pkt.hdr_transform(&ht_in)?;
                 xforms.hdr.push(ht_in);
                 ht_probe(
@@ -1096,9 +1186,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body()
-                    && let Some(bt) = desc.gen_bt(In, pkt.meta(), body_segs)?
-                {
+                if let Some(bt) = desc.gen_bt(In, pkt.meta())? {
                     pkt.body_transform(In, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1115,6 +1203,7 @@ impl Layer {
                     ActionDescEntry::Desc(desc),
                     flow_before,
                     flow_out,
+                    stat,
                 );
                 pkt.record_lft(in_lft);
                 self.stats.vals.flows += 1;
@@ -1143,13 +1232,13 @@ impl Layer {
 
     fn process_out(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
         // We have no FlowId, thus there can be no FlowTable entry.
-        if *pkt.flow() == FLOW_ID_DEFAULT {
+        if pkt.flow() == &FLOW_ID_DEFAULT {
             return self.process_out_rules(ectx, pkt, xforms, ameta);
         }
 
@@ -1157,13 +1246,14 @@ impl Layer {
         let flow = *pkt.flow();
         let action = match self.ft.get_out(&flow) {
             EntryState::Dirty(action) => {
+                let state = action.state();
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
-                    let desc = Arc::clone(desc);
+                    let state = state.clone();
                     pkt.record_lft(Arc::clone(action) as _);
                     self.ft.mark_clean(Direction::Out, &flow);
-                    Some(ActionDescEntry::Desc(desc))
+                    Some(state)
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
@@ -1174,19 +1264,29 @@ impl Layer {
             }
             EntryState::Clean(action) => {
                 pkt.record_lft(Arc::clone(action) as _);
-                Some(action.state().action_desc.clone())
+                Some(action.state().clone())
             }
             EntryState::None => None,
         };
 
         match action {
-            Some(ActionDescEntry::NoOp) => {
+            Some(LftOutEntry {
+                action_desc: ActionDescEntry::NoOp,
+                stat,
+                ..
+            }) => {
                 self.stats.vals.out_lft_hit += 1;
+                pkt.meta_internal_mut().stats.push(stat.into());
                 Ok(LayerResult::Allow)
             }
 
-            Some(ActionDescEntry::Desc(desc)) => {
+            Some(LftOutEntry {
+                action_desc: ActionDescEntry::Desc(desc),
+                stat,
+                ..
+            }) => {
                 self.stats.vals.out_lft_hit += 1;
+                pkt.meta_internal_mut().stats.push(stat.into());
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out, ameta);
                 pkt.hdr_transform(&ht)?;
@@ -1199,10 +1299,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body()
-                    && let Some(bt) =
-                        desc.gen_bt(Direction::Out, pkt.meta(), body_segs)?
-                {
+                if let Some(bt) = desc.gen_bt(Direction::Out, pkt.meta())? {
                     pkt.body_transform(Direction::Out, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1219,7 +1316,7 @@ impl Layer {
 
     fn process_out_rules(
         &mut self,
-        ectx: &ExecCtx,
+        ectx: &mut ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
@@ -1227,16 +1324,19 @@ impl Layer {
         use Direction::Out;
 
         self.stats.vals.out_lft_miss += 1;
-        let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
+        let rule = self.rules_out.find_match(pkt.flow(), pkt, ameta);
 
-        let action = if let Some(rule) = rule {
+        let (action, stat) = if let Some(rule) = rule {
             self.stats.vals.out_rule_match += 1;
-            rule.action()
+            (rule.rule.action(), Arc::clone(&rule.stat))
         } else {
             self.stats.vals.out_rule_nomatch += 1;
             self.default_out_hits += 1;
-            self.default_out.into()
+            (self.default_out.into(), Arc::clone(&self.default_out_stat))
         };
+
+        pkt.meta_internal_mut().stats.push(stat.into());
+        let flow_before = *pkt.flow();
 
         match action {
             Action::Allow => Ok(LayerResult::Allow),
@@ -1245,6 +1345,8 @@ impl Layer {
                 let write_to = self.check_for_space(Out)?;
                 self.complete_eviction(write_to);
 
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
                 // (outbound) of layer represents how the client sees
@@ -1257,6 +1359,7 @@ impl Layer {
                     ActionDescEntry::NoOp,
                     flow_in,
                     *pkt.flow(),
+                    stat,
                 );
                 pkt.record_lft(out_lft);
                 self.stats.vals.flows += 1;
@@ -1266,7 +1369,7 @@ impl Layer {
             Action::Deny => {
                 self.stats.vals.out_deny += 1;
                 let reason = if rule.is_some() {
-                    self.rule_deny_probe(Out, pkt.flow());
+                    self.rule_deny_probe(Out, &flow_before);
                     DenyReason::Rule
                 } else {
                     DenyReason::Default
@@ -1275,42 +1378,48 @@ impl Layer {
                 Ok(LayerResult::Deny { name: self.name, reason })
             }
 
-            Action::Meta(action) => match action.mod_meta(pkt.flow(), ameta) {
-                Ok(res) => match res {
-                    AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
+            Action::Meta(action) => {
+                match action.mod_meta(&flow_before, ameta) {
+                    Ok(res) => match res {
+                        AllowOrDeny::Allow(_) => Ok(LayerResult::Allow),
 
-                    AllowOrDeny::Deny => Ok(LayerResult::Deny {
-                        name: self.name,
-                        reason: DenyReason::Action,
-                    }),
-                },
-
-                Err(msg) => Err(LayerError::ModMeta(msg)),
-            },
-
-            Action::Static(action) => {
-                let ht = match action.gen_ht(Out, pkt.flow(), pkt.meta(), ameta)
-                {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(ht) => ht,
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
-                        }
+                        AllowOrDeny::Deny => Ok(LayerResult::Deny {
+                            name: self.name,
+                            reason: DenyReason::Action,
+                        }),
                     },
 
-                    Err(e) => {
-                        self.record_gen_ht_failure(ectx, Out, pkt.flow(), &e);
-                        return Err(LayerError::GenHdrTransform {
-                            layer: self.name,
-                            err: e,
-                        });
-                    }
-                };
+                    Err(msg) => Err(LayerError::ModMeta(msg)),
+                }
+            }
 
-                let flow_before = *pkt.flow();
+            Action::Static(action) => {
+                let ht =
+                    match action.gen_ht(Out, &flow_before, pkt.meta(), ameta) {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(ht) => ht,
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_ht_failure(
+                                ectx.user_ctx,
+                                Out,
+                                &flow_before,
+                                &e,
+                            );
+                            return Err(LayerError::GenHdrTransform {
+                                layer: self.name,
+                                err: e,
+                            });
+                        }
+                    };
+
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
@@ -1356,28 +1465,38 @@ impl Layer {
                 // available, then we must fail until one opens up.
                 let write_to = self.check_for_space(Out)?;
 
-                let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
-                    Ok(aord) => match aord {
-                        AllowOrDeny::Allow(desc) => desc,
+                let desc =
+                    match action.gen_desc(&flow_before, pkt.meta(), ameta) {
+                        Ok(aord) => match aord {
+                            AllowOrDeny::Allow(desc) => desc,
 
-                        AllowOrDeny::Deny => {
-                            return Ok(LayerResult::Deny {
-                                name: self.name,
-                                reason: DenyReason::Action,
-                            });
+                            AllowOrDeny::Deny => {
+                                return Ok(LayerResult::Deny {
+                                    name: self.name,
+                                    reason: DenyReason::Action,
+                                });
+                            }
+                        },
+
+                        Err(e) => {
+                            self.record_gen_desc_failure(
+                                ectx.user_ctx,
+                                Out,
+                                pkt.flow(),
+                                &e,
+                            );
+                            return Err(LayerError::GenDesc(e));
                         }
-                    },
-
-                    Err(e) => {
-                        self.record_gen_desc_failure(ectx, Out, pkt.flow(), &e);
-                        return Err(LayerError::GenDesc(e));
-                    }
-                };
+                    };
 
                 self.complete_eviction(write_to);
 
+                let stat =
+                    pkt.meta_internal_mut().stats.new_layer_lft(ectx.stats);
+
                 let flow_before = *pkt.flow();
                 let ht_out = desc.gen_ht(Out, ameta);
+
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
                 ht_probe(
@@ -1388,9 +1507,7 @@ impl Layer {
                     pkt.flow(),
                 );
 
-                if let Some(body_segs) = pkt.body()
-                    && let Some(bt) = desc.gen_bt(Out, pkt.meta(), body_segs)?
-                {
+                if let Some(bt) = desc.gen_bt(Out, pkt.meta())? {
                     pkt.body_transform(Out, &*bt)?;
                     xforms.body.push(bt);
                 }
@@ -1408,6 +1525,7 @@ impl Layer {
                     ActionDescEntry::Desc(desc),
                     flow_in,
                     flow_before,
+                    stat,
                 );
                 pkt.record_lft(out_lft);
                 self.stats.vals.flows += 1;
@@ -1436,7 +1554,7 @@ impl Layer {
 
     fn record_gen_desc_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenDescError,
@@ -1453,7 +1571,7 @@ impl Layer {
 
     fn record_gen_ht_failure(
         &self,
-        ectx: &ExecCtx,
+        ectx: &Providers,
         dir: Direction,
         flow: &InnerFlowId,
         err: &rule::GenHtError,
@@ -1541,9 +1659,10 @@ impl Layer {
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
         self.ft.clear();
-        self.set_rules_core(in_rules, out_rules);
+        self.set_rules_core(in_rules, out_rules, stats);
     }
 
     /// Set all rules at once without clearing the flow table.
@@ -1554,18 +1673,20 @@ impl Layer {
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
         self.ft.mark_dirty();
-        self.set_rules_core(in_rules, out_rules);
+        self.set_rules_core(in_rules, out_rules, stats);
     }
 
     fn set_rules_core(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
+        stats: &mut StatTree,
     ) {
-        self.rules_in.set_rules(in_rules);
-        self.rules_out.set_rules(out_rules);
+        self.rules_in.set_rules(in_rules, stats);
+        self.rules_out.set_rules(out_rules, stats);
         self.stats.vals.set_rules_called += 1;
         self.stats.vals.in_rules.set(self.rules_in.num_rules() as u64);
         self.stats.vals.out_rules.set(self.rules_out.num_rules() as u64);
@@ -1581,6 +1702,7 @@ struct RuleTableEntry {
     id: RuleId,
     hits: AtomicU64,
     rule: Rule<rule::Finalized>,
+    stat: Arc<RootStat>,
 }
 
 impl From<&RuleTableEntry> for RuleTableEntryDump {
@@ -1614,17 +1736,26 @@ pub enum RuleRemoveErr {
 }
 
 impl RuleTable {
-    fn add(&mut self, rule: Rule<rule::Finalized>) {
+    fn add(&mut self, rule: Rule<rule::Finalized>, stats: &mut StatTree) {
+        let stat = stats.new_root(rule.stat_id().copied());
         match self.find_pos(&rule) {
             RulePlace::End => {
-                let rte =
-                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
+                let rte = RuleTableEntry {
+                    id: self.next_id,
+                    hits: 0.into(),
+                    rule,
+                    stat,
+                };
                 self.rules.push(rte);
             }
 
             RulePlace::Insert(idx) => {
-                let rte =
-                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
+                let rte = RuleTableEntry {
+                    id: self.next_id,
+                    hits: 0.into(),
+                    rule,
+                    stat,
+                };
                 self.rules.insert(idx, rte);
             }
         }
@@ -1642,9 +1773,9 @@ impl RuleTable {
     fn find_match(
         &self,
         ifid: &InnerFlowId,
-        pmeta: &MblkPacketData,
+        pmeta: &Packet<MblkFullParsed>,
         ameta: &ActionMeta,
-    ) -> Option<&Rule<rule::Finalized>> {
+    ) -> Option<&RuleTableEntry> {
         for rte in self.rules.iter() {
             if rte.rule.is_match(pmeta, ameta) {
                 rte.hits.fetch_add(1, Ordering::Relaxed);
@@ -1655,7 +1786,7 @@ impl RuleTable {
                     ifid,
                     &rte.rule,
                 );
-                return Some(&rte.rule);
+                return Some(rte);
             }
         }
 
@@ -1793,10 +1924,14 @@ impl RuleTable {
         }
     }
 
-    pub fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
+    pub fn set_rules(
+        &mut self,
+        new_rules: Vec<Rule<rule::Finalized>>,
+        stats: &mut StatTree,
+    ) {
         self.rules.clear();
         for r in new_rules {
-            self.add(r);
+            self.add(r, stats);
         }
     }
 }
@@ -1880,6 +2015,7 @@ mod test {
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
 
+        let mut stats = StatTree::default();
         let mut rule_table = RuleTable::new("port", "test", Direction::Out);
         let mut rule = Rule::new(
             1,
@@ -1890,7 +2026,7 @@ mod test {
             Ipv4AddrMatch::Prefix(cidr),
         ]));
 
-        rule_table.add(rule.finalize());
+        rule_table.add(rule.finalize(), &mut stats);
 
         let mut test_pkt = MsgBlk::new_ethernet_pkt((
             Ethernet { ethertype: Ethertype::IPV4, ..Default::default() },
@@ -1917,7 +2053,7 @@ mod test {
         // The pkt/rdr aren't actually used in this case.
         let ameta = ActionMeta::new();
         let ifid = *pmeta.flow();
-        assert!(rule_table.find_match(&ifid, pmeta.meta(), &ameta).is_some());
+        assert!(rule_table.find_match(&ifid, &pmeta, &ameta).is_some());
     }
 }
 // TODO Reinstate

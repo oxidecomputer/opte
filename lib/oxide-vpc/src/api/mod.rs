@@ -20,6 +20,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
+pub mod stat;
+
 /// Tx-only instruction to switches for multicast packet replication.
 ///
 /// Tells the switch which port groups to replicate outbound multicast packets
@@ -508,7 +510,7 @@ impl From<PhysNet> for GuestPhysAddr {
 ///   abstraction, it's simply allowing one subnet to talk to another.
 ///   There is no separate VPC router process, the real routing is done
 ///   by the underlay.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Debug, Copy, Deserialize, Serialize, Eq, PartialEq)]
 pub enum RouterTarget {
     Drop,
     InternetGateway(Option<Uuid>),
@@ -570,7 +572,7 @@ impl Display for RouterTarget {
 }
 
 /// The class of router which a rule belongs to.
-#[derive(Clone, Debug, Copy, Deserialize, Serialize)]
+#[derive(Clone, Debug, Copy, Deserialize, Serialize, Eq, PartialEq)]
 pub enum RouterClass {
     /// The rule belongs to the shared VPC-wide router.
     System,
@@ -758,14 +760,20 @@ pub struct ClearVirt2BoundaryReq {
     pub tep: Vec<TunnelEndpoint>,
 }
 
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct Route {
+    pub dest: IpCidr,
+    pub target: RouterTarget,
+    pub class: RouterClass,
+    pub stat_id: Option<Uuid>,
+}
+
 /// Add an entry to the router. Addresses may be either IPv4 or IPv6, though the
 /// destination and target must match in protocol version.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AddRouterEntryReq {
     pub port_name: String,
-    pub dest: IpCidr,
-    pub target: RouterTarget,
-    pub class: RouterClass,
+    pub route: Route,
 }
 
 /// Remove an entry to the router. Addresses may be either IPv4 or IPv6, though the
@@ -773,9 +781,7 @@ pub struct AddRouterEntryReq {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DelRouterEntryReq {
     pub port_name: String,
-    pub dest: IpCidr,
-    pub target: RouterTarget,
-    pub class: RouterClass,
+    pub route: Route,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1013,7 +1019,7 @@ pub struct AddFwRuleReq {
     pub rule: FirewallRule,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetFwRulesReq {
     pub port_name: String,
     pub rules: Vec<FirewallRule>,
@@ -1032,6 +1038,7 @@ pub struct FirewallRule {
     pub filters: Filters,
     pub action: FirewallAction,
     pub priority: u16,
+    pub stat_id: Option<Uuid>,
 }
 
 impl FromStr for FirewallRule {
@@ -1106,10 +1113,10 @@ impl FromStr for FirewallRule {
 
         Ok(FirewallRule {
             direction: direction.unwrap(),
-            // target.unwrap(),
             filters,
             action: action.unwrap(),
             priority: priority.unwrap(),
+            stat_id: None,
         })
     }
 }

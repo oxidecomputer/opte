@@ -19,6 +19,7 @@ use crate::api::Replication;
 use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
+use crate::api::stat::*;
 use crate::cfg::VpcCfg;
 use crate::engine::geneve::OxideOptionType;
 use crate::engine::geneve::ValidOxideOption;
@@ -63,7 +64,7 @@ use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
 use opte::engine::nat::ExternalIpTag;
 use opte::engine::packet::InnerFlowId;
-use opte::engine::packet::MblkPacketData;
+use opte::engine::packet::MblkPacketDataView;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::Pos;
 use opte::engine::port::meta::ActionMeta;
@@ -82,12 +83,13 @@ use opte::engine::rule::Resource;
 use opte::engine::rule::ResourceEntry;
 use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
+use opte::engine::stat::RootStat;
 use poptrie::Poptrie;
 
 pub const OVERLAY_LAYER_NAME: &str = "overlay";
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
@@ -95,13 +97,17 @@ pub fn setup(
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
-    let encap = Action::Static(Arc::new(EncapAction::new(
-        cfg.phys_ip,
-        cfg.vni,
+    let internet_stat = pb.stats_mut().new_root(Some(DESTINATION_INTERNET));
+    let vpc_local_stat = pb.stats_mut().new_root(Some(DESTINATION_VPC_LOCAL));
+    let encap = Action::Static(Arc::new(EncapAction {
+        phys_ip_src: cfg.phys_ip,
+        vni: cfg.vni,
         v2p,
         m2p,
         v2b,
-    )));
+        internet_stat,
+        vpc_local_stat,
+    }));
 
     // Action Index 1
     let decap = Action::Static(Arc::new(DecapAction::new()));
@@ -114,22 +120,22 @@ pub fn setup(
         actions: vec![encap, decap, vni_validator],
         default_in: DefaultAction::Deny,
         default_out: DefaultAction::Deny,
+        ..Default::default()
     };
 
-    let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(OVERLAY_LAYER_NAME, pb, actions, ft_limit);
 
     // Outbound: encapsulation (priority 1)
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
-    layer.add_rule(Direction::Out, encap_rule);
+    layer.add_rule(Direction::Out, encap_rule, pb.stats_mut());
 
     // Inbound: decapsulation (priority 1 - runs first, sets ACTION_META_VNI)
     let decap_rule = Rule::match_any(1, layer.action(1).unwrap());
-    layer.add_rule(Direction::In, decap_rule);
+    layer.add_rule(Direction::In, decap_rule, pb.stats_mut());
 
     // Inbound: VNI validation (priority 2 - runs after decap)
     let vni_check_rule = Rule::match_any(2, layer.action(2).unwrap());
-    layer.add_rule(Direction::In, vni_check_rule);
+    layer.add_rule(Direction::In, vni_check_rule, pb.stats_mut());
 
     // NOTE The First/Last positions cannot fail; perhaps I should
     // improve the API to avoid the unwrap().
@@ -209,18 +215,9 @@ pub struct EncapAction {
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
     v2b: Arc<Virt2Boundary>,
-}
 
-impl EncapAction {
-    pub fn new(
-        phys_ip_src: Ipv6Addr,
-        vni: Vni,
-        v2p: Arc<Virt2Phys>,
-        m2p: Arc<Mcast2Phys>,
-        v2b: Arc<Virt2Boundary>,
-    ) -> Self {
-        Self { phys_ip_src, vni, v2p, m2p, v2b }
-    }
+    internet_stat: Arc<RootStat>,
+    vpc_local_stat: Arc<RootStat>,
 }
 
 impl fmt::Display for EncapAction {
@@ -235,7 +232,7 @@ impl StaticAction for EncapAction {
         // The encap action is only used for outgoing.
         _dir: Direction,
         flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        mut pkt: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let f_hash = flow_id.crc32();
@@ -250,6 +247,7 @@ impl StaticAction for EncapAction {
         let (is_internal, phys_target, is_mcast) = if is_mcast_addr {
             // Multicast traffic: use M2P mapping to get the multicast underlay address.
             // Fleet-level multicast mappings are stored in the dedicated `m2p`.
+            pkt.push_stat(Arc::clone(&self.vpc_local_stat));
             match self.m2p.get(&dst_ip) {
                 Some(underlay) => (
                     true,
@@ -268,7 +266,6 @@ impl StaticAction for EncapAction {
             }
         } else {
             // Non-multicast traffic: process through router target.
-
             // The router layer determines a RouterTarget and stores it in
             // the meta map. We need to map this virtual target to a
             // physical one.
@@ -307,6 +304,7 @@ impl StaticAction for EncapAction {
                 //
                 // It's a possible optimisation, but it'd need more thought.
                 RouterTargetInternal::InternetGateway(_) => {
+                    pkt.push_stat(Arc::clone(&self.internet_stat));
                     match self.v2b.get(&recipient) {
                         Some(phys) if sent_from_eip => {
                             // Hash the packet onto a route target. This is a very
@@ -337,6 +335,7 @@ impl StaticAction for EncapAction {
 
                 RouterTargetInternal::Ip(_)
                 | RouterTargetInternal::VpcSubnet(_) => {
+                    pkt.push_stat(Arc::clone(&self.vpc_local_stat));
                     match self.v2p.get(&recipient) {
                         Some(phys) if !sent_from_eip => (
                             true,
@@ -458,7 +457,7 @@ impl StaticAction for EncapAction {
                     vni: phys_target.vni,
                     entropy: flow_id.crc32() as u16,
                     options: match (
-                        pkt_meta.is_inner_tcp() && is_internal,
+                        pkt.headers.is_inner_tcp() && is_internal,
                         is_mcast,
                     ) {
                         // Allocate space in which we can include the TCP MSS, when
@@ -563,12 +562,12 @@ impl StaticAction for DecapAction {
         // The decap action is only used for inbound.
         _dir: Direction,
         _flow_id: &InnerFlowId,
-        pkt_meta: &MblkPacketData,
+        pkt: MblkPacketDataView,
         action_meta: &mut ActionMeta,
     ) -> GenHtResult {
         let mut is_external = false;
 
-        let vni = match pkt_meta.outer_geneve() {
+        let vni = match pkt.headers.outer_geneve() {
             Some(g) => {
                 let vni = g.vni();
                 for opt in OxideOptions::from_meta(g) {

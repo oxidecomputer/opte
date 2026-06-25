@@ -48,6 +48,7 @@ postcard.workspace = true
 ref-cast.workspace = true
 serde.workspace = true
 tabwriter = { workspace = true, optional = true }
+uuid.workspace = true
 usdt = { workspace = true, optional = true }
 zerocopy = { workspace = true, optional = true }
 

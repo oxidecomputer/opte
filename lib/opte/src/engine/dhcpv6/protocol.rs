@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Implementation of the main message types for DHCPv6.
 
@@ -26,7 +26,7 @@ use crate::engine::dhcpv6::options::StatusCode;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v6::Ipv6;
 use crate::engine::ip::v6::Ipv6Ref;
-use crate::engine::packet::MblkPacketData;
+use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::DataPredicate;
 use crate::engine::predicate::EtherAddrMatch;
 use crate::engine::predicate::IpProtoMatch;
@@ -583,10 +583,9 @@ fn process_confirm_message<'a>(
     }
 }
 
-// Process a DHCPv6 message from the a client.
+// Process a DHCPv6 message from a client.
 fn process_client_message<'a>(
     action: &'a Dhcpv6Action,
-    _meta: &'a MblkPacketData,
     client_msg: &'a Message<'a>,
 ) -> Option<Message<'a>> {
     match client_msg.typ {
@@ -608,12 +607,12 @@ fn process_client_message<'a>(
 // the request and the actual DHCPv6 message to send out.
 fn generate_packet<'a>(
     action: &Dhcpv6Action,
-    meta: &MblkPacketData,
+    meta: MblkPacketDataView,
     msg: &'a Message<'a>,
 ) -> GenPacketResult {
     let src_ip = Ipv6Addr::from_eui64(&action.server_mac);
     // Safety: We're only here if the predicates match, one of which is IPv6.
-    let dst_ip = meta.inner_ip6().unwrap().source();
+    let dst_ip = meta.headers.inner_ip6().unwrap().source();
     let udp_len = (Udp::MINIMUM_LENGTH + msg.buffer_len()) as u16;
 
     // Build UDP header with checksum=0
@@ -691,11 +690,10 @@ impl HairpinAction for Dhcpv6Action {
     // Rather than put this logic into DataPredicates, we just parse the packet
     // here and reply accordingly. So the `Dhcpv6Action` is really a full
     // server, to the extent we emulate one.
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
         let body = meta.copy_remaining();
         if let Some(client_msg) = Message::from_bytes(&body) {
-            if let Some(reply) = process_client_message(self, meta, &client_msg)
-            {
+            if let Some(reply) = process_client_message(self, &client_msg) {
                 generate_packet(self, meta, &reply)
             } else {
                 Ok(AllowOrDeny::Deny)
@@ -751,13 +749,12 @@ mod test {
         let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
             .unwrap()
             .to_full_meta();
-        let pmeta = pkt.meta();
         let ameta = ActionMeta::new();
         let client_mac =
             MacAddr::from_const([0xa8, 0x40, 0x25, 0xfa, 0xdd, 0x0b]);
         for pred in dhcpv6_server_predicates(&client_mac) {
             assert!(
-                pred.is_match(pmeta, &ameta),
+                pred.is_match(&pkt, &ameta),
                 "Expected predicate to match snooped Solicit test packet: {pred}",
             );
         }

@@ -11,7 +11,7 @@ use crate::ddi::mblk::MsgBlk;
 use crate::engine::checksum::HeaderChecksum;
 use crate::engine::ether::Ethernet;
 use crate::engine::ip::v4::Ipv4;
-use crate::engine::packet::MblkPacketData;
+use crate::engine::packet::MblkPacketDataView;
 use crate::engine::predicate::Ipv4AddrMatch;
 use ingot::ethernet::Ethertype;
 use ingot::icmp::IcmpV4;
@@ -50,8 +50,8 @@ impl HairpinAction for IcmpEchoReply {
         (hdr_preds, vec![])
     }
 
-    fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        let Some(icmp) = meta.inner_icmp() else {
+    fn gen_packet(&self, meta: MblkPacketDataView) -> GenPacketResult {
+        let Some(icmp) = meta.headers.inner_icmp() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMP packet. That
             // should be impossible, but we avoid panicking given the kernel
