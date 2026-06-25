@@ -211,8 +211,6 @@ use ingot::geneve::GeneveRef;
 use ingot::geneve::ValidGeneve;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
-use ingot::udp::Udp;
-use opte::ExecCtx;
 use opte::api::ClearLftReq;
 use opte::api::ClearUftReq;
 use opte::api::CmdOk;
@@ -3620,7 +3618,7 @@ fn xde_rx_one_direct(
     let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
         .expect("this is a reparse of a known-valid packet");
 
-    let meta = parsed_pkt.meta();
+    let meta = parsed_pkt.headers();
     let old_len = parsed_pkt.len();
 
     let ulp_meoi = match meta.ulp_meoi(old_len) {

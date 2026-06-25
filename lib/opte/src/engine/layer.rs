@@ -1159,7 +1159,7 @@ impl Layer {
 
                     Err(e) => {
                         self.record_gen_desc_failure(
-                            &ectx.user_ctx,
+                            ectx.user_ctx,
                             In,
                             pkt.flow(),
                             &e,
@@ -1480,9 +1480,9 @@ impl Layer {
 
                         Err(e) => {
                             self.record_gen_desc_failure(
-                                &ectx.user_ctx,
+                                ectx.user_ctx,
                                 Out,
-                                &pkt.flow(),
+                                pkt.flow(),
                                 &e,
                             );
                             return Err(LayerError::GenDesc(e));
