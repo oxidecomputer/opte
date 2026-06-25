@@ -428,8 +428,10 @@ mcast-source-filtered {
 	@by_port[this->port] = count();
 	@filtered_by_mode[this->mode_str] = count();
 
-	/* Per-(event,group,vni) drops for end-to-end loss attribution. */
-	@drops["FILTERED", this->dst_str, this->vni] = count();
+	/* Per-(event,scope,group,vni) drops for end-to-end loss attribution.
+	 * The scope names the address space of the group column: overlay for the
+	 * inner multicast group, underlay for the outer delivery address. */
+	@drops["FILTERED", "overlay", this->dst_str, this->vni] = count();
 }
 
 mcast-source-filtered
@@ -464,8 +466,8 @@ mcast-fwd-source-filtered {
 	@by_nexthop_unicast[this->next_hop_str] = count();
 	@filtered_by_mode[this->mode_str] = count();
 
-	/* Per-(event,group,vni) drops for end-to-end loss attribution. */
-	@drops["FWD_FILT", this->dst_str, this->vni] = count();
+	/* Per-(event,scope,group,vni) drops; see mcast-source-filtered. */
+	@drops["FWD_FILT", "overlay", this->dst_str, this->vni] = count();
 }
 
 mcast-fwd-source-filtered
@@ -490,8 +492,8 @@ mcast-no-fwd-entry {
 	/* Always track aggregations */
 	@by_event["NOFWD"] = count();
 
-	/* Per-(event,group,vni) drops for end-to-end loss attribution. */
-	@drops["NOFWD", this->underlay_str, this->vni] = count();
+	/* Per-(event,scope,group,vni) drops; see mcast-source-filtered. */
+	@drops["NOFWD", "underlay", this->underlay_str, this->vni] = count();
 }
 
 mcast-no-fwd-entry
@@ -523,7 +525,7 @@ END
 	printa(@fwd_by_group_nh);
 	printf("\nSource filtering by mode:\n");
 	printa(@filtered_by_mode);
-	printf("\nDrops (event, group, vni):\n");
+	printf("\nDrops (event, scope, group, vni):\n");
 	printa(@drops);
 	printf("\nConfig ops:\n");
 	printa(@cfg_counts);

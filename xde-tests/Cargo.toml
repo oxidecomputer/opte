@@ -12,6 +12,7 @@ opte-test-utils.workspace = true
 oxide-vpc.workspace = true
 
 anyhow.workspace = true
+dlpi.workspace = true
 libnet.workspace = true
 rand.workspace = true
 slog.workspace = true
