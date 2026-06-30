@@ -1395,7 +1395,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
     }
 
     pub fn take_lfts(&mut self) -> Vec<Arc<dyn FlowEntryInfo>> {
-        self.state.lfts.drain(..).collect()
+        core::mem::take(&mut self.state.lfts)
     }
 }
 
