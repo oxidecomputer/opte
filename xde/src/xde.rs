@@ -700,7 +700,7 @@ const _: () = assert!(
 
 impl Default for PerEntryState {
     fn default() -> Self {
-        Self { devs: KMutex::new(Arc::new(DevMap::new())), _pad: [0u8; 48] }
+        Self { devs: KMutex::new(Default::default()), _pad: [0u8; 48] }
     }
 }
 
