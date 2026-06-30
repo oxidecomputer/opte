@@ -710,6 +710,23 @@ struct UnderlayDev {
     ports_map: Vec<PerEntryState>,
 }
 
+impl UnderlayDev {
+    fn open(
+        ResolvedLink(link_name, link_id): ResolvedLink<'_>,
+    ) -> Result<Self, OpteError> {
+        let stream =
+            DlsStream::open(link_id).map_err(|e| OpteError::System {
+                errno: EFAULT,
+                msg: format!("failed to grab open stream for {link_name}: {e}"),
+            })?;
+
+        Ok(Self {
+            stream,
+            ports_map: (0..ncpus()).map(|_| PerEntryState::default()).collect(),
+        })
+    }
+}
+
 impl core::fmt::Debug for UnderlayDev {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("UnderlayDev").finish_non_exhaustive()
@@ -1698,21 +1715,9 @@ unsafe extern "C" fn xde_attach(
 
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
-    resolved: ResolvedLink<'_>,
+    rl @ ResolvedLink(link_name, link_id): ResolvedLink<'_>,
 ) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
-    let ResolvedLink(link_name, link_id) = resolved;
-    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("failed to grab open stream for {link_name}: {e}"),
-    })?;
-
-    let cpus = ncpus();
-    let mut ports_map = Vec::with_capacity(cpus);
-    for _ in 0..cpus {
-        ports_map.push(PerEntryState::default());
-    }
-
-    let stream = Arc::new(UnderlayDev { stream, ports_map });
+    let stream = Arc::new(UnderlayDev::open(rl)?);
 
     // Bind a packet handler to the MAC client underlying `stream`.
     let siphon = MacSiphon::new(stream.clone(), xde_rx).map_err(|e| {
