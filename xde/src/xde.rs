@@ -569,7 +569,7 @@ struct UnderlayState {
     shared_props: OffloadInfo,
 }
 
-fn get_xde_state() -> &'static XdeState {
+fn get_xde_state<'a>() -> &'a XdeState {
     // Safety: The opte_dip pointer is write-once and is a valid
     // pointer passed to attach(9E). The returned pointer is valid as
     // it was derived from Box::into_raw() during `xde_attach`.
