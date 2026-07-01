@@ -2804,7 +2804,7 @@ fn xde_mc_tx_one<'a>(
             // NOTE: We are using the individual mblk_t as read only
             // here to get the pointer value so that the DTrace consumer
             // can examine the packet on failure.
-            opte::engine::dbg!("Rx bad packet: {:?}", e);
+            opte::engine::dbg!("Tx bad packet: {:?}", e);
             bad_packet_parse_probe(
                 Some(src_dev.port.name_cstr()),
                 Direction::Out,
