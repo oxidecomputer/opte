@@ -18,6 +18,7 @@
 #:   "=/work/test/multicast_multi_sub",
 #:   "=/work/test/multicast_validation",
 #:   "=/work/test/multicast_source_filter",
+#:   "=/work/test/multicast_multi_nexthop",
 #:   "=/work/xde.conf",
 #: ]
 #:
@@ -62,7 +63,7 @@ install_pkg jq
 
 pushd xde
 
-cp xde.conf /work/xde.conf
+cp xde.conf $TGT_BASE/xde.conf
 
 header "check style"
 ptime -m cargo +$NIGHTLY fmt -p xde -p xde-link -- --check
@@ -140,9 +141,15 @@ multicast_source_filter_test=$(
     cargo build -q --test multicast_source_filter --message-format=json |\
     jq -r "select(.profile.test == true) | .filenames[]"
 )
-mkdir -p /work/test
-cp $loopback_test /work/test/loopback
-cp $multicast_rx_test /work/test/multicast_rx
-cp $multicast_multi_sub_test /work/test/multicast_multi_sub
-cp $multicast_validation_test /work/test/multicast_validation
-cp $multicast_source_filter_test /work/test/multicast_source_filter
+cargo build --test multicast_multi_nexthop
+multicast_multi_nexthop_test=$(
+    cargo build -q --test multicast_multi_nexthop --message-format=json |\
+    jq -r "select(.profile.test == true) | .filenames[]"
+)
+mkdir -p $TGT_BASE/test
+cp $loopback_test $TGT_BASE/test/loopback
+cp $multicast_rx_test $TGT_BASE/test/multicast_rx
+cp $multicast_multi_sub_test $TGT_BASE/test/multicast_multi_sub
+cp $multicast_validation_test $TGT_BASE/test/multicast_validation
+cp $multicast_source_filter_test $TGT_BASE/test/multicast_source_filter
+cp $multicast_multi_nexthop_test $TGT_BASE/test/multicast_multi_nexthop

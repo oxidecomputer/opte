@@ -27,6 +27,8 @@ use oxide_vpc::api::NextHopV6;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
+use std::thread;
+use std::time::Duration;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
 use xde_tests::IPV4_MULTICAST_CIDR;
 use xde_tests::IPV6_ADMIN_LOCAL_MULTICAST_CIDR;
@@ -35,6 +37,7 @@ use xde_tests::MulticastGroup;
 use xde_tests::SNOOP_TIMEOUT_EXPECT_NONE;
 use xde_tests::SnoopGuard;
 use xde_tests::UNDERLAY_TEST_DEVICE;
+use xde_tests::inject_underlay_mcast_v4;
 
 #[test]
 fn test_xde_multicast_rx_dual_family() -> Result<()> {
@@ -262,6 +265,113 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
     assert!(
         stdout_v6.to_ascii_lowercase().contains("3333 0001 0003"),
         "expected IPv6 multicast MAC '3333 0001 0003' (33:33:00:01:00:03) in snoop output; got:\n{stdout_v6}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_multicast_rx_only_delivery() -> Result<()> {
+    // Rx-path isolation test: drive `handle_mcast_rx` directly by injecting a
+    // raw Geneve-over-IPv6 multicast frame onto the underlay, with no Tx ever
+    // issued from a guest.
+    //
+    // The dual-family test relies on `OpteZone::send_udp_v4`/`send_udp_v6`, which on
+    // a single sled also trigger the Tx `guest_loopback` same-sled delivery.
+    // Here, we never send from a guest, so a delivered packet can only have
+    // arrived via the underlay receive path.
+
+    let topol = xde_tests::two_node_topology()?;
+
+    // IPv4 multicast group mapped to its admin-local IPv6 underlay address per
+    // Omicron's map_external_to_underlay_ip() (last 4 bytes encode the IPv4).
+    let mcast_group = Ipv4Addr::from([224, 0, 0, 251]);
+    let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
+    let mcast_underlay =
+        MulticastUnderlay::new("ff04::e000:fb".parse().unwrap()).unwrap();
+
+    // Establish the M2P mapping (cleaned up on drop). No forwarding entry is
+    // configured because forwarding drives Tx replication only.
+    let _mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
+
+    // Allow IPv4 multicast through the receiver's firewall and subscribe it.
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr)?;
+    topol.nodes[1]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("subscribe receiver port should succeed");
+
+    // Confirm the subscription is present before injecting.
+    let hdl = OpteHdl::open()?;
+    let subs = hdl.dump_mcast_subs()?;
+    let p1 = topol.nodes[1].port.name().to_string();
+    let s_entry = subs
+        .entries
+        .iter()
+        .find(|e| e.underlay == mcast_underlay)
+        .expect("missing multicast subscription entry for underlay group");
+    assert!(
+        s_entry.has_port(&p1),
+        "expected {p1} to be subscribed; got {:?}",
+        s_entry.subscribers
+    );
+
+    // Snoop the receiver's guest device for the delivered inner packet.
+    let dev_name_b = topol.nodes[1].port.name().to_string();
+    let filter =
+        format!("udp and ip dst {mcast_group} and port {MCAST_TEST_PORT}");
+    let mut snoop_rx = SnoopGuard::start(&dev_name_b, &filter)?;
+
+    // Inject a raw underlay frame. The inner source mirrors a remote sender
+    // (node 0's overlay address). Note that delivery is keyed on the outer
+    // group, not the arrival VNIC or VNI.
+    //
+    // `SnoopGuard::start` spawns `snoop` and returns before the capture is
+    // actually live, so a single frame can race ahead of snoop and be missed.
+    // We therefore re-inject until the capture observes a frame; the resulting
+    // duplicate multicast deliveries are harmless.
+    //
+    // Injection runs on this initial thread by design. illumos privileges are
+    // per-LWP, and `dlpi_open` resolves the link through a dlmgmtd door call
+    // that requires privileges `pfexec` grants only to the process's first
+    // thread; a frame injected from a freshly spawned thread fails link lookup
+    // with ENOLINK. The blocking snoop wait needs no such privilege, so it runs
+    // on the worker thread instead.
+    let payload = b"rx-only delivery";
+    let inner_src = topol.nodes[0].port.ip();
+    let ctx = format!("on {dev_name_b}");
+    let snoop_handle = thread::spawn(move || snoop_rx.assert_packet(&ctx));
+
+    while !snoop_handle.is_finished() {
+        inject_underlay_mcast_v4(
+            &mcast_underlay,
+            inner_src,
+            mcast_group,
+            vni,
+            MCAST_TEST_PORT,
+            payload,
+        )?;
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let snoop_output = snoop_handle.join().unwrap();
+
+    let stdout = String::from_utf8_lossy(&snoop_output.stdout);
+    assert!(
+        stdout.contains("224.0.0.251"),
+        "expected destination 224.0.0.251 in snoop output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("delivery"),
+        "expected payload substring 'delivery' in snoop output:\n{stdout}"
+    );
+
+    // L2 dest is rewritten by XDE to the canonical IPv4 multicast MAC per
+    // RFC 1112: 01:00:5e + low 23 bits of 224.0.0.251 -> 01:00:5e:00:00:fb.
+    assert!(
+        stdout.to_ascii_lowercase().contains("0100 5e00 00fb"),
+        "expected IPv4 multicast MAC '0100 5e00 00fb' in snoop output; got:\n{stdout}"
     );
 
     Ok(())

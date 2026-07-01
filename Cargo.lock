@@ -2616,6 +2616,7 @@ name = "xde-tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dlpi",
  "libnet",
  "opte-ioctl",
  "opte-test-utils",

@@ -320,11 +320,11 @@ use oxide_vpc::engine::router;
 
 const ETHERNET_MTU: u16 = 1500;
 
-// Type alias for multicast forwarding table:
-// Maps underlay multicast addresses to next hops with replication and source filters.
-// The source filter is the aggregated filter for the destination sled (union of
-// all subscriber filters on that sled). Packets are only forwarded if the
-// aggregated filter allows the source.
+// Type alias for multicast forwarding table: maps underlay multicast addresses
+// to switch next hops with replication and source filters. Each source filter is
+// aggregated over the subscriber set reachable through that next hop. Packets are
+// only forwarded to a selected next hop if its aggregated filter allows the
+// source.
 type McastForwardingTable = BTreeMap<
     MulticastUnderlay,
     BTreeMap<NextHopV6, (Replication, SourceFilter)>,
@@ -2307,6 +2307,113 @@ struct MulticastRxContext<'a> {
     inner_eth_off: usize,
 }
 
+/// The replication target an ECMP next hop selection runs over.
+///
+/// A next hop is a switch endpoint, and the switch is the replication engine.
+/// XDE's fanout is across replication targets, not redundant switch endpoints:
+/// the targets are external egress and underlay delivery. Next hops sharing a
+/// target are redundant paths to the same multicast delivery set, so a flow
+/// should use one of them rather than one copy per switch. Both targets admit
+/// `Both` (replication) next hops, which contribute to egress and underlay
+/// independently.
+#[derive(Clone, Copy)]
+enum ReplicationTarget {
+    /// Egress to the external network via the switch front panel.
+    External,
+    /// Underlay delivery to sleds behind the switch.
+    Underlay,
+}
+
+impl ReplicationTarget {
+    /// Whether a next hop with this `replication` mode serves this target.
+    fn includes(self, replication: &Replication) -> bool {
+        match self {
+            ReplicationTarget::External => {
+                matches!(replication, Replication::External | Replication::Both)
+            }
+            ReplicationTarget::Underlay => {
+                matches!(replication, Replication::Underlay | Replication::Both)
+            }
+        }
+    }
+}
+
+/// The next hop chosen to carry a flow's single copy for each replication
+/// target.
+///
+/// A field is `None` when no next hop for that target admits the flow's source.
+struct ReplicationSelection {
+    external: Option<NextHopV6>,
+    underlay: Option<NextHopV6>,
+}
+
+/// Select one next hop per replication target to carry a flow's single copy.
+///
+/// The control plane programs multiple next hops sharing a target for switch
+/// redundancy, not to represent disjoint multicast destination sets. For a
+/// given target, each candidate switch reaches the same external network or the
+/// same sled subscribers because group membership is mirrored across the
+/// redundant switches. A multicast stream, therefore, needs only a single copy
+/// per target leaving this sled. Emitting to every candidate would duplicate
+/// the stream, and a receiver cannot tell duplicate copies apart, so it cannot
+/// deduplicate.
+///
+/// One candidate is chosen per target per flow while all remain programmed in
+/// the forwarding table, so any peer can carry the flow on failover. The caller
+/// suppresses the redundant copy on the others.
+///
+/// Only next hops whose source filter admits `inner_src` are candidates. For an
+/// any-source group (the default `Exclude(empty)`) every hop for the target
+/// qualifies.
+///
+/// For a source-filtered group, only the hops that permit this source do, so a
+/// denied source never selects a hop that would have dropped it while another
+/// would have forwarded.
+///
+/// Among the candidates, selection is keyed on the inner flow's L4 hash (the
+/// flow's CRC32, the same key the V2B boundary path uses to ECMP over tunnel
+/// endpoints). For multicast, that hash includes the inner source and group
+/// (and L4 fields when present), so a given flow pins deterministically to one
+/// switch across reboots and OPTE instances while distinct flows are spread
+/// across switches.
+///
+/// Each target is resolved independently. The eligible count is not known in
+/// advance because the source filter depends on the flow, so candidates are
+/// counted in one pass and the `hash % count` index is taken in a second,
+/// mirroring the boundary path's `nth(hash % len)` without materialising the
+/// filtered set.
+fn select_nexthops(
+    next_hops: &BTreeMap<NextHopV6, (Replication, SourceFilter)>,
+    inner_src: oxide_vpc::api::IpAddr,
+    l4_hash: u32,
+) -> ReplicationSelection {
+    // A candidate is eligible when its source filter admits this flow and its
+    // next hop serves the target. The count pass precedes the indexing pass.
+    let select = |target: ReplicationTarget| {
+        let count = next_hops
+            .iter()
+            .filter(|(_, (replication, source_filter))| {
+                source_filter.allows(inner_src) && target.includes(replication)
+            })
+            .count();
+        (count > 0).then(|| l4_hash as usize % count).and_then(|idx| {
+            next_hops
+                .iter()
+                .filter(|(_, (replication, source_filter))| {
+                    source_filter.allows(inner_src)
+                        && target.includes(replication)
+                })
+                .map(|(next_hop, _)| *next_hop)
+                .nth(idx)
+        })
+    };
+
+    ReplicationSelection {
+        external: select(ReplicationTarget::External),
+        underlay: select(ReplicationTarget::Underlay),
+    }
+}
+
 /// Handle multicast packet forwarding for same-sled delivery and underlay
 /// replication based on the XDE-wide multicast forwarding table.
 ///
@@ -2406,11 +2513,11 @@ fn handle_mcast_tx<'a>(
         }
     }
 
-    // Next hop forwarding: send packets to configured next hops.
+    // Next hop forwarding: send packets to configured switch next hops.
     //
-    // At the leaf level, we process all next hops in the forwarding table.
-    // Each next hop's `Replication` is a Tx-only instruction telling the switch
-    // which ports to replicate to:
+    // At the leaf level, we process the forwarding table, but we do not
+    // transmit to every next hop. Each next hop's `Replication` is a Tx-only
+    // instruction telling the chosen switch which ports to replicate to:
     // - External: ports set for external multicast traffic (egress to external networks)
     // - Underlay: replicate to other sleds (using multicast outer dst)
     // - Both: both external and underlay replication
@@ -2427,12 +2534,32 @@ fn handle_mcast_tx<'a>(
     }
 
     if let Some(next_hops) = cpu_mcast_fwd.get(&underlay_key) {
-        // We found forwarding entries, replicate to each next hop
+        // A next hop is a switch, and the switch replicates to every destination
+        // in the requested target's multicast delivery set. Next hops sharing a
+        // target are redundant switch paths to that set: external candidates
+        // reach the same external multicast network, and underlay candidates
+        // reach the same sled subscribers. Emitting to every next hop for a
+        // target would duplicate the stream.
+        //
+        // We therefore run a two-pass `%` ECMP select-one per target. The first
+        // pass counts source-eligible candidates for the target, and the second
+        // selects `l4_hash % count` in the same stable order. Because the
+        // candidate switches are redundant, picking one avoids duplication. The
+        // two targets are selected independently, so a `Both` replication next
+        // hop can be the choice for one target and not the other.
+        let ReplicationSelection {
+            external: chosen_external,
+            underlay: chosen_underlay,
+        } = select_nexthops(next_hops, ctx.inner_src, ctx.l4_hash);
+
+        // Iterate the programmed next hops, narrowing each to its choice.
         for (next_hop, (replication, source_filter)) in next_hops.iter() {
-            // Check aggregated source filter before forwarding.
-            // This filter is the union of all subscriber filters for
-            // this next hop. If no subscriber would accept this source,
-            // skip forwarding.
+            // Check aggregated source filter before forwarding. This filter is
+            // the union of all subscriber filters for destinations reachable
+            // through this next hop. If no subscriber would accept this source,
+            // we skip forwarding. Selection has already excluded this hop. This
+            // second check preserves per-hop drop telemetry for filtered
+            // entries.
             if !source_filter.allows(ctx.inner_src) {
                 let xde = get_xde_state();
                 xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
@@ -2448,6 +2575,41 @@ fn handle_mcast_tx<'a>(
                 );
                 continue;
             }
+
+            // Compose the per-flow selections into this hop's effective
+            // replication. A hop keeps a target only if it is that target's
+            // choice.
+            //
+            // A `Both` replication hop is narrowed when it is the choice for
+            // one target but not the other, and skipped entirely when it is the
+            // choice for neither. This emits exactly one external copy and one
+            // underlay copy per flow while each target can land on a different
+            // switch.
+            let keep_external = chosen_external.as_ref() == Some(next_hop);
+            let keep_underlay = chosen_underlay.as_ref() == Some(next_hop);
+            let effective_replication = match replication {
+                Replication::External => {
+                    if keep_external {
+                        Replication::External
+                    } else {
+                        continue;
+                    }
+                }
+                Replication::Underlay => {
+                    if keep_underlay {
+                        Replication::Underlay
+                    } else {
+                        continue;
+                    }
+                }
+                Replication::Both => match (keep_external, keep_underlay) {
+                    (true, true) => Replication::Both,
+                    (true, false) => Replication::External,
+                    (false, true) => Replication::Underlay,
+                    (false, false) => continue,
+                },
+                Replication::Reserved => Replication::Reserved,
+            };
 
             // Clone packet with headers using pullup
             let Ok(mut fwd_pkt) =
@@ -2486,7 +2648,11 @@ fn handle_mcast_tx<'a>(
             }
             // Update Geneve multicast option with the Tx-only replication
             // instruction for the switch.
-            update_mcast_replication(&mut fwd_pkt, geneve_offset, *replication);
+            update_mcast_replication(
+                &mut fwd_pkt,
+                geneve_offset,
+                effective_replication,
+            );
 
             // Route to switch unicast address to determine which underlay
             // port/MAC to use. Packet destination is multicast address with
@@ -2530,7 +2696,7 @@ fn handle_mcast_tx<'a>(
                 (AF_INET6 as usize, &outer_ip6 as *const _ as uintptr_t);
 
             // Fire DTrace probes and increment stats based on replication mode
-            match replication {
+            match effective_replication {
                 oxide_vpc::api::Replication::Underlay => {
                     __dtrace_probe_mcast__underlay__fwd(
                         af,
@@ -3853,7 +4019,9 @@ fn set_mcast_forwarding_hdlr(
     // Validation of admin-local IPv6 (ff04::/16) happens at deserialization
     let underlay = req.underlay;
 
-    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication modes.
+    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication
+    // modes.
+    //
     // NextHopV6.addr must be unicast (switch address for routing).
     // The packet will be sent to the multicast address (req.underlay).
     for entry in &req.next_hops {

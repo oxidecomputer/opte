@@ -8,6 +8,16 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use opte_ioctl::OpteHdl;
+use opte_test_utils::Ethernet;
+use opte_test_utils::Ethertype;
+use opte_test_utils::GENEVE_PORT;
+use opte_test_utils::Geneve;
+use opte_test_utils::HeaderLen;
+use opte_test_utils::IngotIpProto;
+use opte_test_utils::Ipv4;
+use opte_test_utils::Ipv6;
+use opte_test_utils::MsgBlk;
+use opte_test_utils::Udp;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
@@ -149,6 +159,20 @@ pub const GENEVE_UNDERLAY_FILTER: &str = "ip6 and udp port 6081";
 /// Underlay device name used in single-sled test topology.
 /// The simnet pair creates a loopback underlay for multicast tests.
 pub const UNDERLAY_TEST_DEVICE: &str = "xde_test_sim1";
+
+/// Underlay device used to inject raw frames into the receive path.
+///
+/// A frame written here (the simnet `end_a`) is received on its peer
+/// [`UNDERLAY_TEST_DEVICE`] (`end_b`), rises through `xde_test_vnic1`'s MAC
+/// client, and reaches XDE's `xde_rx` callback.
+pub const UNDERLAY_INJECT_DEVICE: &str = "xde_test_sim0";
+
+/// Service access point is bound on the raw injection stream purely to reach
+/// DLPI's `DL_IDLE` state, a precondition of `dlpi_send`. For ethernet the
+/// service access point is the ethertype. In `DLPI_RAW` it plays no role in
+/// building the frame, so this is an unused experimental ethertype chosen to
+/// avoid demuxing real inbound traffic back into the stream.
+const INJECT_SAP: u32 = 0x4000;
 
 /// This is a wrapper around the ztest::Zone object that encapsulates common
 /// logic needed for running the OPTE tests zones used in this test suite.
@@ -726,6 +750,135 @@ pub fn ensure_underlay_admin_scoped_route_v6(interface: &str) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Inject a raw Geneve-over-IPv6 multicast frame onto the underlay receive path.
+///
+/// Builds the full wire frame for an IPv4 multicast datagram tunnelled in
+/// Geneve and writes it to [`UNDERLAY_INJECT_DEVICE`] in DLPI raw mode, so it
+/// arrives at XDE's `xde_rx` callback exactly as a frame from a remote sled
+/// would. This exercises `handle_mcast_rx` in isolation: no Tx processing and
+/// thus no `guest_loopback` same-sled delivery occurs, unlike a guest send via
+/// [`OpteZone::send_udp_v4`]/[`OpteZone::send_udp_v6`].
+///
+/// `underlay_group` is the outer IPv6 multicast destination (the subscribed
+/// [`MulticastUnderlay`] group). `inner_src`/`inner_dst` are the inner IPv4
+/// source (subject to source filtering) and multicast destination group. `vni` is the
+/// Geneve VNI. The Rx path keys delivery on the outer group rather than the VNI,
+/// but a well-formed value is required for the frame to parse.
+///
+/// # Errors
+///
+/// Returns an error if the DLPI link cannot be opened in raw mode or the frame
+/// cannot be transmitted.
+///
+/// # Examples
+///
+/// ```ignore
+/// inject_underlay_mcast_v4(
+///     &mcast_underlay,                  // underlay_group
+///     "10.0.0.1".parse().unwrap(),      // inner_src
+///     Ipv4Addr::from([224, 0, 0, 251]), // inner_dst
+///     Vni::new(DEFAULT_MULTICAST_VNI)?, // vni
+///     MCAST_TEST_PORT,                  // dst_port
+///     b"rx-only",                       // payload
+/// )?;
+/// ```
+pub fn inject_underlay_mcast_v4(
+    underlay_group: &MulticastUnderlay,
+    inner_src: Ipv4Addr,
+    inner_dst: Ipv4Addr,
+    vni: Vni,
+    dst_port: u16,
+    payload: &[u8],
+) -> Result<()> {
+    let outer_group = underlay_group.addr();
+    let outer_group_bytes = outer_group.bytes();
+
+    // Inner Ethernet header. The Rx path rewrites this destination MAC to the
+    // canonical multicast MAC derived from the inner IP, so the value set here
+    // is overwritten before delivery.
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x01, 0x00, 0x5e, 0x00, 0x00, 0x01]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: inner_src,
+        destination: inner_dst,
+        protocol: IngotIpProto::UDP,
+        hop_limit: 64,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH + payload.len())
+            as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: dst_port,
+        length: (Udp::MINIMUM_LENGTH + payload.len()) as u16,
+        ..Default::default()
+    };
+
+    let mut inner_pkt =
+        MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
+    if !payload.is_empty() {
+        inner_pkt.append(MsgBlk::copy(payload));
+    }
+    let inner_len = inner_pkt.byte_len();
+
+    // Geneve with no options. The default protocol type is Ethernet (0x6558).
+    let geneve = Geneve { vni, ..Default::default() };
+
+    let outer_udp = Udp {
+        source: 0x1e61,
+        destination: GENEVE_PORT,
+        length: (Udp::MINIMUM_LENGTH + geneve.packet_length() + inner_len)
+            as u16,
+        ..Default::default()
+    };
+    let outer_ip = Ipv6 {
+        source: "fd00::1".parse().unwrap(),
+        destination: outer_group,
+        next_header: IngotIpProto::UDP,
+        hop_limit: 64,
+        payload_len: outer_udp.length,
+        ..Default::default()
+    };
+    // Outer Ethernet: IPv6 multicast MAC per RFC 2464 (33:33 + low 32 bits).
+    let outer_eth = Ethernet {
+        destination: MacAddr::from([
+            0x33,
+            0x33,
+            outer_group_bytes[12],
+            outer_group_bytes[13],
+            outer_group_bytes[14],
+            outer_group_bytes[15],
+        ]),
+        source: MacAddr::from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        ethertype: Ethertype::IPV6,
+    };
+
+    let mut frame =
+        MsgBlk::new_ethernet_pkt((outer_eth, outer_ip, outer_udp, geneve));
+    frame.append(inner_pkt);
+    let bytes: Vec<u8> = frame.iter().flat_map(|n| n.iter().copied()).collect();
+
+    // Open the underlay link in raw mode and transmit the assembled frame.
+    // The handle is closed when `_h` drops, before this function returns.
+    let handle = dlpi::open(UNDERLAY_INJECT_DEVICE, dlpi::sys::DLPI_RAW)
+        .map_err(|e| {
+            anyhow!("dlpi::open({UNDERLAY_INJECT_DEVICE}) failed: {e}")
+        })?;
+    let _h = dlpi::DropHandle(handle);
+
+    // `dlpi_send` requires the stream in DL_IDLE, which `dlpi_bind` provides;
+    // an unbound send is rejected with DL_OUTSTATE. See [`INJECT_SAP`] for why
+    // the bound service access point is arbitrary in DLPI_RAW.
+    dlpi::bind(handle, INJECT_SAP)
+        .map_err(|e| anyhow!("dlpi::bind on {UNDERLAY_INJECT_DEVICE}: {e}"))?;
+    dlpi::send(handle, &[], &bytes, None)
+        .map_err(|e| anyhow!("dlpi::send on {UNDERLAY_INJECT_DEVICE}: {e}"))?;
     Ok(())
 }
 
