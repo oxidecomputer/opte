@@ -1221,7 +1221,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         link_state: mac::link_state_t::Down,
         mtu,
         port: new_port(
-            req.xde_devname.clone(),
+            &req.xde_devname,
             &cfg,
             state.vpc_map.clone(),
             state.m2p.clone(),
@@ -2942,15 +2942,12 @@ fn xde_mc_tx_one<'a>(
             if ip6_dst.is_multicast() {
                 // This is a multicast packet, so we determine the inner
                 // source and destination from the packet contents or use a fallback
-                let inner_src = match inner_src_ip {
-                    Some(ip) => ip,
-                    None => {
-                        opte::engine::dbg!(
-                            "mcast Tx: no inner L3 for source filtering"
-                        );
-                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
-                        return;
-                    }
+                let Some(inner_src) = inner_src_ip else {
+                    opte::engine::dbg!(
+                        "mcast Tx: no inner L3 for source filtering"
+                    );
+                    __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
+                    return;
                 };
                 let inner_dst = inner_dst_ip.unwrap_or_else(|| {
                     // Fallback: derive from outer IPv6 multicast address
@@ -3242,7 +3239,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 
 #[unsafe(no_mangle)]
 fn new_port(
-    name: String,
+    name: &str,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
     m2p: Arc<overlay::Mcast2Phys>,
@@ -3251,21 +3248,18 @@ fn new_port(
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
-    let name_cstr = match CString::new(name.as_str()) {
-        Ok(v) => v,
-        Err(_) => return Err(OpteError::BadName),
-    };
+    let name_cstr = CString::new(name).map_err(|_| OpteError::BadName)?;
 
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
+    let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
     firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE)?;
+    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
     overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
