@@ -23,3 +23,6 @@ zerocopy.workspace = true
 crate-type = ["staticlib"]
 name = "xde"
 
+[features]
+default = []
+profiling = []
