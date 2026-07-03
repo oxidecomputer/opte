@@ -2784,7 +2784,8 @@ unsafe extern "C" fn xde_mc_tx(
     ptr::null_mut()
 }
 
-#[inline]
+#[cfg_attr(feature = "profiling", inline(never), unsafe(no_mangle))]
+#[cfg_attr(not(feature = "profiling"), inline)]
 fn xde_mc_tx_one<'a>(
     src_dev: &'a XdeDev,
     mut pkt: MsgBlk,
@@ -3378,7 +3379,8 @@ unsafe extern "C" fn xde_rx(
 /// `DoMcastCheck(&DevMap)`, `DeliverDirect(&XdeDev, VniMac)`) but we'd be
 /// really reliant on rustc interpreting these as static choices and inlining
 /// accordingly.
-#[inline]
+#[cfg_attr(feature = "profiling", inline(never), unsafe(no_mangle))]
+#[cfg_attr(not(feature = "profiling"), inline)]
 fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
