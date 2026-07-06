@@ -229,6 +229,19 @@ impl fmt::Display for EncapAction {
     }
 }
 
+impl opte::engine::props::ActionProperties for EncapAction {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["vni", "phys_ip_src"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "vni" => Some(self.vni.to_string()),
+            "phys_ip_src" => Some(self.phys_ip_src.to_string()),
+            _ => None,
+        }
+    }
+}
+
 impl StaticAction for EncapAction {
     fn gen_ht(
         &self,
@@ -557,6 +570,8 @@ impl fmt::Display for DecapAction {
     }
 }
 
+impl opte::engine::props::ActionProperties for DecapAction {}
+
 impl StaticAction for DecapAction {
     fn gen_ht(
         &self,
@@ -636,6 +651,18 @@ struct MulticastVniValidator {
 impl MulticastVniValidator {
     fn new(vni: Vni) -> Self {
         Self { my_vni: vni }
+    }
+}
+
+impl opte::engine::props::ActionProperties for MulticastVniValidator {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["vni"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "vni" => Some(self.my_vni.to_string()),
+            _ => None,
+        }
     }
 }
 
@@ -1084,5 +1111,38 @@ impl MappingResource for Mcast2Phys {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opte::engine::props::ActionProperties;
+
+    #[test]
+    fn encap_action_exposes_vni_and_phys_ip() {
+        let action = EncapAction::new(
+            "fd00:1122:7788:101::4".parse().unwrap(),
+            Vni::new(99u32).unwrap(),
+            Arc::new(Virt2Phys::default()),
+            Arc::new(Mcast2Phys::default()),
+            Arc::new(Virt2Boundary::default()),
+        );
+        assert_eq!(action.get_property("vni").as_deref(), Some("99"));
+        assert_eq!(
+            action.get_property("phys_ip_src").as_deref(),
+            Some("fd00:1122:7788:101::4"),
+        );
+        assert!(action.get_property("nonexistent").is_none());
+
+        let props = action.properties();
+        assert_eq!(props.len(), 2);
+        assert_eq!(props[0].name, "vni");
+        assert_eq!(props[1].name, "phys_ip_src");
+    }
+
+    #[test]
+    fn decap_action_has_no_properties() {
+        assert!(DecapAction::new().properties().is_empty());
     }
 }

@@ -39,6 +39,8 @@ use super::parse::ValidUlp;
 use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use super::props::ActionProperties;
+use super::props::ActionProperty;
 use crate::ddi::mblk::MsgBlk;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
@@ -275,6 +277,18 @@ impl Identity {
 impl Display for Identity {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Identity")
+    }
+}
+
+impl ActionProperties for Identity {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["name"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "name" => Some(self.name.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -743,7 +757,7 @@ pub enum GenDescError {
 
 pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
-pub trait StatefulAction: Display + Send + Sync {
+pub trait StatefulAction: Display + ActionProperties + Send + Sync {
     /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`ActionMeta`]. This action may also add, remove, or modify
     /// metadata to communicate data to downstream actions.
@@ -773,7 +787,7 @@ pub enum GenHtError {
 
 pub type GenHtResult = ActionResult<HdrTransform, GenHtError>;
 
-pub trait StaticAction: Display + Send + Sync {
+pub trait StaticAction: Display + ActionProperties + Send + Sync {
     fn gen_ht(
         &self,
         dir: Direction,
@@ -796,7 +810,7 @@ pub type ModMetaResult = ActionResult<(), String>;
 /// metadata in some way. That is, it has no transformation to make on
 /// the packet, only add/modify/remove metadata for use by later
 /// layers.
-pub trait MetaAction: Display + Send + Sync {
+pub trait MetaAction: Display + ActionProperties + Send + Sync {
     /// Return the predicates implicit to this action.
     ///
     /// Return both the header [`Predicate`] list and
@@ -844,7 +858,7 @@ impl From<smoltcp::wire::Error> for GenBtError {
 ///
 /// For example, you could use this to hairpin an ARP Reply in response
 /// to a guest's ARP request.
-pub trait HairpinAction: Display + Send + Sync {
+pub trait HairpinAction: Display + ActionProperties + Send + Sync {
     /// Generate a [`Packet`] to hairpin back to the source. The
     /// `meta` argument holds the packet metadata, including any
     /// modifications made by previous layers up to this point.
@@ -932,6 +946,23 @@ impl Action {
 
     pub fn is_deny(&self) -> bool {
         matches!(self, Self::Deny)
+    }
+
+    /// Read-only diagnostic properties exposed by the inner action.
+    ///
+    /// Simple variants (`Allow`, `Deny`, `StatefulAllow`, `HandlePacket`)
+    /// carry no configuration and return an empty list.
+    pub fn properties(&self) -> Vec<ActionProperty> {
+        match self {
+            Self::Allow
+            | Self::StatefulAllow
+            | Self::Deny
+            | Self::HandlePacket => Vec::new(),
+            Self::Meta(a) => a.properties(),
+            Self::Static(a) => a.properties(),
+            Self::Stateful(a) => a.properties(),
+            Self::Hairpin(a) => a.properties(),
+        }
     }
 }
 
@@ -1186,6 +1217,7 @@ impl From<&Rule<Finalized>> for RuleDump {
             predicates,
             data_predicates,
             action: rule.action.to_string(),
+            action_properties: rule.action.properties(),
         }
     }
 }
