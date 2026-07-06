@@ -2598,6 +2598,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
  "crc32fast",
+ "heapless",
  "illumos-sys-hdrs",
  "ingot",
  "opte",

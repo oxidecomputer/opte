@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! XDE multicast replication-target fanout and redundant-next-hop collapse
 //! tests.
@@ -37,166 +37,56 @@ use xde_tests::UNDERLAY_TEST_DEVICE;
 
 #[test]
 fn test_multicast_multi_nexthop_fanout() -> Result<()> {
-    // Test that multicast forwarding with multiple replication targets sends one
-    // packet per target, each with the correct replication flag.
-    //
-    // This test configures two next hops with different replication modes:
-    // - NextHop 1: External replication (to boundary switch)
-    // - NextHop 2: Underlay replication (sled-to-sled)
-    //
-    // After sending one multicast packet, we verify that the External and
-    // Underlay targets each produce a Geneve packet with the correct flag.
-
     let topol = xde_tests::two_node_topology()?;
-    let mcast_group = Ipv4Addr::from([224, 1, 2, 100]);
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
 
-    let mcast_underlay =
-        MulticastUnderlay::new("ff04::e001:264".parse().unwrap()).unwrap();
-
-    let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
-
-    // Configure two next hops with different replication modes.
-    // Use different addresses since NextHopV6 is the key in the forwarding table.
-    // In production, these would be different switch addresses.
-    // For single-sled testing, we use two synthetic addresses.
-    let nexthop1: Ipv6Addr = "fd77::1".parse().unwrap();
-    let nexthop2: Ipv6Addr = "fd77::2".parse().unwrap();
-
-    mcast.set_forwarding(vec![
-        McastForwardingNextHop {
-            next_hop: NextHopV6::new(nexthop1, vni),
-            replication: Replication::External,
-            source_filter: SourceFilter::default(),
-        },
-        McastForwardingNextHop {
-            next_hop: NextHopV6::new(nexthop2, vni),
-            replication: Replication::Underlay,
-            source_filter: SourceFilter::default(),
-        },
-    ])?;
-
-    // Allow IPv4 multicast traffic (224.0.0.0/4) via Multicast target
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-
-    // Subscribe sender to enable Tx processing (though sender is self-excluded)
-    topol.nodes[0]
-        .port
-        .subscribe_multicast(mcast_group.into())
-        .expect("subscribe port 0 should succeed");
-
-    // Assert forwarding table contains both next hops with correct replication modes
-    let hdl = OpteHdl::open()?;
-    let mfwd = hdl.dump_mcast_fwd()?;
-    let entry = mfwd
-        .entries
-        .iter()
-        .find(|e| e.underlay == mcast_underlay)
-        .expect("missing multicast forwarding entry for underlay group");
-
-    assert_eq!(
-        entry.next_hops.len(),
-        2,
-        "expected 2 next hops in forwarding table; got: {:?}",
-        entry.next_hops
-    );
-
-    // Verify External replication next hop is present
-    assert!(
-        entry.next_hops.iter().any(|hop| {
-            hop.replication == Replication::External
-                && hop.next_hop.addr == nexthop1
-                && hop.next_hop.vni == vni
-        }),
-        "expected External replication to {nexthop1:?} in forwarding table; got: {:?}",
-        entry.next_hops
-    );
-
-    // Verify Underlay replication next hop is present
-    assert!(
-        entry.next_hops.iter().any(|hop| {
-            hop.replication == Replication::Underlay
-                && hop.next_hop.addr == nexthop2
-                && hop.next_hop.vni == vni
-        }),
-        "expected Underlay replication to {nexthop2:?} in forwarding table; got: {:?}",
-        entry.next_hops
-    );
-
-    // Start snoop on underlay to capture both Geneve packets
-    // Use -c 2 to capture exactly two packets, then exit
-    let mut snoop_underlay = SnoopGuard::start_with_count(
-        UNDERLAY_TEST_DEVICE,
-        GENEVE_UNDERLAY_FILTER,
-        2,
+    // Disjoint {External, Underlay} programming always splits.
+    assert_splits_into_two_copies(
+        &topol,
+        Ipv4Addr::from([224, 1, 2, 100]),
+        MulticastUnderlay::new("ff04::e001:264".parse().unwrap()).unwrap(),
+        vec![
+            McastForwardingNextHop {
+                next_hop: NextHopV6::new("fd77::1".parse().unwrap(), vni),
+                replication: Replication::External,
+                source_filter: SourceFilter::default(),
+            },
+            McastForwardingNextHop {
+                next_hop: NextHopV6::new("fd77::2".parse().unwrap(), vni),
+                replication: Replication::Underlay,
+                source_filter: SourceFilter::default(),
+            },
+        ],
     )?;
 
-    // Send one multicast packet from zone A
-    let payload = "fanout test";
-    let sender_v4 = topol.nodes[0].port.ip();
-    topol.nodes[0].zone.send_udp_v4(
-        sender_v4,
-        mcast_group,
-        MCAST_TEST_PORT,
-        payload,
+    // A `Both` replication hop coalesces only when its source filter admits the
+    // sender. This one `Include`s a different source, so selection falls back
+    // to the admitting External and Underlay hops.
+    let other_ip: IpAddr = topol.nodes[1].port.ip().into();
+    assert_splits_into_two_copies(
+        &topol,
+        Ipv4Addr::from([224, 1, 2, 109]),
+        MulticastUnderlay::new("ff04::e001:273".parse().unwrap()).unwrap(),
+        vec![
+            McastForwardingNextHop {
+                next_hop: NextHopV6::new("fd77::9".parse().unwrap(), vni),
+                replication: Replication::Both,
+                source_filter: SourceFilter::Include(
+                    [other_ip].into_iter().collect(),
+                ),
+            },
+            McastForwardingNextHop {
+                next_hop: NextHopV6::new("fd77::a".parse().unwrap(), vni),
+                replication: Replication::External,
+                source_filter: SourceFilter::default(),
+            },
+            McastForwardingNextHop {
+                next_hop: NextHopV6::new("fd77::b".parse().unwrap(), vni),
+                replication: Replication::Underlay,
+                source_filter: SourceFilter::default(),
+            },
+        ],
     )?;
-
-    // Wait for snoop to capture two packets
-    let snoop_output =
-        snoop_underlay.assert_packet("two Geneve packets on underlay");
-
-    let stdout = String::from_utf8_lossy(&snoop_output.stdout);
-
-    // Parse both packets and verify replication modes using geneve_verify helpers.
-    // snoop with -c 2 captures two packets. extract_snoop_hex splits them
-    // automatically by detecting offset 0 boundaries.
-    let packets = geneve_verify::extract_snoop_hex(&stdout).unwrap_or_else(|e| {
-        panic!("Expected snoop output to contain hex dump: {}\n\nSnoop output was:\n{}", e, stdout);
-    });
-
-    assert_eq!(
-        packets.len(),
-        2,
-        "Expected to capture 2 packets, found {}",
-        packets.len()
-    );
-
-    // Parse each packet and extract replication mode
-    let mut replications = Vec::new();
-    for (i, hex) in packets.iter().enumerate() {
-        let bytes = geneve_verify::parse_snoop_hex(hex).unwrap_or_else(|e| {
-            panic!("Packet {}: failed to parse hex: {}", i, e)
-        });
-
-        match geneve_verify::parse_geneve_packet(&bytes) {
-            Ok(geneve_info) => {
-                replications.push(geneve_info.replication);
-            }
-            Err(e) => {
-                panic!("Packet {}: failed to parse as Geneve: {}", i, e);
-            }
-        }
-    }
-
-    assert_eq!(
-        replications.len(),
-        2,
-        "Expected to parse 2 Geneve packets with replication info; got: {:?}",
-        replications
-    );
-
-    // Verify we have one External and one Underlay packet
-    assert!(
-        replications.contains(&Some(Replication::External)),
-        "Expected one packet with External replication; got: {:?}",
-        replications
-    );
-    assert!(
-        replications.contains(&Some(Replication::Underlay)),
-        "Expected one packet with Underlay replication; got: {:?}",
-        replications
-    );
 
     Ok(())
 }
@@ -217,6 +107,7 @@ fn test_multicast_dual_external_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 101]),
         MulticastUnderlay::new("ff04::e001:265".parse().unwrap()).unwrap(),
         SourceFilter::default(),
+        [Replication::External, Replication::External],
         Replication::External,
         ["fd77::1", "fd77::2"],
     )?;
@@ -228,6 +119,7 @@ fn test_multicast_dual_external_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 102]),
         MulticastUnderlay::new("ff04::e001:266".parse().unwrap()).unwrap(),
         SourceFilter::Include([sender_ip].into_iter().collect()),
+        [Replication::External, Replication::External],
         Replication::External,
         ["fd77::1", "fd77::2"],
     )?;
@@ -250,6 +142,7 @@ fn test_multicast_dual_underlay_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 105]),
         MulticastUnderlay::new("ff04::e001:269".parse().unwrap()).unwrap(),
         SourceFilter::default(),
+        [Replication::Underlay, Replication::Underlay],
         Replication::Underlay,
         ["fd77::5", "fd77::6"],
     )?;
@@ -259,6 +152,7 @@ fn test_multicast_dual_underlay_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 106]),
         MulticastUnderlay::new("ff04::e001:270".parse().unwrap()).unwrap(),
         SourceFilter::Include([sender_ip].into_iter().collect()),
+        [Replication::Underlay, Replication::Underlay],
         Replication::Underlay,
         ["fd77::5", "fd77::6"],
     )?;
@@ -282,6 +176,7 @@ fn test_multicast_dual_both_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 103]),
         MulticastUnderlay::new("ff04::e001:267".parse().unwrap()).unwrap(),
         SourceFilter::default(),
+        [Replication::Both, Replication::Both],
         Replication::Both,
         ["fd77::3", "fd77::4"],
     )?;
@@ -291,6 +186,7 @@ fn test_multicast_dual_both_select_one() -> Result<()> {
         Ipv4Addr::from([224, 1, 2, 104]),
         MulticastUnderlay::new("ff04::e001:268".parse().unwrap()).unwrap(),
         SourceFilter::Include([sender_ip].into_iter().collect()),
+        [Replication::Both, Replication::Both],
         Replication::Both,
         ["fd77::3", "fd77::4"],
     )?;
@@ -298,21 +194,183 @@ fn test_multicast_dual_both_select_one() -> Result<()> {
     Ok(())
 }
 
-/// Program two redundant next hops sharing a replication target, send one
-/// packet, and assert that exactly one copy leaves carrying the requested
+#[test]
+fn test_multicast_mixed_underlay_both_coalesce() -> Result<()> {
+    // A heterogeneous hop set (one Underlay hop, one Both hop) must not split
+    // the flow across switches: the Both hop covers both replication targets,
+    // so selection coalesces onto it and a single copy leaves carrying the
+    // Both flag rather than one Underlay copy plus one External copy.
+    // Exercised for both ASM and SSM entries.
+
+    let topol = xde_tests::two_node_topology()?;
+    let sender_ip: IpAddr = topol.nodes[0].port.ip().into();
+
+    assert_dual_select_one(
+        &topol,
+        Ipv4Addr::from([224, 1, 2, 107]),
+        MulticastUnderlay::new("ff04::e001:271".parse().unwrap()).unwrap(),
+        SourceFilter::default(),
+        [Replication::Underlay, Replication::Both],
+        Replication::Both,
+        ["fd77::7", "fd77::8"],
+    )?;
+
+    assert_dual_select_one(
+        &topol,
+        Ipv4Addr::from([224, 1, 2, 108]),
+        MulticastUnderlay::new("ff04::e001:272".parse().unwrap()).unwrap(),
+        SourceFilter::Include([sender_ip].into_iter().collect()),
+        [Replication::Underlay, Replication::Both],
+        Replication::Both,
+        ["fd77::7", "fd77::8"],
+    )?;
+
+    Ok(())
+}
+
+/// Program the given next hops, send one packet, and assert the flow splits
+/// into exactly two copies, one External and one Underlay.
+///
+/// A second send with a three-packet snoop must time out, proving the split
+/// costs exactly one copy per target and nothing more.
+fn assert_splits_into_two_copies(
+    topol: &xde_tests::Topology,
+    mcast_group: Ipv4Addr,
+    mcast_underlay: MulticastUnderlay,
+    next_hops: Vec<McastForwardingNextHop>,
+) -> Result<()> {
+    let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
+    mcast.set_forwarding(next_hops.clone())?;
+
+    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
+
+    topol.nodes[0]
+        .port
+        .subscribe_multicast(mcast_group.into())
+        .expect("subscribe port 0 should succeed");
+
+    // Confirm every hop is programmed.
+    let hdl = OpteHdl::open()?;
+    let mfwd = hdl.dump_mcast_fwd()?;
+    let entry = mfwd
+        .entries
+        .iter()
+        .find(|e| e.underlay == mcast_underlay)
+        .expect("missing multicast forwarding entry for underlay group");
+    assert_eq!(
+        entry.next_hops.len(),
+        next_hops.len(),
+        "expected {} next hops in forwarding table; got: {:?}",
+        next_hops.len(),
+        entry.next_hops
+    );
+
+    for hop in &next_hops {
+        assert!(
+            entry.next_hops.contains(hop),
+            "expected {hop:?} in forwarding table; got: {:?}",
+            entry.next_hops
+        );
+    }
+
+    let sender_v4 = topol.nodes[0].port.ip();
+    let payload = "split two copies";
+
+    // 1st send: exactly one External copy and one Underlay copy.
+    {
+        let mut snoop = SnoopGuard::start_with_count(
+            UNDERLAY_TEST_DEVICE,
+            GENEVE_UNDERLAY_FILTER,
+            2,
+        )?;
+
+        topol.nodes[0].zone.send_udp_v4(
+            sender_v4,
+            mcast_group,
+            MCAST_TEST_PORT,
+            payload,
+        )?;
+
+        let out = snoop.assert_packet("two split Geneve copies on underlay");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let packets = geneve_verify::extract_snoop_hex(&stdout)
+            .expect("snoop output should contain hex dumps");
+        assert_eq!(
+            packets.len(),
+            2,
+            "expected 2 packets; got {}",
+            packets.len()
+        );
+
+        let mut replications = Vec::new();
+        for (i, hex) in packets.iter().enumerate() {
+            let bytes =
+                geneve_verify::parse_snoop_hex(hex).unwrap_or_else(|e| {
+                    panic!("packet {i}: failed to parse hex: {e}")
+                });
+            let info = geneve_verify::parse_geneve_packet(&bytes)
+                .unwrap_or_else(|e| panic!("packet {i}: not Geneve: {e}"));
+            replications.push(info.replication);
+        }
+
+        assert!(
+            replications.contains(&Some(Replication::External)),
+            "expected an External copy; got: {replications:?}"
+        );
+        assert!(
+            replications.contains(&Some(Replication::Underlay)),
+            "expected an Underlay copy; got: {replications:?}"
+        );
+    }
+
+    // 2nd send: a snoop waiting for three packets must time out, proving no
+    // hop emitted a copy beyond the one per target.
+    {
+        let mut snoop = SnoopGuard::start_with_count(
+            UNDERLAY_TEST_DEVICE,
+            GENEVE_UNDERLAY_FILTER,
+            3,
+        )?;
+
+        topol.nodes[0].zone.send_udp_v4(
+            sender_v4,
+            mcast_group,
+            MCAST_TEST_PORT,
+            payload,
+        )?;
+
+        if let Ok(out) = snoop.wait_with_timeout(SNOOP_TIMEOUT_EXPECT_NONE) {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            panic!(
+                "expected two copies, but snoop captured a third:\n{stdout}"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Program two next hops sharing at least one replication target, send one
+/// packet, and assert that exactly one copy leaves carrying the expected
 /// replication flag.
 ///
 /// Switches sharing a target reach the same multicast delivery set, so a flow
 /// needs a single copy per target. For a homogeneous pair, the egress and
 /// underlay selections index the same candidate set with the same flow hash
-/// and pick the same hop, so the result is one copy with the configured flag and
-/// the peer is suppressed.
+/// and pick the same hop. For a mixed pair containing a `Both` replication hop,
+/// selection coalesces onto a `Both` hop rather than splitting the flow across
+/// switches.
+///
+/// Either way, one copy leaves with the expected flag and the peer is
+/// suppressed.
 fn assert_dual_select_one(
     topol: &xde_tests::Topology,
     mcast_group: Ipv4Addr,
     mcast_underlay: MulticastUnderlay,
     source_filter: SourceFilter,
-    replication: Replication,
+    replications: [Replication; 2],
+    expected: Replication,
     nexthops: [&str; 2],
 ) -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
@@ -324,12 +382,12 @@ fn assert_dual_select_one(
     mcast.set_forwarding(vec![
         McastForwardingNextHop {
             next_hop: NextHopV6::new(nexthop1, vni),
-            replication,
+            replication: replications[0],
             source_filter: source_filter.clone(),
         },
         McastForwardingNextHop {
             next_hop: NextHopV6::new(nexthop2, vni),
-            replication,
+            replication: replications[1],
             source_filter,
         },
     ])?;
@@ -342,7 +400,7 @@ fn assert_dual_select_one(
         .subscribe_multicast(mcast_group.into())
         .expect("subscribe port 0 should succeed");
 
-    // Confirm both next hops are programmed for failover.
+    // Confirm both next hops are available for failover.
     let hdl = OpteHdl::open()?;
     let mfwd = hdl.dump_mcast_fwd()?;
     let entry = mfwd
@@ -351,16 +409,17 @@ fn assert_dual_select_one(
         .find(|e| e.underlay == mcast_underlay)
         .expect("missing multicast forwarding entry for underlay group");
 
-    assert_eq!(
-        entry
-            .next_hops
-            .iter()
-            .filter(|hop| hop.replication == replication)
-            .count(),
-        2,
-        "expected both next hops programmed with {replication:?}; got: {:?}",
-        entry.next_hops
-    );
+    for (addr, replication) in
+        [(nexthop1, replications[0]), (nexthop2, replications[1])]
+    {
+        assert!(
+            entry.next_hops.iter().any(|hop| {
+                hop.next_hop.addr == addr && hop.replication == replication
+            }),
+            "expected next hop {addr:?} programmed with {replication:?}; got: {:?}",
+            entry.next_hops
+        );
+    }
 
     let sender_v4 = topol.nodes[0].port.ip();
     let payload = "dual select-one";
@@ -387,8 +446,8 @@ fn assert_dual_select_one(
             .expect("captured packet should parse as Geneve");
         assert_eq!(
             info.replication,
-            Some(replication),
-            "selected copy must carry {replication:?} replication"
+            Some(expected),
+            "selected copy must carry {expected:?} replication"
         );
     }
 
