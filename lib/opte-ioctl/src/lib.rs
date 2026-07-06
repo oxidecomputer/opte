@@ -49,6 +49,7 @@ use oxide_vpc::api::ListPortsResp;
 use oxide_vpc::api::McastSubscribeReq;
 use oxide_vpc::api::McastUnsubscribeAllReq;
 use oxide_vpc::api::McastUnsubscribeReq;
+use oxide_vpc::api::ReadXdeUnderlayResp;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrReq;
 use oxide_vpc::api::RemoveCidrResp;
@@ -324,6 +325,14 @@ impl OpteHdl {
     pub fn clear_xde_underlay(&self) -> Result<NoResp, Error> {
         let cmd = OpteCmd::ClearXdeUnderlay;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    pub fn read_xde_underlay(&self) -> Result<ReadXdeUnderlayResp, Error> {
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            OpteCmd::ReadXdeUnderlay,
+            None::<&()>,
+        )
     }
 
     pub fn add_router_entry(

@@ -230,8 +230,10 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
+use opte::api::ReadXdeUnderlayResp;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
+use opte::api::XdeUnderlayDeviceResp;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
 use opte::ddi::kstat::KStatProvider;
@@ -930,6 +932,28 @@ fn clear_xde_underlay_hdlr() -> Result<NoResp, OpteError> {
     clear_xde_underlay()
 }
 
+#[unsafe(no_mangle)]
+fn read_xde_underlay_hdlr() -> Result<ReadXdeUnderlayResp, OpteError> {
+    let state = get_xde_state();
+    let xde_mgmt = state.management_lock.lock();
+
+    let mut resp = ReadXdeUnderlayResp::default();
+    let mut report = |&XdeUnderlayPort { ref name, mac, mtu, .. }| {
+        resp.devices.push(XdeUnderlayDeviceResp {
+            name: name.clone(),
+            mac: mac.into(),
+            mtu,
+        });
+    };
+
+    if let Some(underlay) = &xde_mgmt.underlay {
+        report(&underlay.u1);
+        report(&underlay.u2);
+    }
+
+    Ok(resp)
+}
+
 // This is the entry point for all OPTE commands. It verifies the API
 // version and then multiplexes the command to its appropriate handler.
 #[unsafe(no_mangle)]
@@ -987,6 +1011,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::ClearXdeUnderlay => {
             let resp = clear_xde_underlay_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ReadXdeUnderlay => {
+            let resp = read_xde_underlay_hdlr();
             hdlr_resp(&mut env, resp)
         }
 
