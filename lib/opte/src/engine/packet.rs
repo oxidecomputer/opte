@@ -45,6 +45,7 @@ use crate::d_error::DError;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::mblk::MsgBlkNode;
+use crate::ddi::mblk::request_mblk_offload;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::geneve::GeneveMeta;
 use alloc::boxed::Box;
@@ -62,18 +63,16 @@ use core::sync::atomic::Ordering;
 use dyn_clone::DynClone;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use illumos_sys_hdrs::mac::mac_ether_offload_info_t;
 use illumos_sys_hdrs::mblk_t;
 use illumos_sys_hdrs::uintptr_t;
 use ingot::geneve::GeneveOptRef;
 use ingot::geneve::GeneveRef;
-use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Packet;
 use ingot::icmp::IcmpV4Ref;
-use ingot::icmp::IcmpV6Mut;
 use ingot::icmp::IcmpV6Packet;
 use ingot::icmp::IcmpV6Ref;
-use ingot::tcp::TcpMut;
 use ingot::tcp::TcpPacket;
 use ingot::tcp::TcpRef;
 use ingot::types::BoxedHeader;
@@ -88,13 +87,11 @@ use ingot::types::Parsed as IngotParsed;
 use ingot::types::Read;
 use ingot::types::ToOwnedPacket;
 use ingot::udp::Udp;
-use ingot::udp::UdpMut;
 use ingot::udp::UdpPacket;
 use ingot::udp::UdpRef;
 use opte_api::Vni;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
-use zerocopy::IntoBytes;
 
 pub trait PacketState {}
 
@@ -173,6 +170,7 @@ pub enum WrapError {
 #[derive(Clone, Debug, Eq, PartialEq, DError)]
 #[derror(leaf_data = ParseError::data)]
 pub enum ParseError {
+    NoBuffer,
     IngotError(PacketParseError),
     IllegalValue(MismatchError),
     BadLength(MismatchError),
@@ -733,12 +731,13 @@ where
         net: NP,
     ) -> Result<LiteInPkt<T, NP>, ParseError> {
         let len = pkt.len();
-        let base_ptr = pkt.base_ptr();
+        let base_ptr = pkt.base_ptr().ok_or(ParseError::NoBuffer)?;
+        let large_offload = pkt.large_offload();
 
         let meta = net.parse_inbound(pkt)?;
         meta.headers.validate(len)?;
 
-        Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
+        Ok(Packet { state: LiteParsed { meta, base_ptr, len, large_offload } })
     }
 
     #[inline(always)]
@@ -747,17 +746,18 @@ where
         net: NP,
     ) -> Result<LiteOutPkt<T, NP>, ParseError> {
         let len = pkt.len();
-        let base_ptr = pkt.base_ptr();
+        let base_ptr = pkt.base_ptr().ok_or(ParseError::NoBuffer)?;
+        let large_offload = pkt.large_offload();
 
         let meta = net.parse_outbound(pkt)?;
         meta.headers.validate(len)?;
 
-        Ok(Packet { state: LiteParsed { meta, base_ptr, len } })
+        Ok(Packet { state: LiteParsed { meta, base_ptr, len, large_offload } })
     }
 
     #[inline]
     pub fn to_full_meta(self) -> Packet<FullParsed<T>> {
-        let Packet { state: LiteParsed { len, base_ptr, meta } } = self;
+        let Packet { state: LiteParsed { len, base_ptr, meta, .. } } = self;
         let IngotParsed { headers, data, last_chunk } = meta;
 
         // TODO: we can probably not do this in some cases, but we
@@ -813,12 +813,28 @@ where
 
     #[inline]
     pub fn mblk_addr(&self) -> uintptr_t {
-        self.state.base_ptr
+        self.state.base_ptr.as_ptr() as uintptr_t
+    }
+
+    #[inline]
+    pub fn large_offload(&self) -> bool {
+        self.state.large_offload
     }
 
     #[inline]
     pub fn flow(&self) -> InnerFlowId {
         self.meta().flow()
+    }
+
+    #[inline]
+    pub fn request_offload(&mut self, flags: MblkOffloadFlags, mss: u32) {
+        let large_offload = flags.contains(MblkOffloadFlags::HW_LSO);
+
+        // SAFETY: the inner mblk_t is known to be valid and contain a
+        // valid dblk_t for its buffer.
+        unsafe { request_mblk_offload(self.state.base_ptr, flags, mss) }
+
+        self.state.large_offload = large_offload;
     }
 }
 
@@ -1162,14 +1178,14 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
 
     #[inline]
     pub fn mblk_addr(&self) -> uintptr_t {
-        self.state.base_ptr
+        self.state.base_ptr.as_ptr() as uintptr_t
     }
 
     /// Compute ULP and IP header checksum from scratch.
     ///
-    /// This should really only be used for testing, or in the case
-    /// where we have applied body transforms and know that any initial
-    /// body_csum cannot be valid.
+    /// This should really only be used when producing a net-new packet,
+    /// or in the case where we have applied body transforms and know
+    /// that any initial body_csum cannot be valid.
     pub fn compute_checksums(&mut self)
     where
         T::Chunk: ByteSliceMut,
@@ -1180,69 +1196,10 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         self.state.body_csum = Some(body_csum);
 
         if let Some(ulp) = &mut self.state.meta.headers.inner_ulp {
-            let mut csum = body_csum;
-
             // Unwrap: Can't have a ULP without an IP.
             let ip = self.state.meta.headers.inner_l3.as_ref().unwrap();
-            // Add pseudo header checksum.
-            let pseudo_csum = ip.pseudo_header();
-            csum += pseudo_csum;
-            // Determine ULP slice and add its bytes to the
-            // checksum.
-            match ulp {
-                // ICMP4 requires the body_csum *without*
-                // the pseudoheader added back in.
-                Ulp::IcmpV4(i4) => {
-                    let mut bytes = [0u8; 8];
-                    i4.set_checksum(0);
-                    i4.emit_raw(&mut bytes[..]);
-                    body_csum.add_bytes(&bytes[..]);
-                    i4.set_checksum(body_csum.finalize_for_ingot());
-                }
-                Ulp::IcmpV6(i6) => {
-                    let mut bytes = [0u8; 8];
-                    i6.set_checksum(0);
-                    i6.emit_raw(&mut bytes[..]);
-                    csum.add_bytes(&bytes[..]);
-                    i6.set_checksum(csum.finalize_for_ingot());
-                }
-                Ulp::Tcp(tcp) => {
-                    tcp.set_checksum(0);
-                    match tcp {
-                        Header::Repr(tcp) => {
-                            let mut bytes = [0u8; 56];
-                            tcp.emit_raw(&mut bytes[..]);
-                            csum.add_bytes(&bytes[..]);
-                        }
-                        Header::Raw(tcp) => {
-                            csum.add_bytes(tcp.0.as_bytes());
-                            match &tcp.1 {
-                                Header::Repr(opts) => {
-                                    csum.add_bytes(opts);
-                                }
-                                Header::Raw(opts) => {
-                                    csum.add_bytes(opts);
-                                }
-                            }
-                        }
-                    }
-                    tcp.set_checksum(csum.finalize_for_ingot());
-                }
-                Ulp::Udp(udp) => {
-                    udp.set_checksum(0);
-                    match udp {
-                        Header::Repr(udp) => {
-                            let mut bytes = [0u8; 8];
-                            udp.emit_raw(&mut bytes[..]);
-                            csum.add_bytes(&bytes[..]);
-                        }
-                        Header::Raw(udp) => {
-                            csum.add_bytes(udp.0.as_bytes());
-                        }
-                    }
-                    udp.set_checksum(csum.finalize_for_ingot());
-                }
-            }
+
+            ulp.compute_checksum(ip.pseudo_header(), body_csum);
         }
 
         // Compute and fill in the IPv4 header checksum.
@@ -1317,71 +1274,13 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         // start and end processing.
 
         // If a ULP exists and provided a checksum, then update it.
-        if let Some(mut body_csum) = self.body_csum()
+        if let Some(body_csum) = self.body_csum()
             && let Some(ulp) = self.state.meta.headers.inner_ulp.as_mut()
         {
-            let mut csum = body_csum;
             // Unwrap: Can't have a ULP without an IP.
             let ip = self.state.meta.headers.inner_l3.as_ref().unwrap();
-            // Add pseudo header checksum.
-            let pseudo_csum = ip.pseudo_header();
-            csum += pseudo_csum;
-            // Determine ULP slice and add its bytes to the
-            // checksum.
-            match ulp {
-                // ICMP4 requires the body_csum *without*
-                // the pseudoheader added back in.
-                Ulp::IcmpV4(i4) => {
-                    let mut bytes = [0u8; 8];
-                    i4.set_checksum(0);
-                    i4.emit_raw(&mut bytes[..]);
-                    body_csum.add_bytes(&bytes[..]);
-                    i4.set_checksum(body_csum.finalize_for_ingot());
-                }
-                Ulp::IcmpV6(i6) => {
-                    let mut bytes = [0u8; 8];
-                    i6.set_checksum(0);
-                    i6.emit_raw(&mut bytes[..]);
-                    csum.add_bytes(&bytes[..]);
-                    i6.set_checksum(csum.finalize_for_ingot());
-                }
-                Ulp::Tcp(tcp) => {
-                    tcp.set_checksum(0);
-                    match tcp {
-                        Header::Repr(tcp) => {
-                            let mut bytes = [0u8; 56];
-                            tcp.emit_raw(&mut bytes[..]);
-                            csum.add_bytes(&bytes[..]);
-                        }
-                        Header::Raw(tcp) => {
-                            csum.add_bytes(tcp.0.as_bytes());
-                            match &tcp.1 {
-                                Header::Repr(opts) => {
-                                    csum.add_bytes(opts);
-                                }
-                                Header::Raw(opts) => {
-                                    csum.add_bytes(opts);
-                                }
-                            }
-                        }
-                    }
-                    tcp.set_checksum(csum.finalize_for_ingot());
-                }
-                Ulp::Udp(udp) => {
-                    udp.set_checksum(0);
-                    match udp {
-                        Header::Repr(udp) => {
-                            let mut bytes = [0u8; 8];
-                            udp.emit_raw(&mut bytes[..]);
-                            csum.add_bytes(&bytes[..]);
-                        }
-                        Header::Raw(udp) => {
-                            csum.add_bytes(udp.0.as_bytes());
-                        }
-                    }
-                    udp.set_checksum(csum.finalize_for_ingot());
-                }
-            }
+
+            ulp.compute_checksum(ip.pseudo_header(), body_csum);
         }
 
         // Compute and fill in the IPv4 header checksum.
@@ -1414,7 +1313,7 @@ pub struct FullParsed<T: Read + Pullup> {
     len: usize,
     /// Base pointer of the contained T, used in dtrace SDTs and the like
     /// for correlation and inspection of packet events.
-    base_ptr: uintptr_t,
+    base_ptr: NonNull<mblk_t>,
     /// Access to parsed packet headers and the packet body.
     meta: Box<PacketData<T>>,
     /// Current Flow ID of this packet, accountgin for any applied
@@ -1459,7 +1358,11 @@ pub struct LiteParsed<T: Read + Pullup, M: LightweightMeta<T::Chunk>> {
     len: usize,
     /// Base pointer of the contained T, used in dtrace SDTs and the like
     /// for correlation and inspection of packet events.
-    base_ptr: uintptr_t,
+    base_ptr: NonNull<mblk_t>,
+    /// Whether this packet has any offload flags set indicating that
+    /// it is larger than the MTU due to some form of send/receive
+    /// offload.
+    large_offload: bool,
     meta: IngotParsed<M, T>,
 }
 
@@ -1474,7 +1377,8 @@ pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
 
 pub trait BufferState {
     fn len(&self) -> usize;
-    fn base_ptr(&self) -> uintptr_t;
+    fn base_ptr(&self) -> Option<NonNull<mblk_t>>;
+    fn large_offload(&self) -> bool;
 }
 
 pub trait Pullup {

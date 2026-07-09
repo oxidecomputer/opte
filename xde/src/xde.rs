@@ -246,6 +246,7 @@ use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::LightweightMeta;
 use opte::engine::NetworkImpl;
 use opte::engine::ether::ETHER_ADDR_LEN;
 use opte::engine::ether::EtherAddr;
@@ -3255,7 +3256,13 @@ fn new_port(
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
 
-    let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
+    let mut pb = PortBuilder::new(
+        name,
+        name_cstr,
+        cfg.guest_mac,
+        ectx,
+        NonZeroU32::new(cfg.mtu),
+    );
     firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
@@ -3263,7 +3270,7 @@ fn new_port(
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, v2p, m2p, v2b.clone(), FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -3274,7 +3281,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg };
+    let net = VpcNetwork { cfg, v2b };
     let port = Arc::new(pb.create(net, limit, limit)?);
     Ok(port)
 }
@@ -3392,7 +3399,7 @@ fn xde_rx_one(
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
+    let mut parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             stat_parse_error(Direction::In, &e);
@@ -3511,22 +3518,42 @@ fn xde_rx_one(
     // this to correctly process frames which have been given split into
     // larger chunks.
     //
+    // Due to pseudo-GRO from OPTE or actual GRO provided by illumos, we need
+    // to inform mac/viona on how it can split up this packet, if the guest
+    // cannot receive it (e.g., no GRO/large frame support).
+    // HW_LSO will cause viona to treat this packet as though it were
+    // a locally delivered segment making use of LSO. OPTE will carry flags
+    // forward from dropped segments when applying the emit spec later.
+    //
     // This will be set to a nonzero value when TSO has been asked of the
-    // source packet.
-    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp {
-        let mut out = None;
+    // source packet. It is imperative that we set this on the packet *before*
+    // OPTE processes it, so that we do not treat the packet as oversized and
+    // erroneously hairpin it into an ICMP packet-too-big message.
+    if matches!(meta.inner_ulp, ValidUlp::Tcp(_)) {
+        let mut mss = None;
         for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
             if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
-                out = NonZeroU32::new(el.mss());
+                mss = NonZeroU32::new(el.mss());
                 break;
             }
         }
-        out
-    } else {
-        None
-    };
+        let pay_len = old_len
+            - usize::try_from(non_payl_bytes).expect("usize > 32b on x86_64")
+            - usize::from(meta.encap_len());
+
+        // This packet could be the last segment of a split frame at
+        // which point it could be smaller than the original MSS.
+        // Don't re-tag the MSS if so, as guests may be confused and
+        // MAC emulation will reject the packet if the guest does not
+        // support GRO.
+        if let Some(mss) = mss
+            && pay_len
+                > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+        {
+            parsed_pkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+        }
+    }
 
     let port = &dev.port;
 
@@ -3535,26 +3562,6 @@ fn xde_rx_one(
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
-            let len = npkt.byte_len();
-            let pay_len = len
-                - usize::try_from(non_payl_bytes)
-                    .expect("usize > 32b on x86_64");
-
-            // Due to possible pseudo-GRO, we need to inform mac/viona on how
-            // it can split up this packet, if the guest cannot receive it
-            // (e.g., no GRO/large frame support).
-            // HW_LSO will cause viona to treat this packet as though it were
-            // a locally delivered segment making use of LSO.
-            if let Some(mss) = recovered_mss
-                // This packet could be the last segment of a split frame at
-                // which point it could be smaller than the original MSS.
-                // Don't re-tag the MSS if so, as guests may be confused and
-                // MAC emulation will reject the packet if the guest does not
-                // support GRO.
-                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
-            {
-                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
-            }
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);
@@ -3563,6 +3570,8 @@ fn xde_rx_one(
             postbox.post(port_key, npkt);
         }
         Ok(ProcessResult::Hairpin(hppkt)) => {
+            // TODO: need to do a full TxCache lookup if dstmac is null or
+            // src mac is nonequal to the link.
             stream.tx_drop_on_no_desc(
                 hppkt,
                 TxHint::NoneOrMixed,
@@ -3595,7 +3604,7 @@ fn xde_rx_one_direct(
     // to plumb that through `NetworkParser`. I can't say that I *like*
     // doing this reparse here post-replication.
     let parser = VpcParser {};
-    let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
+    let mut parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
         .expect("this is a reparse of a known-valid packet");
 
     let meta = parsed_pkt.meta();
@@ -3617,22 +3626,42 @@ fn xde_rx_one_direct(
     // this to correctly process frames which have been given split into
     // larger chunks.
     //
+    // Due to pseudo-GRO from OPTE or actual GRO provided by illumos, we need
+    // to inform mac/viona on how it can split up this packet, if the guest
+    // cannot receive it (e.g., no GRO/large frame support).
+    // HW_LSO will cause viona to treat this packet as though it were
+    // a locally delivered segment making use of LSO. OPTE will carry flags
+    // forward from dropped segments when applying the emit spec later.
+    //
     // This will be set to a nonzero value when TSO has been asked of the
-    // source packet.
-    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp {
-        let mut out = None;
+    // source packet. It is imperative that we set this on the packet *before*
+    // OPTE processes it, so that we do not treat the packet as oversized and
+    // erroneously hairpin it into an ICMP packet-too-big message.
+    if matches!(meta.inner_ulp, ValidUlp::Tcp(_)) {
+        let mut mss = None;
         for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
             if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
-                out = NonZeroU32::new(el.mss());
+                mss = NonZeroU32::new(el.mss());
                 break;
             }
         }
-        out
-    } else {
-        None
-    };
+        let pay_len = old_len
+            - usize::try_from(non_payl_bytes).expect("usize > 32b on x86_64")
+            - usize::from(meta.encap_len());
+
+        // This packet could be the last segment of a split frame at
+        // which point it could be smaller than the original MSS.
+        // Don't re-tag the MSS if so, as guests may be confused and
+        // MAC emulation will reject the packet if the guest does not
+        // support GRO.
+        if let Some(mss) = mss
+            && pay_len
+                > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+        {
+            parsed_pkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+        }
+    }
 
     let port = &dev.port;
 
@@ -3641,26 +3670,6 @@ fn xde_rx_one_direct(
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
-            let len = npkt.byte_len();
-            let pay_len = len
-                - usize::try_from(non_payl_bytes)
-                    .expect("usize > 32b on x86_64");
-
-            // Due to possible pseudo-GRO, we need to inform mac/viona on how
-            // it can split up this packet, if the guest cannot receive it
-            // (e.g., no GRO/large frame support).
-            // HW_LSO will cause viona to treat this packet as though it were
-            // a locally delivered segment making use of LSO.
-            if let Some(mss) = recovered_mss
-                // This packet could be the last segment of a split frame at
-                // which point it could be smaller than the original MSS.
-                // Don't re-tag the MSS if so, as guests may be confused and
-                // MAC emulation will reject the packet if the guest does not
-                // support GRO.
-                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
-            {
-                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
-            }
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);

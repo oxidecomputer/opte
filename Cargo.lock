@@ -939,8 +939,7 @@ dependencies = [
 [[package]]
 name = "ingot"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a17a93829808685f3b6882763901d7489efc1155ad4ae568499d1b303067ca6"
+source = "git+https://github.com/oxidecomputer/ingot?branch=extra-impls#cd1dfe5358dd6da571c8f1df9785dda1cc541ee4"
 dependencies = [
  "bitflags 2.13.0",
  "ingot-macros",
@@ -953,8 +952,7 @@ dependencies = [
 [[package]]
 name = "ingot-macros"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4c94e8b5b5e08b71943d585acdb6062daaeb6b19de82ebb377c7c9cbeff44bb"
+source = "git+https://github.com/oxidecomputer/ingot?branch=extra-impls#cd1dfe5358dd6da571c8f1df9785dda1cc541ee4"
 dependencies = [
  "darling 0.21.3",
  "itertools 0.14.0",
@@ -967,8 +965,7 @@ dependencies = [
 [[package]]
 name = "ingot-types"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0d55db2f1de52564cc3781ffd5a7ebb7f2c6e1888841c2fa54231a9498db5f"
+source = "git+https://github.com/oxidecomputer/ingot?branch=extra-impls#cd1dfe5358dd6da571c8f1df9785dda1cc541ee4"
 dependencies = [
  "ingot-macros",
  "macaddr",
