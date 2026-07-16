@@ -2411,12 +2411,20 @@ fn handle_mcast_tx<'a>(
                 ctx.vni.as_u32() as uintptr_t,
                 dev.port.name_cstr().as_ptr() as uintptr_t,
             );
-            if let Some(hp) = guest_loopback(src_dev, dev, *key, my_pkt, postbox) {
+            if let Some(hp) =
+                guest_loopback(src_dev, dev, *key, my_pkt, postbox)
+            {
                 // As in the unicast case below, each destination device may
                 // generate a hairpin packet. In this case we only expect this to
                 // be possible for IPv6 multicast traffic, and we limit the depth
                 // to one such reply.
-                _ = guest_loopback(dev, src_dev, src_dev.postbox_key, hp, postbox)
+                _ = guest_loopback(
+                    dev,
+                    src_dev,
+                    src_dev.postbox_key,
+                    hp,
+                    postbox,
+                )
             }
             let xde = get_xde_state();
             xde.stats.vals.mcast_tx_local().incr(1);
@@ -2931,12 +2939,20 @@ fn xde_mc_tx_one<'a>(
                     // We have found a matching Port on this host; "loop back"
                     // the packet into the inbound processing path of the
                     // destination Port.
-                    if let Some(hp) = guest_loopback(src_dev, dst_dev, key, out_pkt, postbox) {
+                    if let Some(hp) =
+                        guest_loopback(src_dev, dst_dev, key, out_pkt, postbox)
+                    {
                         // The recipient *could* generate its own hairpin, which
                         // will almost certainly be an ICMP error packet. We only allow
                         // ourselves to recurse like this once, since ICMP should
                         // never generate further ICMP errors.
-                        _ = guest_loopback(dst_dev, src_dev, src_dev.postbox_key, hp, postbox)
+                        _ = guest_loopback(
+                            dst_dev,
+                            src_dev,
+                            src_dev.postbox_key,
+                            hp,
+                            postbox,
+                        )
                     }
                 } else {
                     opte::engine::dbg!(

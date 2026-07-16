@@ -70,15 +70,11 @@ impl Postbox {
                 let mut swap_state = Boxes::None;
                 core::mem::swap(&mut self.boxes, &mut swap_state);
 
-                let Boxes::One(.., chain) = swap_state else {
-                    unreachable!()
-                };
+                let Boxes::One(.., chain) = swap_state else { unreachable!() };
 
                 chain
-            },
-            Boxes::Many(map) => {
-                map.remove(&key).unwrap_or_default()
-            },
+            }
+            Boxes::Many(map) => map.remove(&key).unwrap_or_default(),
             Boxes::None | Boxes::One(..) => MsgBlkChain::empty(),
         }
     }
