@@ -102,6 +102,12 @@ pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 unsafe impl Send for MsgBlkChain {}
 unsafe impl Sync for MsgBlkChain {}
 
+impl Default for MsgBlkChain {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl MsgBlkChain {
     /// Create an empty packet chain.
     pub const fn empty() -> Self {

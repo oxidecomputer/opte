@@ -251,6 +251,7 @@ use opte::engine::NetworkImpl;
 use opte::engine::ether::ETHER_ADDR_LEN;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ether::Ethernet;
+use opte::engine::ether::EthernetMut;
 use opte::engine::ether::EthernetRef;
 use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
@@ -632,6 +633,8 @@ pub struct XdeDev {
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
     pub vni: Vni,
+
+    postbox_key: VniMac,
 
     // These are clones of the underlay ports initialized by the
     // driver.
@@ -1173,6 +1176,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
     let cfg = VpcCfg::with_mtu(req.cfg.clone(), mtu);
+    let postbox_key = VniMac::new(cfg.vni, cfg.guest_mac);
 
     // Because we hold the token, no one else will add to/remove from
     // the XdeDev map in parallel. Quickly check that there is no
@@ -1183,7 +1187,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         if devs.get_by_name(&req.xde_devname).is_some() {
             return Err(OpteError::PortExists(req.xde_devname.clone()));
         }
-        if devs.get_by_key(VniMac::new(cfg.vni, cfg.guest_mac)).is_some() {
+        if devs.get_by_key(postbox_key).is_some() {
             return Err(OpteError::MacExists {
                 port: req.xde_devname.clone(),
                 vni: cfg.vni,
@@ -1232,6 +1236,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         )?,
         port_v2p,
         vni: cfg.vni,
+        postbox_key,
         port_igw_map: KMutex::new(None),
         u1,
         u2,
@@ -2097,13 +2102,14 @@ fn guest_loopback_probe(
     );
 }
 
+#[must_use]
 fn guest_loopback(
     src_dev: &XdeDev,
     dst_dev: &XdeDev,
     port_key: VniMac,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
-) {
+) -> Option<MsgBlk> {
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
@@ -2118,7 +2124,7 @@ fn guest_loopback(
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
-            return;
+            return None;
         }
     };
 
@@ -2129,7 +2135,7 @@ fn guest_loopback(
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
             opte::engine::dbg!("{}", e);
-            return;
+            return None;
         }
     };
 
@@ -2166,17 +2172,20 @@ fn guest_loopback(
             if let Some(pkt) = pkt {
                 postbox.post_local(port_key, pkt);
             }
+
+            None
         }
 
         Ok(ProcessResult::Drop { reason }) => {
             opte::engine::dbg!("loopback rx drop: {:?}", reason);
+            None
         }
 
-        Ok(ProcessResult::Hairpin(_hppkt)) => {
-            // There should be no reason for an loopback
-            // inbound packet to generate a hairpin response
-            // from the destination port.
-            opte::engine::dbg!("unexpected loopback rx hairpin");
+        Ok(ProcessResult::Hairpin(hppkt)) => {
+            // A port can generate a message like an ICMP
+            // packet-too-big, which we must feed back to the
+            // original port.
+            Some(hppkt)
         }
 
         Err(e) => {
@@ -2186,6 +2195,7 @@ fn guest_loopback(
                 dst_dev.port.name(),
                 e
             );
+            None
         }
     }
 }
@@ -2401,7 +2411,13 @@ fn handle_mcast_tx<'a>(
                 ctx.vni.as_u32() as uintptr_t,
                 dev.port.name_cstr().as_ptr() as uintptr_t,
             );
-            guest_loopback(src_dev, dev, *key, my_pkt, postbox);
+            if let Some(hp) = guest_loopback(src_dev, dev, *key, my_pkt, postbox) {
+                // As in the unicast case below, each destination device may
+                // generate a hairpin packet. In this case we only expect this to
+                // be possible for IPv6 multicast traffic, and we limit the depth
+                // to one such reply.
+                _ = guest_loopback(dev, src_dev, src_dev.postbox_key, hp, postbox)
+            }
             let xde = get_xde_state();
             xde.stats.vals.mcast_tx_local().incr(1);
         }
@@ -2738,7 +2754,6 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     };
 
-    let mut hairpin_chain = MsgBlkChain::empty();
     let mut tx_postbox = TxPostbox::new();
 
     // We don't need to read-lock port_map or mcast_fwd unless we actually need them.
@@ -2755,11 +2770,16 @@ unsafe extern "C" fn xde_mc_tx(
             &mut tx_postbox,
             &mut port_map,
             &mut mcast_fwd,
-            &mut hairpin_chain,
         );
     }
 
-    let (local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
+    let (mut local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
+
+    // Remove any packets which have been hairpinned back to us.
+    // If we attempt to deliver them while holding a readlock in
+    // `port_map`, then if re-enter XDE in the same stack we could
+    // take a re-entrant read lock and panic.
+    let hairpin_chain = local_pkts.take(src_dev.postbox_key);
 
     // Local same-sled delivery (via mac_rx to guest ports).
     if let Some(port_map) = port_map {
@@ -2767,7 +2787,7 @@ unsafe extern "C" fn xde_mc_tx(
     }
 
     // `port_map` has been moved, making it safe to deliver hairpin
-    // packets (which may cause us to re-enter XDE in the same stack).
+    // packets.
     src_dev.deliver(hairpin_chain);
 
     src_dev.u1.stream.stream.tx_drop_on_no_desc(
@@ -2793,7 +2813,6 @@ fn xde_mc_tx_one<'a>(
     postbox: &mut TxPostbox,
     port_map: &mut Option<KRwLockReadGuard<'a, Arc<DevMap>>>,
     mcast_fwd: &mut Option<KRwLockReadGuard<'a, Arc<McastForwardingTable>>>,
-    hairpin_chain: &mut MsgBlkChain,
 ) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
@@ -2912,7 +2931,13 @@ fn xde_mc_tx_one<'a>(
                     // We have found a matching Port on this host; "loop back"
                     // the packet into the inbound processing path of the
                     // destination Port.
-                    guest_loopback(src_dev, dst_dev, key, out_pkt, postbox);
+                    if let Some(hp) = guest_loopback(src_dev, dst_dev, key, out_pkt, postbox) {
+                        // The recipient *could* generate its own hairpin, which
+                        // will almost certainly be an ICMP error packet. We only allow
+                        // ourselves to recurse like this once, since ICMP should
+                        // never generate further ICMP errors.
+                        _ = guest_loopback(dst_dev, src_dev, src_dev.postbox_key, hp, postbox)
+                    }
                 } else {
                     opte::engine::dbg!(
                         "underlay dest is same as src but the Port was not found \
@@ -3093,7 +3118,7 @@ fn xde_mc_tx_one<'a>(
             // packet chain containing both hairpin and local deliveries
             // (via `guest_loopback`), we defer hairpin delivery until after
             // local delivery completes to avoid potential re-entrancy issues.
-            hairpin_chain.append(hpkt);
+            postbox.post_local(src_dev.postbox_key, hpkt);
         }
 
         Err(_) => {}
@@ -3569,9 +3594,52 @@ fn xde_rx_one(
 
             postbox.post(port_key, npkt);
         }
-        Ok(ProcessResult::Hairpin(hppkt)) => {
-            // TODO: need to do a full TxCache lookup if dstmac is null or
-            // src mac is nonequal to the link.
+        Ok(ProcessResult::Hairpin(mut hppkt)) => {
+            // In this case, we may unfortunately choose a new destination
+            // switch for generated ICMP traffic. In this case our source and
+            // destination MAC will be zeroed out. If this is the case, then
+            // we need to redetermine which underlay port to use.
+            if hppkt.len() < Ethernet::MINIMUM_LENGTH {
+                // We failed to return a packet with enough bytes to hold
+                // Ethernet in the first layer.
+                return None;
+            }
+
+            let stream = if hppkt[0..ETHER_ADDR_LEN] == [0u8; ETHER_ADDR_LEN]
+                || hppkt[ETHER_ADDR_LEN..][..ETHER_ADDR_LEN]
+                    == [0u8; ETHER_ADDR_LEN]
+            {
+                let mut parsed_hppkt =
+                    match Packet::parse_inbound(hppkt.iter_mut(), parser) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // In this case OPTE has generated an encapsulated packet that we,
+                            // ourselves, could not parse.
+                            opte::engine::err!(
+                                "oxide-vpc generated illegal packet: {:?}",
+                                e
+                            );
+                            return None;
+                        }
+                    };
+
+                let dst = parsed_hppkt.meta().outer_v6.destination();
+                let my_key = RouteKey { dst, l4_hash: None };
+                let Route { src, dst, underlay_idx } =
+                    dev.routes.next_hop(my_key, dev);
+                let meta = parsed_hppkt.meta_mut();
+                meta.outer_eth.set_destination(dst.into());
+                meta.outer_eth.set_source(src.into());
+
+                match underlay_idx {
+                    UnderlayIndex::U1 => &dev.u1.stream.stream,
+                    UnderlayIndex::U2 => &dev.u2.stream.stream,
+                }
+            } else {
+                stream
+            };
+
+            // We don't have dedicated postbox chains as these are rare paths.
             stream.tx_drop_on_no_desc(
                 hppkt,
                 TxHint::NoneOrMixed,

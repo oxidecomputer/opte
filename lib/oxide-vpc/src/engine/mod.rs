@@ -20,6 +20,7 @@ use crate::engine::overlay::TUNNEL_ENDPOINT_MAC;
 use crate::engine::overlay::Virt2Boundary;
 use alloc::sync::Arc;
 use core::ops::Deref;
+use core::ops::DerefMut;
 use ingot::icmp::IcmpV4;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Type;
@@ -627,6 +628,12 @@ impl<T: ByteSlice> Deref for OxideGeneve<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<T: ByteSlice> DerefMut for OxideGeneve<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 

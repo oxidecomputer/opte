@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::dev_map::VniMac;
 use crate::mac::TxHint;
@@ -61,6 +61,26 @@ impl Postbox {
     #[inline]
     pub fn drain(self) -> impl Iterator<Item = (VniMac, MsgBlkChain)> {
         self.boxes.into_iter()
+    }
+
+    #[inline]
+    pub fn take(&mut self, key: VniMac) -> MsgBlkChain {
+        match &mut self.boxes {
+            Boxes::One(vni_mac, ..) if *vni_mac == key => {
+                let mut swap_state = Boxes::None;
+                core::mem::swap(&mut self.boxes, &mut swap_state);
+
+                let Boxes::One(.., chain) = swap_state else {
+                    unreachable!()
+                };
+
+                chain
+            },
+            Boxes::Many(map) => {
+                map.remove(&key).unwrap_or_default()
+            },
+            Boxes::None | Boxes::One(..) => MsgBlkChain::empty(),
+        }
     }
 
     /// Returns true if there are no queued deliveries.
