@@ -46,8 +46,8 @@ impl Postbox {
             //    unconditionally update this pointer after the insert is made
             //    (even if an existing chain was selected).
             // b) chain pkt append will not add a new `MsgBlkChain` to `boxes`.
-            // c) `drain` (the only public way to remove entries from `boxes`)
-            //    sets `last_caller` to `None`.
+            // c) `drain` and `take` (the only public ways to remove entries
+            //    from `boxes`) set `last_caller` to `None`.
             unsafe { chain_ptr.as_mut() }
         } else {
             let chain = self.boxes.get_chain(key);
@@ -65,6 +65,7 @@ impl Postbox {
 
     #[inline]
     pub fn take(&mut self, key: VniMac) -> MsgBlkChain {
+        self.last_caller = None;
         match &mut self.boxes {
             Boxes::One(vni_mac, ..) if *vni_mac == key => {
                 let mut swap_state = Boxes::None;
