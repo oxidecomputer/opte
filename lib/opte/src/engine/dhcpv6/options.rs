@@ -533,6 +533,9 @@ impl<'a> IaNa<'a> {
     }
 
     fn from_bytes(buf: &'a [u8], depth: u8) -> Result<Self, Error> {
+        if buf.len() < Self::OPTIONS {
+            return Err(Error::Truncated);
+        }
         // Safety: We've just confirmed there are at least 12 bytes, so the
         // below unwraps are all safe.
         let id = IaId(u32::from_be_bytes(buf[Self::ID].try_into().unwrap()));
@@ -1147,7 +1150,7 @@ mod test {
         let mut wrapped = base;
         for id in 0..Option::MAX_DEPTH {
             wrapped = Option::IaTa(IaTa {
-                id: IaId(id.try_into().unwrap()),
+                id: IaId(id.into()),
                 options: vec![wrapped],
             });
         }
