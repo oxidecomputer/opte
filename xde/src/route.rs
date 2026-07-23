@@ -269,7 +269,10 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
 #[unsafe(no_mangle)]
-fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
+fn get_os_next_hop(
+    key: &RouteKey,
+    ustate: &XdeDev,
+) -> Result<Route, UnderlayIndex> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -469,9 +472,9 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
     }
 }
 
-/// A simple caching layer over `next_hop`.
+/// A simple caching layer over `get_os_next_hop`.
 ///
-/// [`next_hop`] has a latency distribution which roughly looks like this:
+/// [`get_os_next_hop`] has a latency distribution which roughly looks like this:
 /// ```text
 /// t(ns)                                          Count
 /// 1024 |                                         337
@@ -495,7 +498,7 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
 /// contains get/insert costs for 40B keys against `Arc<>`s. The key and value
 /// sizes are not quite the same here, but in general tables must be *large* to
 /// begin to approach 1us on get/insert, so we are unlikely to outpace the cost of
-/// `next_hop`.
+/// `get_os_next_hop`.
 ///
 /// Note, this uses a `BTreeMap`, but we would prefer the more consistent
 /// (faster) add/remove costs of a `HashMap`.
@@ -541,7 +544,7 @@ impl RouteCache {
         // will place traffic from any flow onto the same tx queue.
         //
         // If someone *did* write in before us, we still have a valid route.
-        let route = match next_hop(&key, xde) {
+        let route = match get_os_next_hop(&key, xde) {
             Ok(route) => route,
             Err(dev) => {
                 // `next_hop` might fail for myriad reasons, but we still
@@ -551,10 +554,20 @@ impl RouteCache {
             }
         };
 
-        if !probably_space_remaining {
-            return route;
+        if probably_space_remaining {
+            self.update_cache(key, &route, t, map_ptr_int);
         }
 
+        route
+    }
+
+    fn update_cache(
+        &self,
+        key: RouteKey,
+        route: &Route,
+        time: Moment,
+        map_ptr_int: uintptr_t,
+    ) {
         let mut route_cache = self.0.write();
         let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
 
@@ -569,17 +582,16 @@ impl RouteCache {
         match route_cache.entry(key) {
             Entry::Occupied(mut slot) => {
                 route_refresh_probe(map_ptr_int, &key);
-                slot.insert(route.cached(t));
+                slot.insert(route.cached(time));
             }
             Entry::Vacant(slot) if space_remaining => {
                 route_insert_probe(map_ptr_int, &key);
-                slot.insert(route.cached(t));
+                slot.insert(route.cached(time));
             }
             Entry::Vacant(_) => {
                 route_full_probe(map_ptr_int, &key);
             }
         }
-        route
     }
 
     /// Discards any cached route entries which have been present
