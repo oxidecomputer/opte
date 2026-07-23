@@ -2249,11 +2249,18 @@ impl<N: NetworkImpl> Port<N> {
             };
             match tcp_flows.add(*ufid_out, tfes) {
                 Ok(entry) => {
-                    let n_flows = tcp_flows.num_flows();
-                    self.stats.vals.tcp_flows.set(u64::from(n_flows));
-                    if n_flows == tcp_flows.get_limit().get() {
+                    // Evictions are detected in the same manner as in
+                    // `new_uft_kstat`: if the flow count has not changed
+                    // in response to a successful add, then `entry` has
+                    // evicted another flow.
+                    let n_flows = u64::from(tcp_flows.num_flows());
+                    let old_count = self.stats.vals.tcp_flows.val();
+                    self.stats.vals.tcp_flows.set(n_flows);
+
+                    if n_flows == old_count {
                         self.stats.vals.tcp_evictions.incr(1);
                     }
+
                     Ok(TcpMaybeClosed::NewState(tcp_state, entry))
                 }
                 Err(OpteError::MaxCapacity(limit)) => {
@@ -2752,9 +2759,18 @@ impl<N: NetworkImpl> Port<N> {
                 (&data.uft_out, &vals.out_uft_flows, &vals.out_uft_evictions)
             }
         };
-        let n_flows = uft.num_flows();
-        flow_stat.set(u64::from(n_flows));
-        if n_flows == uft.get_limit().get() {
+
+        // This function is called in response to a successful addition of a UFT.
+        // If the flow count is unchanged, then we know another entry was evicted
+        // in favour of the new one.
+        //
+        // Because we hold the PortData write lock, no one else will alter this
+        // value.
+        let n_flows = u64::from(uft.num_flows());
+        let old_count = flow_stat.val();
+        flow_stat.set(n_flows);
+
+        if n_flows == old_count {
             evict_stat.incr(1);
         }
     }

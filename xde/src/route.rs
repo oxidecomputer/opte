@@ -587,7 +587,7 @@ impl RouteCache {
         time: Moment,
         map_ptr_int: uintptr_t,
     ) {
-        let mut route_cache = self.0.write();
+        let mut route_cache = self.cache.write();
         let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
 
         // We've had a definitive flow miss, but we need to cap the cache
