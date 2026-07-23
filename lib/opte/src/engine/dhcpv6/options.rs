@@ -233,6 +233,25 @@ impl<'a> Option<'a> {
     const LEN: Range<usize> = 2..4;
     const DATA_START: usize = 4;
 
+    // Maximum allowed depth for recursively parsing options from bytes.
+    //
+    // DHCPv6 options are recursive, meaning they can contain other options. RFC
+    // 8415 is not explicit about the maximum allowed depth, but we can sort of
+    // infer it. All Options are contained in a Message. Options like the IA_TA
+    // or IA_NA can contain options, so we have at least 2 levels. Each of those
+    // can contain a Status or an IaAddr option. The latter of those can contain
+    // other options, but the spec generally only mentions those as being Status
+    // options themselves. So:
+    //
+    // Message
+    //   - IA_TA / IA_NA option
+    //     - IA Address option
+    //       - Status option
+    //
+    // So we shouldn't really see a message with options nested deeper than 3
+    // levels. Let's be conservative and allow some headroom beyond that.
+    const MAX_DEPTH: u8 = 8;
+
     /// Return the code associated with this Option.
     pub fn code(&self) -> Code {
         match self {
@@ -320,6 +339,13 @@ impl<'a> Option<'a> {
 
     /// Parse out an Option from a byte array, if possible.
     pub fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
+        Self::from_bytes_with_depth(buf, 0)
+    }
+
+    fn from_bytes_with_depth(buf: &'a [u8], depth: u8) -> Result<Self, Error> {
+        if depth > Option::MAX_DEPTH {
+            return Err(Error::ExceededMaxDepth);
+        }
         // Options must have a type / length.
         if buf.len() < Self::DATA_START {
             return Err(Error::Truncated);
@@ -348,9 +374,9 @@ impl<'a> Option<'a> {
         match code {
             Code::ClientId => Ok(Option::ClientId(Duid(data.into()))),
             Code::ServerId => Ok(Option::ServerId(Duid(data.into()))),
-            Code::IaNa => IaNa::from_bytes(data).map(Option::IaNa),
-            Code::IaTa => IaTa::from_bytes(data).map(Option::IaTa),
-            Code::IaAddr => IaAddr::from_bytes(data).map(Option::IaAddr),
+            Code::IaNa => IaNa::from_bytes(data, depth).map(Option::IaNa),
+            Code::IaTa => IaTa::from_bytes(data, depth).map(Option::IaTa),
+            Code::IaAddr => IaAddr::from_bytes(data, depth).map(Option::IaAddr),
             Code::OptionRequest => {
                 OptionRequest::from_bytes(data).map(Option::OptionRequest)
             }
@@ -439,7 +465,7 @@ impl<'a> IaAddr<'a> {
         Ok(())
     }
 
-    fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
+    fn from_bytes(buf: &'a [u8], depth: u8) -> Result<Self, Error> {
         if buf.len() < Self::OPTIONS {
             return Err(Error::Truncated);
         }
@@ -457,7 +483,7 @@ impl<'a> IaAddr<'a> {
         let mut options = Vec::new();
         let mut start = Self::OPTIONS;
         while start < buf.len() {
-            let opt = Option::from_bytes(&buf[start..])?;
+            let opt = Option::from_bytes_with_depth(&buf[start..], depth + 1)?;
             start += opt.buffer_len();
             options.push(opt);
         }
@@ -506,10 +532,7 @@ impl<'a> IaNa<'a> {
         size_of::<IaId>() + 2 * size_of::<Lifetime>() + option_len
     }
 
-    fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
-        if buf.len() < Self::OPTIONS {
-            return Err(Error::Truncated);
-        }
+    fn from_bytes(buf: &'a [u8], depth: u8) -> Result<Self, Error> {
         // Safety: We've just confirmed there are at least 12 bytes, so the
         // below unwraps are all safe.
         let id = IaId(u32::from_be_bytes(buf[Self::ID].try_into().unwrap()));
@@ -524,7 +547,8 @@ impl<'a> IaNa<'a> {
         let mut start = Self::OPTIONS;
         let mut options = Vec::new();
         while start < buf.len() {
-            let next_option = Option::from_bytes(&buf[start..])?;
+            let next_option =
+                Option::from_bytes_with_depth(&buf[start..], depth + 1)?;
             start += next_option.buffer_len();
             options.push(next_option);
         }
@@ -579,7 +603,7 @@ impl<'a> IaTa<'a> {
         size_of::<IaId>() + self.option_len()
     }
 
-    fn from_bytes(buf: &'a [u8]) -> Result<Self, Error> {
+    fn from_bytes(buf: &'a [u8], depth: u8) -> Result<Self, Error> {
         if buf.len() < Self::OPTIONS {
             return Err(Error::Truncated);
         }
@@ -593,7 +617,8 @@ impl<'a> IaTa<'a> {
         let mut start = Self::OPTIONS;
         let mut options = Vec::new();
         while start < buf.len() {
-            let next_option = Option::from_bytes(&buf[start..])?;
+            let next_option =
+                Option::from_bytes_with_depth(&buf[start..], depth + 1)?;
             start += next_option.buffer_len();
             options.push(next_option);
         }
@@ -859,6 +884,8 @@ mod test {
     use super::OptionRequest;
     use super::Status;
     use super::StatusCode;
+    use crate::engine::dhcpv6::Error;
+    use crate::engine::dhcpv6::options::IaId;
     use crate::engine::dhcpv6::test_data;
 
     #[test]
@@ -1109,5 +1136,33 @@ mod test {
             list.iter().map(|name| name.encode().len()).sum();
         assert_eq!(opt.data_len(), expected_len);
         assert_eq!(opt.buffer_len(), expected_len + 4); // Option code and len
+    }
+
+    #[test]
+    fn fail_on_deeply_nested_options() {
+        let id = IaId(0x1de);
+        let iata = IaTa { id, options: Vec::new() };
+        let base = Option::IaTa(iata);
+        let item_len = base.buffer_len();
+        let mut wrapped = base;
+        for id in 0..Option::MAX_DEPTH {
+            wrapped = Option::IaTa(IaTa {
+                id: IaId(id.try_into().unwrap()),
+                options: vec![wrapped],
+            });
+        }
+        let mut buf = vec![0; item_len * usize::from(Option::MAX_DEPTH + 1)];
+        wrapped.copy_into(&mut buf).expect("able to copy in nested option");
+        let decoded =
+            Option::from_bytes(&buf).expect("able to decode nested option");
+        assert_eq!(decoded, wrapped);
+
+        // Add one more nesting, and we should fail
+        wrapped = Option::IaTa(IaTa { id, options: vec![wrapped] });
+        let mut buf = vec![0; item_len * usize::from(Option::MAX_DEPTH + 2)];
+        wrapped.copy_into(&mut buf).expect("able to copy in nested option");
+        let err = Option::from_bytes(&buf)
+            .expect_err("fail to decode deeply nested option");
+        std::assert_matches!(err, Error::ExceededMaxDepth);
     }
 }
