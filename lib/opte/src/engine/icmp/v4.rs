@@ -221,8 +221,6 @@ impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
     }
 }
 
-pub const ICMP_DU_FRAGMENTATION_NEEDED: u8 = 4;
-
 /// Internal structure of an ICMP _Destination Unreachable_'s `rest_of_hdr`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Ingot)]
 #[ingot(impl_default)]
@@ -237,8 +235,12 @@ pub struct DestinationUnreachable {
     /// over.
     ///
     /// This must be zero for all message types other than
-    /// [`ICMP_DU_FRAGMENTATION_NEEDED`].
+    /// [`Self::FRAGMENTATION_NEEDED`].
     ///
     /// RFC 1191, §4.
     pub mtu: u16be,
+}
+
+impl DestinationUnreachable {
+    pub const FRAGMENTATION_NEEDED: u8 = 4;
 }

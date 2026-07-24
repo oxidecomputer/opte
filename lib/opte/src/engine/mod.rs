@@ -253,15 +253,13 @@ pub trait NetworkImpl {
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;
 
-    /// Handle a packet which is larget than the underlying [`Port`]'s
+    /// Handle a packet which is larger than the underlying [`port::Port`]'s
     /// MTU. Packets will be caught before applying any existing
     /// UFT transform or applying rule-based processing.
     ///
     /// OPTE will raise this error for any packets larger than the MTU
-    /// without appropriate large send/receive offload flags set by the
-    /// caller.
-    ///
-    /// [`Port`]: port::Port
+    /// which do not have appropriate large send/receive offload flags
+    /// set by the driver.
     // NOTE: we can exchange this in future for a generic `handle_error`,
     // if more use cases become apparent.
     fn handle_oversize<'a, T: Read + Pullup + 'a>(

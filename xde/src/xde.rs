@@ -253,6 +253,7 @@ use opte::engine::ether::EtherAddr;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetMut;
 use opte::engine::ether::EthernetRef;
+use opte::engine::ether::ValidEthernet;
 use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
@@ -3615,22 +3616,21 @@ fn xde_rx_one(
             // switch for generated ICMP traffic. In this case our source and
             // destination MAC will be zeroed out. If this is the case, then
             // we need to redetermine which underlay port to use.
-            if hppkt.len() < Ethernet::MINIMUM_LENGTH {
+            let Ok((hp_eth, ..)) = ValidEthernet::parse(&mut hppkt[..]) else {
                 // We failed to return a packet with enough bytes to hold
                 // Ethernet in the first layer.
                 return None;
-            }
+            };
 
-            let stream = if hppkt[0..ETHER_ADDR_LEN] == [0u8; ETHER_ADDR_LEN]
-                || hppkt[ETHER_ADDR_LEN..][..ETHER_ADDR_LEN]
-                    == [0u8; ETHER_ADDR_LEN]
+            let stream = if hp_eth.destination() == MacAddr::ZERO
+                || hp_eth.source() == MacAddr::ZERO
             {
                 let mut parsed_hppkt =
                     match Packet::parse_inbound(hppkt.iter_mut(), parser) {
                         Ok(p) => p,
                         Err(e) => {
-                            // In this case OPTE has generated an encapsulated packet that we,
-                            // ourselves, could not parse.
+                            // In this case OPTE has generated an encapsulated
+                            // packet that we, ourselves, could not parse.
                             opte::engine::err!(
                                 "oxide-vpc generated illegal packet: {:?}",
                                 e

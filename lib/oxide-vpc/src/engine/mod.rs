@@ -52,8 +52,8 @@ use opte::engine::geneve::GeneveMeta;
 use opte::engine::geneve::GeneveMetaRef;
 use opte::engine::headers::EncapMeta;
 use opte::engine::headers::SizeHoldingEncap;
+use opte::engine::icmp::v4::DestinationUnreachable;
 use opte::engine::icmp::v4::DestinationUnreachableMut;
-use opte::engine::icmp::v4::ICMP_DU_FRAGMENTATION_NEEDED;
 use opte::engine::icmp::v4::ValidDestinationUnreachable;
 use opte::engine::ip::L3;
 use opte::engine::ip::v4::Ipv4;
@@ -81,6 +81,26 @@ use opte::ingot::types::Parsed as IngotParsed;
 use opte::ingot::types::Read;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
+
+/// The maximum size of a generated ICMPv4 error message (RFC 1812,
+/// §4.3.2.3).
+///
+/// Error messages should contain as many bytes of the the original packet
+/// as possible, keeping the new packet within this limit.
+///
+/// Historically, error messages were clipped to the L3 header followed by
+/// 64 bits of their own payload (RFC 1191). Tunnelled traffic and newer
+/// protocols nested within UDP (e.g., QUIC) require the RFC 1812 value for
+/// PLPMTUD to function (RFC 8899).
+const RFC1812_MAX_ICMP_PACKET_SIZE: usize = 576;
+
+/// The minimum MTU required on any link for carrying IPv6
+/// traffic (RFC 2460, §5).
+///
+/// RFC 4443 §3.1 requires that any ICMPv6 error messages generated
+/// as a reply to a datagram contain as many bytes of the offending
+/// packet as possible, keeping the new packet within this limit.
+const RFC2460_MIN_IPV6_MTU: usize = 1280;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VpcParser {}
@@ -304,7 +324,7 @@ impl NetworkImpl for VpcNetwork {
 
                 let new_icmp = IcmpV4 {
                     ty: IcmpV4Type::DESTINATION_UNREACHABLE,
-                    code: ICMP_DU_FRAGMENTATION_NEEDED,
+                    code: DestinationUnreachable::FRAGMENTATION_NEEDED,
                     // MTU and body length are filled in below to require fewer casts
                     // of `rest_of_hdr` to `ValidDestinationUnreachable`.
                     ..Default::default()
@@ -324,12 +344,7 @@ impl NetworkImpl for VpcNetwork {
                         L3::<&mut [u8]>::from(new_v4),
                         Ulp::<&mut [u8]>::from(new_icmp),
                     ),
-                    // RFC 1812, §4.3.2.3
-                    // This is a larger quantity than that recommended in RFC 1191
-                    // (L3 + 64 bits), and can be expected by certain nested protocols
-                    // like QUIC. RFC 8899 (PLPMTUD for QUIC) directly indicates this
-                    // larger value.
-                    576,
+                    RFC1812_MAX_ICMP_PACKET_SIZE,
                 )
             }
             L3::Ipv6(v6) => {
@@ -424,8 +439,7 @@ impl NetworkImpl for VpcNetwork {
                     Ethertype::IPV6,
                     IpAddr::from(remote),
                     (L3::from(new_v6), Ulp::from(new_icmp)),
-                    // RFC 4443, §3.1
-                    1280,
+                    RFC2460_MIN_IPV6_MTU,
                 )
             }
         };

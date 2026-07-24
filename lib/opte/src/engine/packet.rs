@@ -813,7 +813,7 @@ where
 
     #[inline]
     pub fn mblk_addr(&self) -> uintptr_t {
-        self.state.base_ptr.as_ptr() as uintptr_t
+        self.state.base_ptr.addr().get()
     }
 
     #[inline]
@@ -1178,7 +1178,7 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
 
     #[inline]
     pub fn mblk_addr(&self) -> uintptr_t {
-        self.state.base_ptr.as_ptr() as uintptr_t
+        self.state.base_ptr.addr().get()
     }
 
     /// Compute ULP and IP header checksum from scratch.
