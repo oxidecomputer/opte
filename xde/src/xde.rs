@@ -1235,7 +1235,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         u1,
         u2,
         underlay_capab,
-        routes: RouteCache::default(),
+        routes: RouteCache::new(&req.xde_devname)?,
         port_map: KRwLock::new(Default::default()),
         mcast_fwd: KRwLock::new(Arc::new(token.mcast_fwd.read().clone())),
     });

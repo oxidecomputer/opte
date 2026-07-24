@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::ip;
 use crate::sys;
@@ -16,10 +16,14 @@ use core::ffi::CStr;
 use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
+use opte::ddi::kstat::KStatNamed;
+use opte::ddi::kstat::KStatProvider;
+use opte::ddi::kstat::KStatU64;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::time::Moment;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::port::PortCreateError;
 
 // XXX: completely arbitrary timeouts.
 /// The duration a cached route remains valid for before it must be
@@ -502,16 +506,26 @@ fn get_os_next_hop(
 ///
 /// Note, this uses a `BTreeMap`, but we would prefer the more consistent
 /// (faster) add/remove costs of a `HashMap`.
-#[derive(Clone)]
-pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
-
-impl Default for RouteCache {
-    fn default() -> Self {
-        Self(KRwLock::new(BTreeMap::new()).into())
-    }
+pub struct RouteCache {
+    cache: Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>,
+    stats: KStatNamed<RouteCacheStats>,
 }
 
 impl RouteCache {
+    pub fn new(port_name: &str) -> Result<Self, PortCreateError> {
+        let stats = RouteCacheStats::new();
+        stats
+            .capacity
+            .set(u64::try_from(MAX_CACHE_ENTRIES).expect("usize is u64"));
+
+        let name = format!("{port_name}_route_cache");
+
+        Ok(Self {
+            cache: KRwLock::new(BTreeMap::new()).into(),
+            stats: KStatNamed::new("xde", &name, stats)?,
+        })
+    }
+
     /// Retrieve a [`Route`] (device and L2 information) for a given `key`.
     ///
     /// This will retrieve an existing entry, if one exists from a recent
@@ -521,7 +535,7 @@ impl RouteCache {
         let t = Moment::now();
 
         let (maybe_route, map_ptr_int, full) = {
-            let route_cache = self.0.read();
+            let route_cache = self.cache.read();
             (
                 route_cache.get(&key).copied(),
                 &*route_cache as *const BTreeMap<_, _> as uintptr_t,
@@ -532,6 +546,7 @@ impl RouteCache {
         let probably_space_remaining = match maybe_route {
             Some(route) if route.is_valid(t) => {
                 route_hit_probe(map_ptr_int, &key);
+                self.stats.vals.hit.incr(1);
                 return route.into();
             }
             Some(_) => true,
@@ -544,18 +559,22 @@ impl RouteCache {
         // will place traffic from any flow onto the same tx queue.
         //
         // If someone *did* write in before us, we still have a valid route.
+        self.stats.vals.miss.incr(1);
         let route = match get_os_next_hop(&key, xde) {
             Ok(route) => route,
             Err(dev) => {
                 // `next_hop` might fail for myriad reasons, but we still
                 // send the packet on an underlay device depending on our
                 // progress. However, we do not want to cache bad mappings.
+                self.stats.vals.error.incr(1);
                 return Route::zero_addr(dev);
             }
         };
 
         if probably_space_remaining {
             self.update_cache(key, &route, t, map_ptr_int);
+        } else {
+            self.stats.vals.table_full.incr(1);
         }
 
         route
@@ -568,7 +587,7 @@ impl RouteCache {
         time: Moment,
         map_ptr_int: uintptr_t,
     ) {
-        let mut route_cache = self.0.write();
+        let mut route_cache = self.cache.write();
         let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
 
         // We've had a definitive flow miss, but we need to cap the cache
@@ -582,13 +601,16 @@ impl RouteCache {
         match route_cache.entry(key) {
             Entry::Occupied(mut slot) => {
                 route_refresh_probe(map_ptr_int, &key);
+                self.stats.vals.refresh.incr(1);
                 slot.insert(route.cached(time));
             }
             Entry::Vacant(slot) if space_remaining => {
                 route_insert_probe(map_ptr_int, &key);
+                self.stats.vals.occupancy.incr(1);
                 slot.insert(route.cached(time));
             }
             Entry::Vacant(_) => {
+                self.stats.vals.table_full.incr(1);
                 route_full_probe(map_ptr_int, &key);
             }
         }
@@ -597,7 +619,7 @@ impl RouteCache {
     /// Discards any cached route entries which have been present
     /// for longer than `REMOVE_ROUTE_LIFETIME`.
     pub fn remove_routes(&self) {
-        let mut route_cache = self.0.write();
+        let mut route_cache = self.cache.write();
 
         let t = Moment::now();
         let ptr: *const BTreeMap<_, _> = &*route_cache;
@@ -611,6 +633,11 @@ impl RouteCache {
                 false
             }
         });
+
+        self.stats
+            .vals
+            .occupancy
+            .set(u64::try_from(route_cache.len()).expect("u64 is usize"));
     }
 }
 
@@ -670,4 +697,24 @@ impl Route {
     fn zero_addr(underlay_idx: UnderlayIndex) -> Route {
         Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_idx }
     }
+}
+
+#[derive(KStatProvider)]
+struct RouteCacheStats {
+    /// The maximum number of entries the route cache can hold.
+    capacity: KStatU64,
+    /// The current number of entries in the route cache.
+    occupancy: KStatU64,
+    /// The number of outbound packets which have reused a cached nexthop.
+    hit: KStatU64,
+    /// The number of outbound packets which have asked the OS for a valid
+    /// nexthop.
+    miss: KStatU64,
+    /// The number of times an expired nexthop was updated in-place with a new one.
+    refresh: KStatU64,
+    /// The number of misses which could not be stored in the cache due to being
+    /// at capacity.
+    table_full: KStatU64,
+    /// The number of times a nexthop lookup failed.
+    error: KStatU64,
 }
