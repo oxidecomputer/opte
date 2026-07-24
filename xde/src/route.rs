@@ -34,7 +34,7 @@ const EXPIRE_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
 const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 
 /// Maximum cache size, set to prevent excessive map modification latency.
-const MAX_CACHE_ENTRIES: usize = 512;
+const MAX_CACHE_ENTRIES: usize = 8192;
 
 unsafe extern "C" {
     pub safe fn __dtrace_probe_next__hop(
@@ -269,7 +269,10 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
 #[unsafe(no_mangle)]
-fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
+fn get_os_next_hop(
+    key: &RouteKey,
+    ustate: &XdeDev,
+) -> Result<Route, UnderlayIndex> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -469,9 +472,9 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
     }
 }
 
-/// A simple caching layer over `next_hop`.
+/// A simple caching layer over `get_os_next_hop`.
 ///
-/// [`next_hop`] has a latency distribution which roughly looks like this:
+/// [`get_os_next_hop`] has a latency distribution which roughly looks like this:
 /// ```text
 /// t(ns)                                          Count
 /// 1024 |                                         337
@@ -491,14 +494,14 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
 /// per-packet' and 'holding a route until it is expired'. We choose, for now,
 /// to hold a route for 100ms.
 ///
-/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
-/// (faster) add/remove costs of a `HashMap`. As `BTreeMap` modification costs
-/// outpace the cost of `next_hop` between 256--512 entries, we currently set 512
-/// as a cap on cache size to prevent significant packet stalls. This may be tricky
-/// to tune.
+/// https://github.com/oxidecomputer/opte/issues/779#issuecomment-2991282673
+/// contains get/insert costs for 40B keys against `Arc<>`s. The key and value
+/// sizes are not quite the same here, but in general tables must be *large* to
+/// begin to approach 1us on get/insert, so we are unlikely to outpace the cost of
+/// `get_os_next_hop`.
 ///
-/// (See: https://github.com/oxidecomputer/opte/pull/499#discussion_r1581164767
-/// for some performance numbers.)
+/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
+/// (faster) add/remove costs of a `HashMap`.
 #[derive(Clone)]
 pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
 
@@ -517,37 +520,56 @@ impl RouteCache {
     pub fn next_hop(&self, key: RouteKey, xde: &XdeDev) -> Route {
         let t = Moment::now();
 
-        let (maybe_route, map_ptr_int) = {
+        let (maybe_route, map_ptr_int, full) = {
             let route_cache = self.0.read();
             (
                 route_cache.get(&key).copied(),
                 &*route_cache as *const BTreeMap<_, _> as uintptr_t,
+                route_cache.len() >= MAX_CACHE_ENTRIES,
             )
         };
 
-        match maybe_route {
+        let probably_space_remaining = match maybe_route {
             Some(route) if route.is_valid(t) => {
                 route_hit_probe(map_ptr_int, &key);
                 return route.into();
             }
-            _ => {}
-        }
+            Some(_) => true,
+            _ => !full,
+        };
 
         // Cache miss: intent is to now ask illumos, then insert.
+        //
+        // This shouldn't duplicate work between threads, given that guests
+        // will place traffic from any flow onto the same tx queue.
+        //
+        // If someone *did* write in before us, we still have a valid route.
+        let route = match get_os_next_hop(&key, xde) {
+            Ok(route) => route,
+            Err(dev) => {
+                // `next_hop` might fail for myriad reasons, but we still
+                // send the packet on an underlay device depending on our
+                // progress. However, we do not want to cache bad mappings.
+                return Route::zero_addr(dev);
+            }
+        };
+
+        if probably_space_remaining {
+            self.update_cache(key, &route, t, map_ptr_int);
+        }
+
+        route
+    }
+
+    fn update_cache(
+        &self,
+        key: RouteKey,
+        route: &Route,
+        time: Moment,
+        map_ptr_int: uintptr_t,
+    ) {
         let mut route_cache = self.0.write();
         let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
-
-        // Someone else may have written while we were taking the lock.
-        // DO NOT waste time if there's a good route.
-        let maybe_route = route_cache.entry(key);
-        let entry_exists = match &maybe_route {
-            Entry::Occupied(e) if e.get().is_valid(t) => {
-                route_hit_probe(map_ptr_int, &key);
-                return (*e.get()).into();
-            }
-            Entry::Occupied(_) => true,
-            _ => false,
-        };
 
         // We've had a definitive flow miss, but we need to cap the cache
         // size to prevent excessive modification latencies at high flow
@@ -557,29 +579,17 @@ impl RouteCache {
         // XXX: Want to profile in future to see if LRU expiry is
         //      affordable/sane here.
         // XXX: A HashMap would exchange insert cost for lookup.
-        if entry_exists || space_remaining {
-            // `next_hop` might fail for myriad reasons, but we still
-            // send the packet on an underlay device depending on our
-            // progress. However, we do not want to cache bad mappings.
-            match (maybe_route, next_hop(&key, xde)) {
-                (Entry::Vacant(slot), Ok(route)) => {
-                    route_insert_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(t));
-                    route
-                }
-                (Entry::Occupied(mut slot), Ok(route)) => {
-                    route_refresh_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(t));
-                    route
-                }
-                (_, Err(dev)) => Route::zero_addr(dev),
+        match route_cache.entry(key) {
+            Entry::Occupied(mut slot) => {
+                route_refresh_probe(map_ptr_int, &key);
+                slot.insert(route.cached(time));
             }
-        } else {
-            route_full_probe(map_ptr_int, &key);
-            drop(route_cache);
-            match next_hop(&key, xde) {
-                Ok(route) => route,
-                Err(dev) => Route::zero_addr(dev),
+            Entry::Vacant(slot) if space_remaining => {
+                route_insert_probe(map_ptr_int, &key);
+                slot.insert(route.cached(time));
+            }
+            Entry::Vacant(_) => {
+                route_full_probe(map_ptr_int, &key);
             }
         }
     }
