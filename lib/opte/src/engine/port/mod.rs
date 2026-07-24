@@ -66,6 +66,7 @@ use crate::ddi::mblk::MsgBlkIterMut;
 use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
+use crate::engine::HdlErrAction;
 use crate::engine::flow_table::EvictionPriority;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::flow_table::FLOW_DEF_TTL;
@@ -231,6 +232,7 @@ pub struct PortBuilder {
     name_cstr: CString,
     mac: MacAddr,
     layers: KMutex<Vec<Layer>>,
+    mtu: Option<NonZeroU32>,
 }
 
 #[derive(Clone, Debug)]
@@ -355,6 +357,7 @@ impl PortBuilder {
             stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
             net,
             data: KRwLock::new(data),
+            mtu: self.mtu,
         })
     }
 
@@ -400,6 +403,7 @@ impl PortBuilder {
         name_cstr: CString,
         mac: MacAddr,
         ectx: Arc<ExecCtx>,
+        mtu: Option<NonZeroU32>,
     ) -> Self {
         PortBuilder {
             name: name.to_string(),
@@ -407,6 +411,7 @@ impl PortBuilder {
             mac,
             ectx,
             layers: KMutex::new(Vec::new()),
+            mtu,
         }
     }
 
@@ -651,6 +656,10 @@ struct PortStats {
     /// and resulted in rule processing.
     in_uft_miss: KStatU64,
 
+    /// The number of inbound packets which were larger than the MTU
+    /// without valid offload state.
+    in_oversize: KStatU64,
+
     /// The number of outbound packets dropped
     /// ([`ProcessResult::Drop`]), for one reason or another.
     out_drop: KStatU64,
@@ -686,6 +695,10 @@ struct PortStats {
     /// The number of outbound packets which did not match a UFT entry
     /// and resulted in rule processing.
     out_uft_miss: KStatU64,
+
+    /// The number of outbound packets which were larger than the MTU
+    /// without valid offload state.
+    out_oversize: KStatU64,
 }
 
 struct PortData {
@@ -764,6 +777,7 @@ pub struct Port<N: NetworkImpl> {
     stats: KStatNamed<PortStats>,
     net: N,
     data: KRwLock<PortData>,
+    mtu: Option<NonZeroU32>,
 }
 
 // Convert:
@@ -1308,6 +1322,36 @@ impl<N: NetworkImpl> Port<N> {
 
         drop(data);
 
+        // Packets which are larger than the guest is able to receive may
+        // require bespoke handling by the `NetworkImpl`. If this is the case
+        // we make the packet ineligible for path (1). The exception to this is
+        // the presence of LRO/GRO flags, which suggest that multiple sub-MTU
+        // packets have been combined on its behalf and it is willing/able to
+        // resplit these if required.
+        //
+        // This needs to happen for both fast/slow-path traffic.
+        let oversize = self
+            .mtu
+            .map(|mtu| {
+                if pkt.large_offload() {
+                    false
+                } else {
+                    let inner_bytes = pkt
+                        .len()
+                        .saturating_sub(usize::from(pkt.meta().encap_len()))
+                        .saturating_sub(
+                            // OPTE's parser structure requires inner ethernet to be
+                            // present, and we do not support VLANs.
+                            ingot::ethernet::Ethernet::MINIMUM_LENGTH,
+                        );
+
+                    usize::try_from(mtu.get())
+                        .expect("usize is expected to be >= 32b")
+                        < inner_bytes
+                }
+            })
+            .unwrap_or(false);
+
         // If we have a UFT miss or invalid entry, upgrade to a write lock and
         // fetch again. This lets us use an optimistic lookup more often.
         let (uft, mut lock) = match uft {
@@ -1353,7 +1397,7 @@ impl<N: NetworkImpl> Port<N> {
                 // The Fast Path.
                 drop(lock.take());
                 let xforms = &entry.state().xforms;
-                let out = if xforms.compiled.is_some() {
+                let out = if !oversize && xforms.compiled.is_some() {
                     FastPathDecision::CompiledUft(entry)
                 } else {
                     FastPathDecision::Uft(entry)
@@ -1539,6 +1583,61 @@ impl<N: NetworkImpl> Port<N> {
         // (2)/(3) Full-fat metadata is required.
         let mut pkt = pkt.to_full_meta();
         let mut ameta = ActionMeta::new();
+
+        if oversize {
+            (match dir {
+                Direction::In => &self.stats.vals.in_oversize,
+                Direction::Out => &self.stats.vals.out_oversize,
+            })
+            .incr(1);
+
+            match self.net.handle_oversize(dir, &mut pkt)? {
+                HdlErrAction::ContinueProcessing => {}
+                HdlErrAction::Deny => {
+                    let res = Ok(ProcessResult::Drop {
+                        reason: DropReason::HandlePkt,
+                    });
+
+                    (match dir {
+                        Direction::In => &self.stats.vals.in_drop,
+                        Direction::Out => &self.stats.vals.out_drop,
+                    })
+                    .incr(1);
+
+                    self.port_process_return_probe(
+                        dir,
+                        &flow_before,
+                        &flow_before,
+                        epoch,
+                        mblk_addr,
+                        &res,
+                        decision.as_u64(),
+                    );
+
+                    return res;
+                }
+                HdlErrAction::Hairpin(msg_blk) => {
+                    let res = Ok(ProcessResult::Hairpin(msg_blk));
+
+                    (match dir {
+                        Direction::In => &self.stats.vals.in_hairpin,
+                        Direction::Out => &self.stats.vals.out_hairpin,
+                    })
+                    .incr(1);
+
+                    self.port_process_return_probe(
+                        dir,
+                        &flow_before,
+                        &flow_before,
+                        epoch,
+                        mblk_addr,
+                        &res,
+                        decision.as_u64(),
+                    );
+                    return res;
+                }
+            }
+        }
 
         let res = match (&decision, dir) {
             // (2) Apply retrieved transform. Lock is dropped.
