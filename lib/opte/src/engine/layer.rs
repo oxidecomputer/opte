@@ -489,6 +489,10 @@ struct LayerStats {
     /// The current number of flows (entries in LFT).
     flows: KStatU64,
 
+    /// The number of times that in in/out LFT pair has been evicted
+    /// to make space for a new entry.
+    evictions: KStatU64,
+
     /// The Time To Live for all flows, in seconds. When a flow is
     /// inactive for longer than the TTL, it is considered expired.
     flow_ttl: KStatU64,
@@ -830,6 +834,7 @@ impl Layer {
 
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
+            self.stats.vals.evictions.incr(1);
             self.ft.ft_out.expire(&out_key);
             self.ft.ft_in.expire(&in_key);
             self.ft.count = self.ft.ft_out.num_flows();

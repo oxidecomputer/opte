@@ -348,13 +348,18 @@ impl PortBuilder {
             ),
         };
 
+        let stats = PortStats::new();
+        stats.in_uft_capacity.set(u64::from(data.uft_in.get_limit().get()));
+        stats.out_uft_capacity.set(u64::from(data.uft_out.get_limit().get()));
+        stats.tcp_capacity.set(u64::from(data.tcp_flows.get_limit().get()));
+
         Ok(Port {
             name: self.name.clone(),
             name_cstr: self.name_cstr,
             mac: self.mac,
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
-            stats: KStatNamed::new("xde", &self.name, PortStats::new())?,
+            stats: KStatNamed::new("xde", &self.name, stats)?,
             net,
             data: KRwLock::new(data),
             mtu: self.mtu,
@@ -656,6 +661,16 @@ struct PortStats {
     /// and resulted in rule processing.
     in_uft_miss: KStatU64,
 
+    /// The number of flows currently contained in the inbound UFT.
+    in_uft_flows: KStatU64,
+
+    /// The maximum number of flows the inbound UFT can hold.
+    in_uft_capacity: KStatU64,
+
+    /// The number of entries in the inbound UFT which have been evicted
+    /// in favour of a new entry.
+    in_uft_evictions: KStatU64,
+
     /// The number of inbound packets which were larger than the MTU
     /// without valid offload state.
     in_oversize: KStatU64,
@@ -696,9 +711,29 @@ struct PortStats {
     /// and resulted in rule processing.
     out_uft_miss: KStatU64,
 
+    /// The number of flows currently contained in the outbound UFT.
+    out_uft_flows: KStatU64,
+
+    /// The maximum number of flows the outbound UFT can hold.
+    out_uft_capacity: KStatU64,
+
+    /// The number of entries in the outbound UFT which have been evicted
+    /// in favour of a new entry.
+    out_uft_evictions: KStatU64,
+
     /// The number of outbound packets which were larger than the MTU
     /// without valid offload state.
     out_oversize: KStatU64,
+
+    /// The number of flows currently contained in the TCP state table.
+    tcp_flows: KStatU64,
+
+    /// The maximum number of flows the TCP state table can hold.
+    tcp_capacity: KStatU64,
+
+    /// The number of entries in the TCP state table which have been evicted
+    /// in favour of a new entry.
+    tcp_evictions: KStatU64,
 }
 
 struct PortData {
@@ -876,6 +911,10 @@ impl<N: NetworkImpl> Port<N> {
         data.uft_in.clear();
         data.uft_out.clear();
         data.tcp_flows.clear();
+
+        self.stats.vals.out_uft_flows.set(0);
+        self.stats.vals.in_uft_flows.set(0);
+        self.stats.vals.tcp_flows.set(0);
     }
 
     /// Get the current [`PortState`].
@@ -1033,6 +1072,8 @@ impl<N: NetworkImpl> Port<N> {
         check_state!(data.state, [PortState::Running])?;
         data.uft_in.clear();
         data.uft_out.clear();
+        self.stats.vals.out_uft_flows.set(0);
+        self.stats.vals.in_uft_flows.set(0);
         Ok(())
     }
 
@@ -1130,9 +1171,13 @@ impl<N: NetworkImpl> Port<N> {
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
         let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        self.stats.vals.tcp_flows.set(u64::from(data.tcp_flows.num_flows()));
 
         let _ = data.uft_in.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        self.stats.vals.in_uft_flows.set(u64::from(data.uft_in.num_flows()));
+
         let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
 
         for l in &mut data.layers {
             l.expire_flows(now);
@@ -1504,6 +1549,9 @@ impl<N: NetworkImpl> Port<N> {
                                     ufid_in,
                                 );
                                 _ = local_lock.tcp_flows.remove(ufid_out);
+                                self.stats.vals.tcp_flows.set(u64::from(
+                                    local_lock.tcp_flows.num_flows(),
+                                ));
                             }
 
                             // We've determined we're actually starting a new
@@ -2299,7 +2347,21 @@ impl<N: NetworkImpl> Port<N> {
                 ),
             };
             match tcp_flows.add(*ufid_out, tfes) {
-                Ok(entry) => Ok(TcpMaybeClosed::NewState(tcp_state, entry)),
+                Ok(entry) => {
+                    // Evictions are detected in the same manner as in
+                    // `new_uft_kstat`: if the flow count has not changed
+                    // in response to a successful add, then `entry` has
+                    // evicted another flow.
+                    let n_flows = u64::from(tcp_flows.num_flows());
+                    let old_count = self.stats.vals.tcp_flows.val();
+                    self.stats.vals.tcp_flows.set(n_flows);
+
+                    if n_flows == old_count {
+                        self.stats.vals.tcp_evictions.incr(1);
+                    }
+
+                    Ok(TcpMaybeClosed::NewState(tcp_state, entry))
+                }
                 Err(OpteError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "TCP", limit })
                 }
@@ -2367,6 +2429,10 @@ impl<N: NetworkImpl> Port<N> {
             // Due to order of operations, out_tcp_existing must
             // call uft_tcp_closed separately.
             let entry = data.tcp_flows.remove(ufid_out).unwrap();
+            self.stats
+                .vals
+                .tcp_flows
+                .set(u64::from(data.tcp_flows.num_flows()));
             let lock = entry.state().inner.lock();
             let state_ufid = lock.inbound_ufid;
 
@@ -2544,6 +2610,7 @@ impl<N: NetworkImpl> Port<N> {
                     hte.tcp_flow = Some(Arc::downgrade(&flow));
                     match data.uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
+                            self.new_uft_kstat(In, data);
                             associate_lfts_upstack(data, &v, Direction::In);
                             Ok(InternalProcessResult::Modified)
                         }
@@ -2584,6 +2651,7 @@ impl<N: NetworkImpl> Port<N> {
         } else {
             match data.uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
+                    self.new_uft_kstat(In, data);
                     associate_lfts_upstack(data, &v, Direction::In);
                     Ok(InternalProcessResult::Modified)
                 }
@@ -2749,6 +2817,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
                 match data.uft_out.add(flow_before, hte) {
                     Ok(v) => {
+                        self.new_uft_kstat(Out, data);
                         associate_lfts_upstack(data, &v, Direction::Out);
                         Ok(InternalProcessResult::Modified)
                     }
@@ -2779,6 +2848,32 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    fn new_uft_kstat(&self, dir: Direction, data: &mut PortData) {
+        let vals = &self.stats.vals;
+        let (uft, flow_stat, evict_stat) = match dir {
+            Direction::In => {
+                (&data.uft_in, &vals.in_uft_flows, &vals.in_uft_evictions)
+            }
+            Direction::Out => {
+                (&data.uft_out, &vals.out_uft_flows, &vals.out_uft_evictions)
+            }
+        };
+
+        // This function is called in response to a successful addition of a UFT.
+        // If the flow count is unchanged, then we know another entry was evicted
+        // in favour of the new one.
+        //
+        // Because we hold the PortData write lock, no one else will alter this
+        // value.
+        let n_flows = u64::from(uft.num_flows());
+        let old_count = flow_stat.val();
+        flow_stat.set(n_flows);
+
+        if n_flows == old_count {
+            evict_stat.incr(1);
+        }
+    }
+
     fn uft_invalidate(
         &self,
         data: &mut PortData,
@@ -2788,11 +2883,13 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
+            self.stats.vals.in_uft_flows.decr(1);
             self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
         }
 
         if let Some(ufid_out) = ufid_out {
             data.uft_out.remove(ufid_out);
+            self.stats.vals.out_uft_flows.decr(1);
             self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
         }
     }
@@ -2831,9 +2928,11 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
+            self.stats.vals.in_uft_flows.decr(1);
             self.uft_tcp_closed_probe(Direction::In, ufid_in);
         }
         data.uft_out.remove(ufid_out);
+        self.stats.vals.out_uft_flows.decr(1);
         self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 

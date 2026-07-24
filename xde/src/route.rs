@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::ip;
 use crate::sys;
@@ -16,10 +16,14 @@ use core::ffi::CStr;
 use core::ptr;
 use core::time::Duration;
 use illumos_sys_hdrs::*;
+use opte::ddi::kstat::KStatNamed;
+use opte::ddi::kstat::KStatProvider;
+use opte::ddi::kstat::KStatU64;
 use opte::ddi::sync::KRwLock;
 use opte::ddi::time::Moment;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ip::v6::Ipv6Addr;
+use opte::engine::port::PortCreateError;
 
 // XXX: completely arbitrary timeouts.
 /// The duration a cached route remains valid for before it must be
@@ -34,7 +38,7 @@ const EXPIRE_ROUTE_LIFETIME: Duration = Duration::from_millis(100);
 const REMOVE_ROUTE_LIFETIME: Duration = Duration::from_millis(1000);
 
 /// Maximum cache size, set to prevent excessive map modification latency.
-const MAX_CACHE_ENTRIES: usize = 512;
+const MAX_CACHE_ENTRIES: usize = 8192;
 
 unsafe extern "C" {
     pub safe fn __dtrace_probe_next__hop(
@@ -269,7 +273,10 @@ fn netstack_rele(ns: *mut ip::netstack_t) {
 // with that data constantly refines the P values of all the hosts's
 // routing tables to bias new packets towards one path or another.
 #[unsafe(no_mangle)]
-fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
+fn get_os_next_hop(
+    key: &RouteKey,
+    ustate: &XdeDev,
+) -> Result<Route, UnderlayIndex> {
     let RouteKey { dst: ip6_dst, l4_hash } = key;
     unsafe {
         // Use the GZ's routing table.
@@ -469,9 +476,9 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
     }
 }
 
-/// A simple caching layer over `next_hop`.
+/// A simple caching layer over `get_os_next_hop`.
 ///
-/// [`next_hop`] has a latency distribution which roughly looks like this:
+/// [`get_os_next_hop`] has a latency distribution which roughly looks like this:
 /// ```text
 /// t(ns)                                          Count
 /// 1024 |                                         337
@@ -491,24 +498,34 @@ fn next_hop(key: &RouteKey, ustate: &XdeDev) -> Result<Route, UnderlayIndex> {
 /// per-packet' and 'holding a route until it is expired'. We choose, for now,
 /// to hold a route for 100ms.
 ///
-/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
-/// (faster) add/remove costs of a `HashMap`. As `BTreeMap` modification costs
-/// outpace the cost of `next_hop` between 256--512 entries, we currently set 512
-/// as a cap on cache size to prevent significant packet stalls. This may be tricky
-/// to tune.
+/// https://github.com/oxidecomputer/opte/issues/779#issuecomment-2991282673
+/// contains get/insert costs for 40B keys against `Arc<>`s. The key and value
+/// sizes are not quite the same here, but in general tables must be *large* to
+/// begin to approach 1us on get/insert, so we are unlikely to outpace the cost of
+/// `get_os_next_hop`.
 ///
-/// (See: https://github.com/oxidecomputer/opte/pull/499#discussion_r1581164767
-/// for some performance numbers.)
-#[derive(Clone)]
-pub struct RouteCache(Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>);
-
-impl Default for RouteCache {
-    fn default() -> Self {
-        Self(KRwLock::new(BTreeMap::new()).into())
-    }
+/// Note, this uses a `BTreeMap`, but we would prefer the more consistent
+/// (faster) add/remove costs of a `HashMap`.
+pub struct RouteCache {
+    cache: Arc<KRwLock<BTreeMap<RouteKey, CachedRoute>>>,
+    stats: KStatNamed<RouteCacheStats>,
 }
 
 impl RouteCache {
+    pub fn new(port_name: &str) -> Result<Self, PortCreateError> {
+        let stats = RouteCacheStats::new();
+        stats
+            .capacity
+            .set(u64::try_from(MAX_CACHE_ENTRIES).expect("usize is u64"));
+
+        let name = format!("{port_name}_route_cache");
+
+        Ok(Self {
+            cache: KRwLock::new(BTreeMap::new()).into(),
+            stats: KStatNamed::new("xde", &name, stats)?,
+        })
+    }
+
     /// Retrieve a [`Route`] (device and L2 information) for a given `key`.
     ///
     /// This will retrieve an existing entry, if one exists from a recent
@@ -517,37 +534,61 @@ impl RouteCache {
     pub fn next_hop(&self, key: RouteKey, xde: &XdeDev) -> Route {
         let t = Moment::now();
 
-        let (maybe_route, map_ptr_int) = {
-            let route_cache = self.0.read();
+        let (maybe_route, map_ptr_int, full) = {
+            let route_cache = self.cache.read();
             (
                 route_cache.get(&key).copied(),
                 &*route_cache as *const BTreeMap<_, _> as uintptr_t,
+                route_cache.len() >= MAX_CACHE_ENTRIES,
             )
         };
 
-        match maybe_route {
+        let probably_space_remaining = match maybe_route {
             Some(route) if route.is_valid(t) => {
                 route_hit_probe(map_ptr_int, &key);
+                self.stats.vals.hit.incr(1);
                 return route.into();
             }
-            _ => {}
-        }
+            Some(_) => true,
+            _ => !full,
+        };
 
         // Cache miss: intent is to now ask illumos, then insert.
-        let mut route_cache = self.0.write();
-        let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
-
-        // Someone else may have written while we were taking the lock.
-        // DO NOT waste time if there's a good route.
-        let maybe_route = route_cache.entry(key);
-        let entry_exists = match &maybe_route {
-            Entry::Occupied(e) if e.get().is_valid(t) => {
-                route_hit_probe(map_ptr_int, &key);
-                return (*e.get()).into();
+        //
+        // This shouldn't duplicate work between threads, given that guests
+        // will place traffic from any flow onto the same tx queue.
+        //
+        // If someone *did* write in before us, we still have a valid route.
+        self.stats.vals.miss.incr(1);
+        let route = match get_os_next_hop(&key, xde) {
+            Ok(route) => route,
+            Err(dev) => {
+                // `next_hop` might fail for myriad reasons, but we still
+                // send the packet on an underlay device depending on our
+                // progress. However, we do not want to cache bad mappings.
+                self.stats.vals.error.incr(1);
+                return Route::zero_addr(dev);
             }
-            Entry::Occupied(_) => true,
-            _ => false,
         };
+
+        if probably_space_remaining {
+            self.update_cache(key, &route, t, map_ptr_int);
+        } else {
+            self.stats.vals.table_full.incr(1);
+        }
+
+        route
+    }
+
+    fn update_cache(
+        &self,
+        key: RouteKey,
+        route: &Route,
+        time: Moment,
+        map_ptr_int: uintptr_t,
+    ) {
+        let mut route_cache = self.cache.write();
+        let space_remaining = route_cache.len() < MAX_CACHE_ENTRIES;
 
         // We've had a definitive flow miss, but we need to cap the cache
         // size to prevent excessive modification latencies at high flow
@@ -557,29 +598,20 @@ impl RouteCache {
         // XXX: Want to profile in future to see if LRU expiry is
         //      affordable/sane here.
         // XXX: A HashMap would exchange insert cost for lookup.
-        if entry_exists || space_remaining {
-            // `next_hop` might fail for myriad reasons, but we still
-            // send the packet on an underlay device depending on our
-            // progress. However, we do not want to cache bad mappings.
-            match (maybe_route, next_hop(&key, xde)) {
-                (Entry::Vacant(slot), Ok(route)) => {
-                    route_insert_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(t));
-                    route
-                }
-                (Entry::Occupied(mut slot), Ok(route)) => {
-                    route_refresh_probe(map_ptr_int, &key);
-                    slot.insert(route.cached(t));
-                    route
-                }
-                (_, Err(dev)) => Route::zero_addr(dev),
+        match route_cache.entry(key) {
+            Entry::Occupied(mut slot) => {
+                route_refresh_probe(map_ptr_int, &key);
+                self.stats.vals.refresh.incr(1);
+                slot.insert(route.cached(time));
             }
-        } else {
-            route_full_probe(map_ptr_int, &key);
-            drop(route_cache);
-            match next_hop(&key, xde) {
-                Ok(route) => route,
-                Err(dev) => Route::zero_addr(dev),
+            Entry::Vacant(slot) if space_remaining => {
+                route_insert_probe(map_ptr_int, &key);
+                self.stats.vals.occupancy.incr(1);
+                slot.insert(route.cached(time));
+            }
+            Entry::Vacant(_) => {
+                self.stats.vals.table_full.incr(1);
+                route_full_probe(map_ptr_int, &key);
             }
         }
     }
@@ -587,7 +619,7 @@ impl RouteCache {
     /// Discards any cached route entries which have been present
     /// for longer than `REMOVE_ROUTE_LIFETIME`.
     pub fn remove_routes(&self) {
-        let mut route_cache = self.0.write();
+        let mut route_cache = self.cache.write();
 
         let t = Moment::now();
         let ptr: *const BTreeMap<_, _> = &*route_cache;
@@ -601,6 +633,11 @@ impl RouteCache {
                 false
             }
         });
+
+        self.stats
+            .vals
+            .occupancy
+            .set(u64::try_from(route_cache.len()).expect("u64 is usize"));
     }
 }
 
@@ -660,4 +697,24 @@ impl Route {
     fn zero_addr(underlay_idx: UnderlayIndex) -> Route {
         Self { src: EtherAddr::zero(), dst: EtherAddr::zero(), underlay_idx }
     }
+}
+
+#[derive(KStatProvider)]
+struct RouteCacheStats {
+    /// The maximum number of entries the route cache can hold.
+    capacity: KStatU64,
+    /// The current number of entries in the route cache.
+    occupancy: KStatU64,
+    /// The number of outbound packets which have reused a cached nexthop.
+    hit: KStatU64,
+    /// The number of outbound packets which have asked the OS for a valid
+    /// nexthop.
+    miss: KStatU64,
+    /// The number of times an expired nexthop was updated in-place with a new one.
+    refresh: KStatU64,
+    /// The number of misses which could not be stored in the cache due to being
+    /// at capacity.
+    table_full: KStatU64,
+    /// The number of times a nexthop lookup failed.
+    error: KStatU64,
 }
