@@ -188,6 +188,7 @@ use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -285,6 +286,7 @@ use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::InternetGatewayMap;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::MAX_MULTICAST_NEXT_HOPS;
 use oxide_vpc::api::McastForwardingEntry;
 use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
@@ -320,11 +322,11 @@ use oxide_vpc::engine::router;
 
 const ETHERNET_MTU: u16 = 1500;
 
-// Type alias for multicast forwarding table:
-// Maps underlay multicast addresses to next hops with replication and source filters.
-// The source filter is the aggregated filter for the destination sled (union of
-// all subscriber filters on that sled). Packets are only forwarded if the
-// aggregated filter allows the source.
+// Type alias for multicast forwarding table: maps underlay multicast addresses
+// to switch next hops with replication and source filters. Each source filter is
+// aggregated over the subscriber set reachable through that next hop. Packets are
+// only forwarded to a selected next hop if its aggregated filter allows the
+// source.
 type McastForwardingTable = BTreeMap<
     MulticastUnderlay,
     BTreeMap<NextHopV6, (Replication, SourceFilter)>,
@@ -2307,6 +2309,124 @@ struct MulticastRxContext<'a> {
     inner_eth_off: usize,
 }
 
+/// The next hop chosen to carry a flow's single copy for each replication
+/// target.
+///
+/// A field is `None` when no next hop for that target admits the flow's source.
+struct ReplicationSelection {
+    /// Egress to the external network via the switch front panel.
+    external: Option<NextHopV6>,
+    /// Underlay delivery to sleds behind the switch.
+    underlay: Option<NextHopV6>,
+}
+
+/// Select one next hop per replication target to carry a flow's single copy.
+///
+/// The control plane programs multiple next hops sharing a target for switch
+/// redundancy, not to represent disjoint multicast destination sets. For a
+/// given target, each candidate switch reaches the same external network or the
+/// same sled subscribers because group membership is mirrored across the
+/// redundant switches. A multicast stream, therefore, needs only a single copy
+/// per target leaving this sled. Emitting to every candidate would duplicate
+/// the stream, and a receiver cannot tell duplicate copies apart, so it cannot
+/// deduplicate.
+///
+/// One candidate is chosen per target per flow while all remain programmed in
+/// the forwarding table, so any peer can carry the flow on failover. The caller
+/// suppresses the redundant copy on the others.
+///
+/// Only next hops whose source filter admits `inner_src` are candidates. For an
+/// any-source group (the default `Exclude(empty)`) every hop for the target
+/// qualifies.
+///
+/// For a source-filtered group, only the hops that permit this source qualify,
+/// so a denied source never selects a hop that would have dropped it while
+/// another would have forwarded.
+///
+/// Among the candidates, selection is keyed on the inner flow's L4 hash (the
+/// flow's CRC32, the same key the V2B boundary path uses to ECMP over tunnel
+/// endpoints). For multicast, that hash includes the inner source and group
+/// (and L4 fields when present), so a given flow pins deterministically to one
+/// switch across reboots and OPTE instances while distinct flows are spread
+/// across switches.
+///
+/// Selection coalesces the targets onto one hop before splitting the flow
+/// into per-target copies. A `Both` replication next hop satisfies both
+/// targets with a single packet, so that when the `Both` partition is non-empty
+/// the flow indexes it with `l4_hash % len` and both targets resolve to
+/// that hop. Only when no single hop covers the pair are the targets
+/// resolved independently, each then indexing its own partition with the
+/// same modulo, in which case the split copies carry disjoint replication
+/// instructions. Splitting when a `Both` replication hop is available
+/// would double sled Tx for traffic one packet satisfies.
+///
+/// Source filters are evaluated once per hop here. Filtered hops increment
+/// [`mcast_tx_fwd_source_filtered`] and fire the corresponding probe,
+/// preserving per-hop drop telemetry without re-checking in the emit loop.
+///
+/// [`mcast_tx_fwd_source_filtered`]: crate::stats::XdeStats::mcast_tx_fwd_source_filtered
+fn select_nexthops(
+    next_hops: &BTreeMap<NextHopV6, (Replication, SourceFilter)>,
+    ctx: &MulticastTxContext,
+) -> ReplicationSelection {
+    // Eligible hops for this flow are held on the stack, partitioned by
+    // replication mode during the scan. Omicron elects a single incumbent
+    // switch as the forwarding next hop today, so one entry is expected in
+    // general practice, with transient overlap while the reconciler replaces
+    // it. The set ioctl bounds each group's map to
+    // `MAX_MULTICAST_NEXT_HOPS`, so no partition can exceed its capacity.
+    let mut both = heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let mut external =
+        heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let mut underlay =
+        heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let xde = get_xde_state();
+    for (next_hop, (replication, source_filter)) in next_hops.iter() {
+        if !source_filter.allows(ctx.inner_src) {
+            xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
+
+            let (af, src_ptr, dst_ptr) =
+                dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
+            __dtrace_probe_mcast__fwd__source__filtered(
+                af,
+                src_ptr,
+                dst_ptr,
+                ctx.vni.as_u32() as uintptr_t,
+                &next_hop.addr as *const _ as uintptr_t,
+                source_filter.mode() as uintptr_t,
+            );
+            continue;
+        }
+
+        let _ = match replication {
+            Replication::Both => both.push(*next_hop),
+            Replication::External => external.push(*next_hop),
+            Replication::Underlay => underlay.push(*next_hop),
+            // `Reserved` serves neither target, so it is never a candidate.
+            Replication::Reserved => continue,
+        };
+    }
+
+    // `checked_rem` yields `None` on an empty partition, folding the
+    // emptiness test into the modulo.
+    let hash = ctx.l4_hash as usize;
+
+    // Coalesce first: pin the flow to a single `Both` replication hop when
+    // one exists.
+    if let Some(idx) = hash.checked_rem(both.len()) {
+        let chosen = Some(both[idx]);
+        return ReplicationSelection { external: chosen, underlay: chosen };
+    }
+
+    // No single hop covers both targets, so the flow splits: each target
+    // hashes over its own partition, and the copies carry disjoint
+    // replication instructions.
+    ReplicationSelection {
+        external: hash.checked_rem(external.len()).map(|idx| external[idx]),
+        underlay: hash.checked_rem(underlay.len()).map(|idx| underlay[idx]),
+    }
+}
+
 /// Handle multicast packet forwarding for same-sled delivery and underlay
 /// replication based on the XDE-wide multicast forwarding table.
 ///
@@ -2406,11 +2526,11 @@ fn handle_mcast_tx<'a>(
         }
     }
 
-    // Next hop forwarding: send packets to configured next hops.
+    // Next hop forwarding: send packets to configured switch next hops.
     //
-    // At the leaf level, we process all next hops in the forwarding table.
-    // Each next hop's `Replication` is a Tx-only instruction telling the switch
-    // which ports to replicate to:
+    // At the leaf level, we process the forwarding table, but we do not
+    // transmit to every next hop. Each next hop's `Replication` is a Tx-only
+    // instruction telling the chosen switch which ports to replicate to:
     // - External: ports set for external multicast traffic (egress to external networks)
     // - Underlay: replicate to other sleds (using multicast outer dst)
     // - Both: both external and underlay replication
@@ -2427,28 +2547,39 @@ fn handle_mcast_tx<'a>(
     }
 
     if let Some(next_hops) = cpu_mcast_fwd.get(&underlay_key) {
-        // We found forwarding entries, replicate to each next hop
-        for (next_hop, (replication, source_filter)) in next_hops.iter() {
-            // Check aggregated source filter before forwarding.
-            // This filter is the union of all subscriber filters for
-            // this next hop. If no subscriber would accept this source,
-            // skip forwarding.
-            if !source_filter.allows(ctx.inner_src) {
-                let xde = get_xde_state();
-                xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
-                let (af, src_ptr, dst_ptr) =
-                    dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
-                __dtrace_probe_mcast__fwd__source__filtered(
-                    af,
-                    src_ptr,
-                    dst_ptr,
-                    ctx.vni.as_u32() as uintptr_t,
-                    &next_hop.addr as *const _ as uintptr_t,
-                    source_filter.mode() as uintptr_t,
-                );
-                continue;
-            }
+        // A next hop is a switch that replicates to every
+        // destination in the requested target's multicast delivery set. Next
+        // hops sharing a target are redundant switch paths to that set:
+        // external candidates reach the same external multicast network, and
+        // underlay candidates reach the same sled subscribers. Emitting to
+        // every next hop for a target would duplicate the stream.
+        //
+        // Pick one hop per target, preferring a single `Both` hop that
+        // satisfies the pair with one packet and falling back to independent
+        // per-target choices only when no such hop exists.
+        //
+        // Source filters and drop telemetry are handled inside `select_nexthops`.
+        let ReplicationSelection {
+            external: chosen_external,
+            underlay: chosen_underlay,
+        } = select_nexthops(next_hops, &ctx);
 
+        // At most two emissions: one when a single hop covers both targets,
+        // otherwise one per chosen hop. The emitted replication reflects
+        // which targets chose the hop, not the replication its entry
+        // carries.
+        let (first, second) = match (chosen_external, chosen_underlay) {
+            (Some(ext), Some(und)) if ext == und => {
+                (Some((ext, Replication::Both)), None)
+            }
+            (ext, und) => (
+                ext.map(|hop| (hop, Replication::External)),
+                und.map(|hop| (hop, Replication::Underlay)),
+            ),
+        };
+
+        for (next_hop, effective_replication) in first.into_iter().chain(second)
+        {
             // Clone packet with headers using pullup
             let Ok(mut fwd_pkt) =
                 ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
@@ -2486,7 +2617,11 @@ fn handle_mcast_tx<'a>(
             }
             // Update Geneve multicast option with the Tx-only replication
             // instruction for the switch.
-            update_mcast_replication(&mut fwd_pkt, geneve_offset, *replication);
+            update_mcast_replication(
+                &mut fwd_pkt,
+                geneve_offset,
+                effective_replication,
+            );
 
             // Route to switch unicast address to determine which underlay
             // port/MAC to use. Packet destination is multicast address with
@@ -2530,7 +2665,7 @@ fn handle_mcast_tx<'a>(
                 (AF_INET6 as usize, &outer_ip6 as *const _ as uintptr_t);
 
             // Fire DTrace probes and increment stats based on replication mode
-            match replication {
+            match effective_replication {
                 oxide_vpc::api::Replication::Underlay => {
                     __dtrace_probe_mcast__underlay__fwd(
                         af,
@@ -3849,7 +3984,9 @@ fn set_mcast_forwarding_hdlr(
     // Validation of admin-local IPv6 (ff04::/16) happens at deserialization
     let underlay = req.underlay;
 
-    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication modes.
+    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication
+    // modes.
+    //
     // NextHopV6.addr must be unicast (switch address for routing).
     // The packet will be sent to the multicast address (req.underlay).
     for entry in &req.next_hops {
@@ -3874,6 +4011,19 @@ fn set_mcast_forwarding_hdlr(
                 ),
             });
         }
+
+        // Reject `Reserved`. It serves no replication target, so the Tx-side
+        // selection never picks such a hop and an accepted one would silently
+        // drop the group's traffic with no telemetry.
+        if matches!(entry.replication, Replication::Reserved) {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "multicast next hop {} has Reserved replication, which serves no target",
+                    entry.next_hop.addr
+                ),
+            });
+        }
     }
 
     // Record next hop count before consuming the vector
@@ -3882,6 +4032,27 @@ fn set_mcast_forwarding_hdlr(
     let token = state.management_lock.lock();
     {
         let mut mcast_fwd = token.mcast_fwd.write();
+
+        // Reject (based on upper bound) before mutating the merged map, as it
+        // must stay within `MAX_MULTICAST_NEXT_HOPS` so that Tx-side selection
+        // can hold every candidate on the stack.
+        let merged = mcast_fwd
+            .get(&underlay)
+            .into_iter()
+            .flat_map(BTreeMap::keys)
+            .chain(req.next_hops.iter().map(|entry| &entry.next_hop))
+            .collect::<BTreeSet<_>>()
+            .len();
+
+        if merged > MAX_MULTICAST_NEXT_HOPS {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "multicast group {} would have {merged} next hops, max is {MAX_MULTICAST_NEXT_HOPS}",
+                    underlay.addr()
+                ),
+            });
+        }
 
         // Get or create the next hop map for this underlay address
         let next_hop_map = mcast_fwd.entry(underlay).or_default();

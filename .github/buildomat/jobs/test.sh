@@ -22,17 +22,36 @@ set -o xtrace
 
 pfexec pkg install brand/omicron1 brand/omicron1/tools opte
 
+# TGT_BASE mirrors the artifact location used by xde.sh. Override it to match a
+# local xde.sh run, e.g. TGT_BASE=/var/tmp ./test.sh, so the test binaries are
+# found without forced writing to the root-owned /work.
+TGT_BASE=${TGT_BASE:=/work}
+
 if [[ -z $BUILDOMAT_JOB_ID ]]; then
     echo Note: if you are running this locally, you must run the xde.sh job first
     echo to have the artifacts at the expected spot.
     pfexec mkdir -p /input/xde
-    pfexec ln -s /work /input/xde/work
+    # Replace any stale symlink from an interrupted prior run so the link is
+    # idempotent across local re-runs.
+    pfexec rm -f /input/xde/work
+    pfexec ln -s $TGT_BASE /input/xde/work
 fi
 
 pfexec /usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
 
+# Resolve the invoking user for ownership restoration. When this script is run
+# elevated locally, the effective `id -un` resolves to root and would chown the
+# tree to root. Prefer `$SUDO_USER` (set by sudo), then `logname`, which reports
+# the login user across pfexec. Fall back to `id` in CI, however.
+run_user=${SUDO_USER:-$(logname 2>/dev/null || id -un)}
+run_group=$(id -gn "$run_user" 2>/dev/null || id -gn)
+
 function cleanup {
-    pfexec chown -R `id -un`:`id -gn` .
+    # A restore-to-owner that resolves to root would defeat its own purpose.
+    # Skip rather than re-root the tree.
+    if [[ $run_user != root ]]; then
+        pfexec chown -R "$run_user":"$run_group" .
+    fi
     if [[ -z $BUILDOMAT_JOB_ID ]]; then
         pfexec rm -rf /input/xde
     fi
@@ -97,6 +116,9 @@ pfexec /input/xde/work/test/multicast_validation --nocapture --test-threads=1
 
 pfexec chmod +x /input/xde/work/test/multicast_source_filter
 pfexec /input/xde/work/test/multicast_source_filter --nocapture --test-threads=1
+
+pfexec chmod +x /input/xde/work/test/multicast_multi_nexthop
+pfexec /input/xde/work/test/multicast_multi_nexthop --nocapture --test-threads=1
 
 banner "teardown"
 # Ensure full driver teardown is exercised after tests complete

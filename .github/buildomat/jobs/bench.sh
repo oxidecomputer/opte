@@ -39,8 +39,19 @@ fi
 
 pfexec /usr/lib/brand/omicron1/baseline -w /var/run/brand/omicron1/baseline
 
+# Resolve the invoking user for ownership restoration. When this script is run
+# elevated locally, the effective `id -un` resolves to root and would chown the
+# tree to root. Prefer `$SUDO_USER` (set by sudo), then `logname`, which reports
+# the login user across pfexec. Fall back to `id` in CI, however.
+run_user=${SUDO_USER:-$(logname 2>/dev/null || id -un)}
+run_group=$(id -gn "$run_user" 2>/dev/null || id -gn)
+
 function cleanup {
-    pfexec chown -R `id -un`:`id -gn` .
+    # A restore-to-owner that resolves to root would defeat its own purpose.
+    # Skip rather than re-root the tree.
+    if [[ $run_user != root ]]; then
+        pfexec chown -R "$run_user":"$run_group" .
+    fi
     if [[ -z $BUILDOMAT_JOB_ID ]]; then
         pfexec rm -rf /input/xde
     fi
@@ -67,7 +78,14 @@ function get_artifact {
     return $curl_res
 }
 
-OUT_DIR=/work/bench-results
+# TGT_BASE allows one to run this more easily in their local
+# environment:
+#
+#   TGT_BASE=/var/tmp ./bench.sh
+#
+TGT_BASE=${TGT_BASE:=/work}
+
+OUT_DIR=$TGT_BASE/bench-results
 
 mkdir -p $OUT_DIR
 mkdir -p target/criterion
@@ -118,6 +136,6 @@ cargo ubench
 cp -r target/criterion $OUT_DIR
 cp -r target/xde-bench $OUT_DIR
 
-pushd /work
+pushd $TGT_BASE
 tar -caf bench-results.tgz bench-results
 popd
