@@ -137,6 +137,9 @@ mcast-local-delivery {
 	@by_vni["DELIVER", this->vni] = count();
 	@by_port[this->port] = count();
 	@by_group["DELIVER", this->group_str] = count();
+
+	/* Per-(port,group,vni) delivery matrix for end-to-end fan-out verification. */
+	@deliver_by_port_group[this->port, this->group_str, this->vni] = count();
 }
 
 mcast-local-delivery
@@ -165,6 +168,9 @@ mcast-underlay-fwd {
 	@by_vni["UNDERLAY", this->vni] = count();
 	@by_underlay["UNDERLAY", this->underlay_str] = count();
 	@by_nexthop_unicast[this->next_hop_str] = count();
+
+	/* Per-(group,vni,next-hop) fan-out; cross-checks ddm-peers rear-port count. */
+	@fwd_by_group_nh[this->underlay_str, this->vni, this->next_hop_str] = count();
 }
 
 mcast-underlay-fwd
@@ -421,6 +427,11 @@ mcast-source-filtered {
 	@by_vni["FILTERED", this->vni] = count();
 	@by_port[this->port] = count();
 	@filtered_by_mode[this->mode_str] = count();
+
+	/* Per-(event,scope,group,vni) drops for end-to-end loss attribution.
+	 * The scope names the address space of the group column: overlay for the
+	 * inner multicast group, underlay for the outer delivery address. */
+	@drops["FILTERED", "overlay", this->dst_str, this->vni] = count();
 }
 
 mcast-source-filtered
@@ -454,6 +465,9 @@ mcast-fwd-source-filtered {
 	@by_vni["FWD_FILT", this->vni] = count();
 	@by_nexthop_unicast[this->next_hop_str] = count();
 	@filtered_by_mode[this->mode_str] = count();
+
+	/* Per-(event,scope,group,vni) drops; see mcast-source-filtered. */
+	@drops["FWD_FILT", "overlay", this->dst_str, this->vni] = count();
 }
 
 mcast-fwd-source-filtered
@@ -473,9 +487,13 @@ mcast-no-fwd-entry {
 	/* arg0=underlay_ptr, arg1=vni */
 	this->underlay = (in6_addr_t *)arg0;
 	this->vni = arg1;
+	this->underlay_str = inet_ntoa6(this->underlay);
 
 	/* Always track aggregations */
 	@by_event["NOFWD"] = count();
+
+	/* Per-(event,scope,group,vni) drops; see mcast-source-filtered. */
+	@drops["NOFWD", "underlay", this->underlay_str, this->vni] = count();
 }
 
 mcast-no-fwd-entry
@@ -499,10 +517,16 @@ END
 	printa(@by_underlay);
 	printf("\nLocal delivery by port:\n");
 	printa(@by_port);
+	printf("\nDelivery matrix (port, group, vni):\n");
+	printa(@deliver_by_port_group);
 	printf("\nForwarding by unicast next hop (routing address):\n");
 	printa(@by_nexthop_unicast);
+	printf("\nForwarding fan-out (underlay group, vni, next hop):\n");
+	printa(@fwd_by_group_nh);
 	printf("\nSource filtering by mode:\n");
 	printa(@filtered_by_mode);
+	printf("\nDrops (event, scope, group, vni):\n");
+	printa(@drops);
 	printf("\nConfig ops:\n");
 	printa(@cfg_counts);
 }

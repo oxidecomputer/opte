@@ -807,7 +807,24 @@ pub struct SetMcastForwardingReq {
     pub next_hops: Vec<McastForwardingNextHop>,
 }
 
+/// Upper bound on programmed next hops per multicast group.
+///
+/// A rack has two switches, so at most two next hops (one per switch) are
+/// expected. The 2x headroom lets a reconciler transiently hold old and
+/// new hops while replacing a pair.
+///
+/// Set requests merge with a group's existing entries rather than replace
+/// them, and the bound applies to the result: a request is rejected when
+/// the union of existing and requested next hops would exceed it. This
+/// lets Tx-side selection hold each replication mode's candidates in a
+/// fixed-capacity `heapless::Vec` on the stack.
+pub const MAX_MULTICAST_NEXT_HOPS: usize = 4;
+
 /// A forwarding entry for a single next hop with its aggregated source filter.
+///
+/// Next hops sharing a [`Replication`] target are redundant candidates for
+/// that target, not additive fanout destinations. Here, Tx-side selection picks
+/// one hop per target per flow rather than emitting to every hop.
 ///
 /// The source filter is the union of all subscriber filters across every
 /// destination reachable via this next hop (sleds behind the switch port,

@@ -18,7 +18,6 @@ use opte_ioctl::OpteHdl;
 use oxide_vpc::api::ClearMcast2PhysReq;
 use oxide_vpc::api::ClearMcastForwardingReq;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
-use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastForwardingNextHop;
@@ -31,7 +30,6 @@ use oxide_vpc::api::Replication;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
-use xde_tests::IPV4_MULTICAST_CIDR;
 use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SNOOP_TIMEOUT_EXPECT_NONE;
@@ -157,11 +155,6 @@ fn test_double_subscribe() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
-
     topol.nodes[1]
         .port
         .subscribe_multicast(mcast_group.into())
@@ -253,11 +246,6 @@ fn test_subscribe_then_clear_m2p() -> Result<()> {
         replication: Replication::External,
         source_filter: SourceFilter::default(),
     }])?;
-
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
 
     topol.nodes[1]
         .port
@@ -634,12 +622,6 @@ fn test_clear_forwarding_stops_underlay_egress() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    // Allow IPv4 multicast traffic via Multicast target
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
-
     // Subscribe sender port to enable multicast Tx processing
     topol.nodes[0]
         .port
@@ -736,11 +718,6 @@ fn test_multiple_simultaneous_groups() -> Result<()> {
 
     let mcast_a = MulticastGroup::new(group_a.into(), underlay_a)?;
     let mcast_b = MulticastGroup::new(group_b.into(), underlay_b)?;
-
-    // Allow multicast traffic
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr)?;
 
     // Subscribe node 0 to group A only, node 1 to group B only
     topol.nodes[0]

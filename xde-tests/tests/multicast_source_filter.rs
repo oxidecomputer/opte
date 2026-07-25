@@ -19,7 +19,6 @@
 use anyhow::Result;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpAddr;
-use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastForwardingNextHop;
@@ -29,8 +28,6 @@ use oxide_vpc::api::Replication;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
-use xde_tests::IPV4_MULTICAST_CIDR;
-use xde_tests::IPV6_ADMIN_LOCAL_MULTICAST_CIDR;
 use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SnoopGuard;
@@ -55,15 +52,6 @@ fn test_include_filter_allows_listed_source() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
-
-    // Add router entries for both families
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
 
     // IPv4
     {
@@ -159,14 +147,6 @@ fn test_include_filter_blocks_unlisted_source() -> Result<()> {
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
 
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
-
     // IPv4
     {
         let mcast_group = Ipv4Addr::from([224, 0, 0, 253]);
@@ -246,14 +226,6 @@ fn test_include_empty_blocks_all() -> Result<()> {
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
 
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
-
     // IPv4
     {
         let mcast_group = Ipv4Addr::from([224, 0, 0, 254]);
@@ -327,14 +299,6 @@ fn test_exclude_empty_allows_all() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
-
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
 
     // IPv4
     {
@@ -422,14 +386,6 @@ fn test_exclude_filter_blocks_listed_source() -> Result<()> {
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
 
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
-
     // IPv4
     {
         let mcast_group = Ipv4Addr::from([224, 0, 1, 2]);
@@ -512,14 +468,6 @@ fn test_exclude_filter_allows_unlisted_source() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
-
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
 
     // IPv4
     {
@@ -610,14 +558,6 @@ fn test_filter_update_via_resubscribe() -> Result<()> {
     let vni = Vni::new(DEFAULT_MULTICAST_VNI)?;
     let fake_switch_addr = topol.nodes[1].port.underlay_ip().into();
     let dev_name_b = topol.nodes[1].port.name().to_string();
-
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v4)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
 
     // IPv4
     {
@@ -764,14 +704,6 @@ fn test_tx_same_sled_source_filtering() -> Result<()> {
 
     let topol = xde_tests::three_node_topology_dualstack()?;
 
-    let mcast_cidr_v4 = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr_v4)?;
-        node.port.add_multicast_router_entry(mcast_cidr_v6)?;
-    }
-
     let dev_name_b = topol.nodes[1].port.name().to_string();
     let dev_name_c = topol.nodes[2].port.name().to_string();
 
@@ -905,9 +837,6 @@ fn test_forwarding_source_filter() -> Result<()> {
         source_filter: include_filter([other_ip]),
     }])?;
 
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-
     // Subscribe sender to enable Tx processing
     topol.nodes[0]
         .port
@@ -1016,10 +945,6 @@ fn test_forwarding_source_filter() -> Result<()> {
             source_filter: include_filter([other_ip_v6]),
         }])?;
 
-        let mcast_cidr_v6 =
-            IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-        topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-
         topol.nodes[0]
             .port
             .subscribe_multicast(mcast_group_v6.into())
@@ -1106,9 +1031,6 @@ fn test_forwarding_multi_nexthop_different_filters() -> Result<()> {
             },
         ])?;
 
-        let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-        topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-
         topol.nodes[0]
             .port
             .subscribe_multicast(mcast_group.into())
@@ -1161,10 +1083,6 @@ fn test_forwarding_multi_nexthop_different_filters() -> Result<()> {
                 source_filter: include_filter([other_ip_v6]),
             },
         ])?;
-
-        let mcast_cidr_v6 =
-            IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-        topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
 
         topol.nodes[0]
             .port

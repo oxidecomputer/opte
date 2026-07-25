@@ -5273,11 +5273,10 @@ fn test_ipv6_multicast_encapsulation() {
     g1.port.start();
     set!(g1, "port_state=running");
 
-    // Multicast traffic is detected automatically by the gateway layer (checking
-    // if the destination IP is multicast), but still requires explicit firewall
-    // permission. This unit test bypasses the firewall by calling port.process()
-    // directly. In production (and XDE tests), `add_multicast_router_entry()` is
-    // required to allow multicast CIDRs through the overlay firewall.
+    // Multicast traffic is detected automatically by the gateway layer
+    // (checking if the destination IP is multicast). Outbound multicast is
+    // allowed by the router's built-in multicast rule and the gateway's
+    // no-spoof rules; so, no explicit router entry or firewall rule is needed.
 
     // Build a UDP packet to the multicast address
     let eth = Ethernet {
