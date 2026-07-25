@@ -24,8 +24,12 @@ use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::Ipv4Cidr;
+use oxide_vpc::api::Ipv4PrefixLen;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::Ipv6Cidr;
+use oxide_vpc::api::Ipv6PrefixLen;
 use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
@@ -47,6 +51,7 @@ use rand::RngExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::num::NonZeroU32;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
@@ -292,6 +297,7 @@ impl OptePort {
         private_ip: &str,
         guest_mac: &str,
         phys_ip: &str,
+        mtu: Option<NonZeroU32>,
     ) -> Result<Self> {
         let cfg = VpcCfg {
             ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
@@ -316,7 +322,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), None)?;
+        adm.create_xde(name, cfg.clone(), mtu.map(NonZeroU32::get))?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -331,6 +337,7 @@ impl OptePort {
         private_ip_v6: &str,
         guest_mac: &str,
         phys_ip: &str,
+        mtu: Option<NonZeroU32>,
     ) -> Result<Self> {
         let cfg = VpcCfg {
             ip_cfg: IpCfg::DualStack {
@@ -372,7 +379,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), None)?;
+        adm.create_xde(name, cfg.clone(), mtu.map(NonZeroU32::get))?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -385,7 +392,14 @@ impl OptePort {
         let adm = OpteHdl::open()?;
         adm.add_router_entry(&AddRouterEntryReq {
             port_name: self.name.clone(),
-            dest: IpCidr::Ip4(format!("{dest}/32").parse().unwrap()),
+            dest: match dest.parse::<IpAddr>().unwrap() {
+                IpAddr::Ip4(ip) => {
+                    IpCidr::Ip4(Ipv4Cidr::new(ip, Ipv4PrefixLen::NETMASK_ALL))
+                }
+                IpAddr::Ip6(ip) => {
+                    IpCidr::Ip6(Ipv6Cidr::new(ip, Ipv6PrefixLen::NETMASK_ALL))
+                }
+            },
             target: RouterTarget::Ip(dest.parse().unwrap()),
             class: RouterClass::System,
         })?;
@@ -888,8 +902,13 @@ pub fn two_node_topology() -> Result<Topology> {
     Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
 
     // Create the first OPTE port with the provided overlay/underlay parameters.
-    let opte0 =
-        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    let opte0 = OptePort::new(
+        "opte0",
+        "10.0.0.1",
+        "a8:40:25:ff:00:01",
+        "fd44::1",
+        None,
+    )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.fw_allow_all()?;
 
@@ -909,8 +928,13 @@ pub fn two_node_topology() -> Result<Topology> {
         RouteV6::new(opte0.underlay_ip(), 64, ll0.ip, Some(vn1.name.clone()))?;
 
     // Create the second OPTE port with the provided overlay/underlay parameters.
-    let opte1 =
-        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
+    let opte1 = OptePort::new(
+        "opte1",
+        "10.0.0.2",
+        "a8:40:25:ff:00:02",
+        "fd77::1",
+        None,
+    )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.fw_allow_all()?;
 
@@ -993,6 +1017,7 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
         "fd00::1",
         "a8:40:25:ff:00:01",
         "fd44::1",
+        None,
     )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.fw_allow_all()?;
@@ -1007,6 +1032,7 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
         "fd00::2",
         "a8:40:25:ff:00:02",
         "fd77::1",
+        None,
     )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.fw_allow_all()?;
@@ -1080,20 +1106,35 @@ pub fn three_node_topology() -> Result<Topology> {
     Xde::set_v2p("10.0.0.3", "a8:40:25:ff:00:03", "fd88::1")?;
 
     // Create three OPTE ports
-    let opte0 =
-        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    let opte0 = OptePort::new(
+        "opte0",
+        "10.0.0.1",
+        "a8:40:25:ff:00:01",
+        "fd44::1",
+        None,
+    )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.add_router_entry("10.0.0.3")?;
     opte0.fw_allow_all()?;
 
-    let opte1 =
-        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
+    let opte1 = OptePort::new(
+        "opte1",
+        "10.0.0.2",
+        "a8:40:25:ff:00:02",
+        "fd77::1",
+        None,
+    )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.add_router_entry("10.0.0.3")?;
     opte1.fw_allow_all()?;
 
-    let opte2 =
-        OptePort::new("opte2", "10.0.0.3", "a8:40:25:ff:00:03", "fd88::1")?;
+    let opte2 = OptePort::new(
+        "opte2",
+        "10.0.0.3",
+        "a8:40:25:ff:00:03",
+        "fd88::1",
+        None,
+    )?;
     opte2.add_router_entry("10.0.0.1")?;
     opte2.add_router_entry("10.0.0.2")?;
     opte2.fw_allow_all()?;
@@ -1189,6 +1230,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::1",
         "a8:40:25:ff:00:01",
         "fd44::1",
+        None,
     )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.add_router_entry("10.0.0.3")?;
@@ -1200,6 +1242,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::2",
         "a8:40:25:ff:00:02",
         "fd77::1",
+        None,
     )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.add_router_entry("10.0.0.3")?;
@@ -1211,6 +1254,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::3",
         "a8:40:25:ff:00:03",
         "fd88::1",
+        None,
     )?;
     opte2.add_router_entry("10.0.0.1")?;
     opte2.add_router_entry("10.0.0.2")?;
@@ -1284,13 +1328,15 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
 
 #[derive(Copy, Clone)]
 pub struct PortInfo {
-    pub ip: IpAddr,
+    pub priv_ip4: Ipv4Addr,
+    pub priv_ip6: Ipv6Addr,
     pub mac: MacAddr,
     pub underlay_addr: Ipv6Addr,
 }
 
 pub const ZONE_A_PORT: PortInfo = PortInfo {
-    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 1])),
+    priv_ip4: Ipv4Addr::from_const([10, 0, 0, 1]),
+    priv_ip6: Ipv6Addr::from_const([0xfd00, 0, 0, 0, 0, 0, 0, 1]),
     mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x01]),
     underlay_addr: Ipv6Addr::from_const([
         0xfd44, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -1298,7 +1344,8 @@ pub const ZONE_A_PORT: PortInfo = PortInfo {
 };
 
 pub const ZONE_B_PORT: PortInfo = PortInfo {
-    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 2])),
+    priv_ip4: Ipv4Addr::from_const([10, 0, 0, 2]),
+    priv_ip6: Ipv6Addr::from_const([0xfd00, 0, 0, 0, 0, 0, 0, 2]),
     mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x02]),
     underlay_addr: Ipv6Addr::from_const([
         0xfd77, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -1341,6 +1388,7 @@ pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
 pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
+    mtu: Option<NonZeroU32>,
     peers: &[PortInfo],
     null_port_count: u32,
     brand: &str,
@@ -1392,27 +1440,35 @@ pub fn single_node_over_real_nic(
             "172.20.0.1",
             &taken_mac,
             &underlay_addr,
+            None,
         )?);
     }
 
-    let ip = my_info.ip.to_string();
+    let ip4 = my_info.priv_ip4.to_string();
+    let ip6 = my_info.priv_ip6.to_string();
     let mac = my_info.mac.to_string();
-    Xde::set_v2p(&ip, &mac, &underlay_addr)?;
+    Xde::set_v2p(&ip4, &mac, &underlay_addr)?;
+    Xde::set_v2p(&ip6, &mac, &underlay_addr)?;
 
-    let opte = OptePort::new(
+    let opte = OptePort::new_dualstack(
         &format!("opte{}", null_ports.len()),
-        &ip,
+        &ip4,
+        &ip6,
         &mac,
         &underlay_addr,
+        mtu,
     )?;
 
     let v6_routes = vec![];
     for peer in peers {
-        let ip = peer.ip.to_string();
+        let ip4 = peer.priv_ip4.to_string();
+        let ip6 = peer.priv_ip6.to_string();
         let mac = peer.mac.to_string();
         let underlay_addr = peer.underlay_addr.to_string();
-        Xde::set_v2p(&ip, &mac, &underlay_addr)?;
-        opte.add_router_entry(&ip)?;
+        Xde::set_v2p(&ip4, &mac, &underlay_addr)?;
+        Xde::set_v2p(&ip6, &mac, &underlay_addr)?;
+        opte.add_router_entry(&ip4)?;
+        opte.add_router_entry(&ip6)?;
     }
 
     opte.fw_allow_all()?;
@@ -1424,7 +1480,7 @@ pub fn single_node_over_real_nic(
     let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
 
     println!("setup zone");
-    a.setup(&opte.name, opte.ip())?;
+    a.setup_dualstack(&opte.name, opte.ip(), opte.ipv6().unwrap())?;
 
     Ok(Topology {
         nodes: vec![TestNode { zone: a, port: opte }],

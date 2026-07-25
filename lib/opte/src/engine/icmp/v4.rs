@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! ICMPv4 headers and processing.
 
@@ -219,4 +219,28 @@ impl<B: ByteSlice> QueryEcho for ValidIcmpV4<B> {
             _ => None,
         }
     }
+}
+
+/// Internal structure of an ICMP _Destination Unreachable_'s `rest_of_hdr`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ingot)]
+#[ingot(impl_default)]
+pub struct DestinationUnreachable {
+    _rsvd: u8,
+    /// The number of 32-bit words of the original packet included in this
+    /// message's body, after padding to a 4B boundary.
+    ///
+    /// RFC 4884, §4.1.
+    pub length: u8,
+    /// The MTU of the link which this packet was too large to be forwarded
+    /// over.
+    ///
+    /// This must be zero for all message types other than
+    /// [`Self::FRAGMENTATION_NEEDED`].
+    ///
+    /// RFC 1191, §4.
+    pub mtu: u16be,
+}
+
+impl DestinationUnreachable {
+    pub const FRAGMENTATION_NEEDED: u8 = 4;
 }

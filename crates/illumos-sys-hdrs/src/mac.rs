@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 #[cfg(feature = "kernel")]
 use crate::mblk_t;
@@ -111,7 +111,7 @@ bitflags! {
 /// Flags which denote checksum and LSO state for an `mblk_t`.
 ///
 /// These are derived from `#define`s in pattr.h.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub struct MblkOffloadFlags: u32 {
     /// Tx: IPv4 header checksum must be computed by hardware.
     const HCK_IPV4_HDRCKSUM = 1 << 0;

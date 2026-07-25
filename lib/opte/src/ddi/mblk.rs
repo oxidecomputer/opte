@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use crate::engine::packet::BufferState;
 use crate::engine::packet::Pullup;
@@ -101,6 +101,12 @@ pub struct MsgBlkChain(Option<MsgBlkChainInner>);
 // Moreover, `mblk_t`s contain no e.g. thread-local state.
 unsafe impl Send for MsgBlkChain {}
 unsafe impl Sync for MsgBlkChain {}
+
+impl Default for MsgBlkChain {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
 
 impl MsgBlkChain {
     /// Create an empty packet chain.
@@ -842,27 +848,11 @@ impl MsgBlk {
     }
 
     /// Sets a packet's offload flags, and sets MSS if `HW_LSO` is enabled.
-    #[cfg_attr(any(feature = "std", test), allow(unused))]
     pub fn request_offload(&mut self, flags: MblkOffloadFlags, mss: u32) {
-        let ckflags = flags & MblkOffloadFlags::HCK_FLAGS;
-
-        #[cfg(all(not(feature = "std"), not(test)))]
+        // SAFETY: the inner mblk_t is known to be valid and contain a
+        // valid dblk_t for its buffer.
         unsafe {
-            illumos_sys_hdrs::mac::mac_hcksum_set(
-                self.0.as_ptr(),
-                0,
-                0,
-                0,
-                0,
-                ckflags.bits(),
-            );
-            if flags.contains(MblkOffloadFlags::HW_LSO) {
-                illumos_sys_hdrs::mac::lso_info_set(
-                    self.0.as_ptr(),
-                    mss,
-                    MblkOffloadFlags::HW_LSO.bits(),
-                );
-            }
+            request_mblk_offload(self.0, flags, mss);
         }
     }
 
@@ -892,14 +882,16 @@ impl MsgBlk {
     }
 
     /// Return the offloads currently requested by a packet.
-    #[cfg_attr(any(feature = "std", test), allow(unused))]
     pub fn offload_flags(&self) -> MblkOffloadInfo {
-        let mut cso_out = 0u32;
-        let mut lso_out = 0u32;
-        let mut mss = 0u32;
+        // SAFETY: the inner mblk_t is known to be valid and contain a
+        // valid dblk_t for its buffer.
 
         #[cfg(all(not(feature = "std"), not(test)))]
         unsafe {
+            let mut cso_out = 0u32;
+            let mut lso_out = 0u32;
+            let mut mss = 0u32;
+
             illumos_sys_hdrs::mac::mac_hcksum_get(
                 self.0.as_ptr(),
                 ptr::null_mut(),
@@ -913,15 +905,74 @@ impl MsgBlk {
                 &raw mut mss,
                 &raw mut lso_out,
             );
-        };
 
-        MblkOffloadInfo {
-            flags: MblkOffloadFlags::from_bits_retain(cso_out | lso_out),
-            mss,
+            MblkOffloadInfo {
+                flags: MblkOffloadFlags::from_bits_retain(cso_out | lso_out),
+                mss,
+            }
+        }
+
+        #[cfg(any(feature = "std", test))]
+        unsafe {
+            typed_offload_info(self.0)
         }
     }
 }
 
+/// Representation of dblk-internal checksum validity/offload flags and state.
+///
+/// This matches what is used in illumos, but we only poke at these internals
+/// directly in userland/tests. In driver builds we use the `mac_hcksum_*` and
+/// `mac_lso_*` functions to extract or manipulate this state.
+#[cfg(any(feature = "std", test))]
+#[derive(zerocopy::IntoBytes, zerocopy::FromBytes, zerocopy::Immutable)]
+#[repr(C)]
+struct CksumInternal {
+    cksum: u32,
+    flags: u16,
+    mss: u16,
+}
+
+pub(crate) unsafe fn request_mblk_offload(
+    mp: NonNull<mblk_t>,
+    flags: MblkOffloadFlags,
+    mss: u32,
+) {
+    let ckflags = flags & MblkOffloadFlags::HCK_FLAGS;
+
+    #[cfg(all(not(feature = "std"), not(test)))]
+    unsafe {
+        illumos_sys_hdrs::mac::mac_hcksum_set(
+            mp.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            ckflags.bits(),
+        );
+        if flags.contains(MblkOffloadFlags::HW_LSO) {
+            illumos_sys_hdrs::mac::lso_info_set(
+                mp.as_ptr(),
+                mss,
+                MblkOffloadFlags::HW_LSO.bits(),
+            );
+        }
+    }
+
+    #[cfg(any(feature = "std", test))]
+    {
+        let before = unsafe { offload_info(mp) };
+        let mut info: CksumInternal = zerocopy::transmute!(before);
+        info.flags = ckflags.bits() as u16;
+        if flags.contains(MblkOffloadFlags::HW_LSO) {
+            info.flags |= MblkOffloadFlags::HW_LSO.bits() as u16;
+            info.mss = mss as u16;
+        }
+        unsafe { set_offload_info(mp, zerocopy::transmute!(info)) };
+    }
+}
+
+#[derive(Default)]
 pub struct MblkOffloadInfo {
     pub flags: MblkOffloadFlags,
     pub mss: u32,
@@ -1155,6 +1206,20 @@ unsafe fn offload_info(head: NonNull<mblk_t>) -> u64 {
     unsafe { (*(*head.as_ptr()).b_datap).db_struioun }
 }
 
+/// Use a userland reimplementation of mblk internals to retrieve
+/// offload flags and sizes.
+#[cfg(any(feature = "std", test))]
+unsafe fn typed_offload_info(head: NonNull<mblk_t>) -> MblkOffloadInfo {
+    let raw = unsafe { offload_info(head) };
+
+    let data: CksumInternal = zerocopy::transmute!(raw);
+
+    MblkOffloadInfo {
+        flags: MblkOffloadFlags::from_bits_retain(u32::from(data.flags)),
+        mss: u32::from(data.mss),
+    }
+}
+
 /// Set the opaque representation of offload flags and sizes
 /// associated with this packet.
 unsafe fn set_offload_info(head: NonNull<mblk_t>, info: u64) {
@@ -1236,8 +1301,46 @@ impl BufferState for MsgBlkIterMut<'_> {
     }
 
     #[inline]
-    fn base_ptr(&self) -> uintptr_t {
-        self.curr.map(|v| v.as_ptr() as uintptr_t).unwrap_or(0)
+    fn base_ptr(&self) -> Option<NonNull<mblk_t>> {
+        self.curr
+    }
+
+    #[inline]
+    fn large_offload(&self) -> bool {
+        // SAFETY: if non-null, the inner mblk_t is known to be valid
+        // and contain a valid dblk_t for its buffer.
+
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let flags = {
+            self.curr
+                .map(|v| {
+                    let mut lso_out = 0u32;
+                    let mut mss = 0u32;
+
+                    unsafe {
+                        illumos_sys_hdrs::mac::mac_lso_get(
+                            v.as_ptr(),
+                            &raw mut mss,
+                            &raw mut lso_out,
+                        );
+                    }
+
+                    lso_out
+                })
+                .unwrap_or(0)
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let flags = {
+            let raw = self
+                .curr
+                .map(|v| unsafe { typed_offload_info(v) })
+                .unwrap_or_default();
+
+            raw.flags.intersection(MblkOffloadFlags::HW_LSO_FLAGS).bits()
+        };
+
+        flags != 0
     }
 }
 

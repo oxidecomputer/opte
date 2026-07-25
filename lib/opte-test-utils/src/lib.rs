@@ -274,7 +274,13 @@ fn oxide_net_builder(
     #[allow(clippy::arc_with_non_send_sync)]
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
     let name_cstr = std::ffi::CString::new(name).unwrap();
-    let mut pb = PortBuilder::new(name, name_cstr, cfg.guest_mac, ectx);
+    let mut pb = PortBuilder::new(
+        name,
+        name_cstr,
+        cfg.guest_mac,
+        ectx,
+        NonZeroU32::new(cfg.mtu),
+    );
 
     let fw_limit = NonZeroU32::new(8096).unwrap();
     let snat_limit = NonZeroU32::new(8096).unwrap();
@@ -356,12 +362,14 @@ pub fn oxide_net_setup2(
         }
     };
 
+    let v2b = Arc::new(Virt2Boundary::new());
+    let m2p = Arc::new(Mcast2Phys::new());
+
     let converted_cfg = oxide_vpc::cfg::VpcCfg::with_mtu(cfg.clone(), 1500);
-    let vpc_net = VpcNetwork { cfg: converted_cfg.clone() };
+    let vpc_net = VpcNetwork { cfg: converted_cfg.clone(), v2b: v2b.clone() };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
-    let m2p = Arc::new(Mcast2Phys::new());
-    let v2b = Arc::new(Virt2Boundary::new());
+
     v2b.set(
         "0.0.0.0/0".parse().unwrap(),
         vec![TunnelEndpoint {

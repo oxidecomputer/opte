@@ -15,6 +15,10 @@
 
 use common::icmp::*;
 use common::*;
+use illumos_sys_hdrs::mac::MblkOffloadFlags;
+use ingot::icmp::IcmpV4Ref;
+use ingot::icmp::IcmpV4Type;
+use ingot::icmp::IcmpV6Type;
 use opte::api::L4Info;
 use opte::api::MacAddr;
 use opte::api::OpteError;
@@ -44,6 +48,7 @@ use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkFullParsed;
 use opte::engine::packet::MismatchError;
 use opte::engine::packet::Packet;
+use opte::engine::parse::Ulp;
 use opte::engine::parse::ValidUlp;
 use opte::engine::port::DropReason;
 use opte::engine::port::ProcessError;
@@ -5633,4 +5638,556 @@ fn test_v6_ext_hdr_geneve_offset_ok() {
         geneve::extract_multicast_replication(&parsed.meta().outer_encap)
             .expect("multicast option present");
     assert_eq!(repl, oxide_vpc::api::Replication::External);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_generated_icmp(
+    cfg: &VpcCfg,
+    dir: Direction,
+    is_external: bool,
+    partner_phys: TestIpPhys,
+    partner_ip: IpAddr,
+    partner_mac: MacAddr,
+    mut genned_icmp: MsgBlk,
+    expect_icmp_cksum: u16,
+    raw_src: &[u8],
+) {
+    let guest_phys =
+        TestIpPhys { ip: cfg.phys_ip, mac: cfg.guest_mac, vni: cfg.vni };
+
+    let is_v4 = matches!(partner_ip, IpAddr::Ip4(_));
+    let max_sz = if is_v4 { 576 } else { 1280 };
+
+    let parsed_hp = match dir {
+        Direction::In => {
+            // This parser will assert in its operation that we have
+            // valid Geneve encap.
+            parse_inbound(&mut genned_icmp, VpcParser {})
+                .unwrap()
+                .to_full_meta()
+        }
+        Direction::Out => parse_outbound(&mut genned_icmp, VpcParser {})
+            .unwrap()
+            .to_full_meta(),
+    };
+    let meta = parsed_hp.meta();
+
+    if dir == Direction::In {
+        let eth = meta.outer_ether().unwrap();
+
+        // At present, external packets do not have their source router
+        // known. These addresses are zero as OPTE has identified a
+        // (possibly different) nexthop and we expect xde to fill these in
+        // before transmission.
+        let (want_dst, want_src) = if is_external {
+            (MacAddr::ZERO, MacAddr::ZERO)
+        } else {
+            (partner_phys.mac, guest_phys.mac)
+        };
+        assert_eq!(eth.destination(), want_dst);
+        assert_eq!(eth.source(), want_src);
+
+        let target_payload_len =
+            max_sz + (&meta.outer_encap(), &meta.inner_ether()).packet_length();
+        let Some(L3::Ipv6(v6)) = meta.outer_ip() else {
+            panic!();
+        };
+        assert_eq!(v6.destination(), partner_phys.ip);
+        assert_eq!(v6.source(), guest_phys.ip);
+        assert_eq!(usize::from(v6.payload_len()), target_payload_len);
+        assert_eq!(
+            usize::from(meta.outer_geneve().unwrap().raw().unwrap().0.length()),
+            target_payload_len
+        );
+    } else {
+        assert!(meta.outer_encap().is_none());
+    }
+
+    let (want_dst, want_src) = match dir {
+        Direction::In if is_external => (BS_MAC_ADDR, cfg.guest_mac),
+        Direction::In => (partner_mac, cfg.guest_mac),
+        Direction::Out => (cfg.guest_mac, cfg.gateway_mac),
+    };
+
+    assert_eq!(meta.inner_ether().destination(), want_dst);
+    assert_eq!(meta.inner_ether().source(), want_src);
+
+    if is_v4 {
+        let L3::Ipv4(v4m) = &meta.inner_l3().unwrap() else {
+            panic!();
+        };
+
+        let IpAddr::Ip4(partner_ip) = partner_ip else {
+            panic!();
+        };
+
+        let (want_dst, want_src) = match dir {
+            Direction::In if is_external => {
+                (partner_ip, cfg.ipv4().external_ips.ephemeral_ip.unwrap())
+            }
+            Direction::In => (partner_ip, cfg.ipv4().gateway_ip),
+            Direction::Out => (cfg.ipv4().private_ip, cfg.ipv4().gateway_ip),
+        };
+
+        assert_eq!(v4m.destination(), want_dst);
+        assert_eq!(v4m.source(), want_src);
+
+        let Ulp::IcmpV4(ic4m) = &meta.inner_ulp().unwrap() else {
+            panic!();
+        };
+        assert_eq!(ic4m.ty(), IcmpV4Type::DESTINATION_UNREACHABLE);
+        assert_eq!(ic4m.code(), 4);
+        assert_eq!(ic4m.checksum(), expect_icmp_cksum);
+        let roh = ic4m.rest_of_hdr();
+        assert_eq!(roh[0], 0);
+        assert_eq!(
+            usize::from(roh[1]) * 4,
+            max_sz - (&v4m, &ic4m).packet_length()
+        );
+        assert_eq!(u16::from_be_bytes([roh[2], roh[3]]), 1500);
+    } else {
+        let L3::Ipv6(v6m) = &meta.inner_l3().unwrap() else {
+            panic!();
+        };
+
+        let IpAddr::Ip6(partner_ip) = partner_ip else {
+            panic!();
+        };
+
+        let (want_dst, want_src) = match dir {
+            Direction::In if is_external => {
+                (partner_ip, cfg.ipv6().external_ips.ephemeral_ip.unwrap())
+            }
+            Direction::In => (partner_ip, cfg.ipv6().gateway_ip),
+            Direction::Out => (cfg.ipv6().private_ip, cfg.ipv6().gateway_ip),
+        };
+
+        assert_eq!(v6m.destination(), want_dst);
+        assert_eq!(v6m.source(), want_src);
+
+        let Ulp::IcmpV6(ic6m) = &meta.inner_ulp().unwrap() else {
+            panic!();
+        };
+        assert_eq!(ic6m.ty(), IcmpV6Type::PACKET_TOO_BIG);
+        assert_eq!(ic6m.code(), 0);
+        assert_eq!(ic6m.checksum(), expect_icmp_cksum);
+        assert_eq!(u32::from_be_bytes(ic6m.rest_of_hdr()), 1500);
+    }
+
+    let Some(trunc_body) = parsed_hp.body() else {
+        panic!();
+    };
+    assert!(raw_src[Ethernet::MINIMUM_LENGTH..].starts_with(trunc_body));
+}
+
+// Ports which specify an MTU will ask the `NetworkImpl` how these packets
+// should be handled. For the Oxide VPC all such packets (barring certain ICMP
+// or source addresses) should generate ICMP(v6) error messages carrying the MTU.
+#[test]
+fn packet_too_big_generation() {
+    // The checksums we're enforcing here are sourced from what wireshark
+    // tells us is correct, when investigated in this pcap. This is pretty
+    // important since we're building these packets from scratch!
+    let mut pcap = PcapBuilder::new("packet_too_big.pcap");
+
+    let (mut g1, g1_cfg, ..) = multi_external_ip_setup(1, true);
+    let g2_cfg = g2_cfg();
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let partner_phys = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    // Allow incoming TCP connection from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    // Construct a reasonable enough (though large!) inner packet for each
+    // IP version, sent from another node who has a higher MTU.
+    //
+    // We're not simulating its outbound processing at the partner, but roughly
+    // the flow here would be that the partner sends an ethernet frame from
+    // `partner_mac` to the gateway MAC. Once processed the destination MAC
+    // is rewritten to our port's MAC.
+    let partner_v4 = "172.30.0.6".parse().unwrap();
+    let partner_v6 = "fd00::6".parse().unwrap();
+    let partner_mac = ox_vpc_mac([0xa, 0xb, 0xc]);
+
+    let body: Vec<u8> = (0..2000u32).map(|i| i as u8).collect();
+    let inner_tcp = Tcp {
+        source: 1234,
+        destination: 5678,
+        flags: IngotTcpFlags::ACK,
+        ..Default::default()
+    };
+    let inner_v4 = Ipv4 {
+        source: partner_v4,
+        destination: g1_cfg.ipv4().private_ip,
+        protocol: IpProtocol::TCP,
+        total_len: u16::try_from(
+            Ipv4::MINIMUM_LENGTH + (&inner_tcp, &body).packet_length(),
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+    let inner_v6 = Ipv6 {
+        source: partner_v6,
+        destination: g1_cfg.ipv6().private_ip,
+        next_header: IpProtocol::TCP,
+        payload_len: u16::try_from((&inner_tcp, &body).packet_length())
+            .unwrap(),
+        ..Default::default()
+    };
+
+    // --------
+    // Inbound, internal.
+    // --------
+    //
+    // On inbound receipt of each (cast as rack-local delivery),
+    // we generate an ICMP packet. These should be encapsulated, and
+    // we expect to see that almost all src/dst fields are mirrored.
+    // However, the inner IP source should be the port's gateway address:
+    // this is a sensible choice since we're still in our private
+    // network space.
+    let v4_in = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.guest_mac,
+            source: partner_mac,
+            ethertype: Ethertype::IPV4,
+        },
+        &inner_v4,
+        &inner_tcp,
+        &body,
+    );
+    let v4_in_raw = v4_in.copy_all();
+    let mut v4_in_e = encap(v4_in, partner_phys, guest_phys);
+    let v6_in = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.guest_mac,
+            source: partner_mac,
+            ethertype: Ethertype::IPV6,
+        },
+        &inner_v6,
+        &inner_tcp,
+        &body,
+    );
+    let v6_in_raw = v6_in.copy_all();
+    let mut v6_in_e = encap(v6_in, partner_phys, guest_phys);
+
+    let parsed = parse_inbound(&mut v4_in_e, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::In, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::In,
+        false,
+        partner_phys,
+        partner_v4.into(),
+        partner_mac,
+        hp,
+        0x1670,
+        &v4_in_raw,
+    );
+
+    let parsed = parse_inbound(&mut v6_in_e, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::In, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::In,
+        false,
+        partner_phys,
+        partner_v6.into(),
+        partner_mac,
+        hp,
+        0xa63e,
+        &v6_in_raw,
+    );
+
+    // --------
+    // Inbound, external.
+    // --------
+    //
+    // OPTE's gateway address, being a private IP, is not something we can
+    // meaningfully use as a source. Fall back to the target's address in this
+    // case.
+    //
+    // Encapsulation here needs to choose a route through the V2B if
+    // sidecar does not provide us a usable encap source address.
+    let ext_inbound_phys = TestIpPhys {
+        ip: Ipv6Addr::default(),
+        mac: MacAddr::default(),
+        vni: g1_cfg.vni,
+    };
+
+    let ext_partner_v4 = "1.1.1.1".parse().unwrap();
+    let ext_partner_v6 = "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap();
+    let mut inner_v4_ex = inner_v4.clone();
+    inner_v4_ex.source = ext_partner_v4;
+    inner_v4_ex.destination = g1_cfg.ipv4().external_ips.ephemeral_ip.unwrap();
+
+    let mut inner_v6_ex = inner_v6.clone();
+    inner_v6_ex.source = ext_partner_v6;
+    inner_v6_ex.destination = g1_cfg.ipv6().external_ips.ephemeral_ip.unwrap();
+
+    let v4_in_ext = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.guest_mac,
+            source: Default::default(),
+            ethertype: Ethertype::IPV4,
+        },
+        &inner_v4_ex,
+        &inner_tcp,
+        &body,
+    );
+    let v4_in_ext_raw = v4_in_ext.copy_all();
+    let mut v4_in_ext = encap_external(v4_in_ext, ext_inbound_phys, guest_phys);
+
+    // These packets rely on the V2B entries installed during initialisation.
+
+    let v6_in_ext = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.guest_mac,
+            source: Default::default(),
+            ethertype: Ethertype::IPV6,
+        },
+        &inner_v6_ex,
+        &inner_tcp,
+        &body,
+    );
+    let v6_in_ext_raw = v6_in_ext.copy_all();
+    let mut v6_in_ext = encap_external(v6_in_ext, ext_inbound_phys, guest_phys);
+
+    let parsed = parse_inbound(&mut v4_in_ext, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::In, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::In,
+        true,
+        *BSVC_PHYS,
+        ext_partner_v4.into(),
+        partner_mac,
+        hp,
+        0xcb66,
+        &v4_in_ext_raw,
+    );
+
+    let parsed = parse_inbound(&mut v6_in_ext, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::In, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::In,
+        true,
+        *BSVC_PHYS,
+        ext_partner_v6.into(),
+        partner_mac,
+        hp,
+        0xc87c,
+        &v6_in_ext_raw,
+    );
+
+    // --------
+    // Outbound
+    // --------
+    //
+    // We expect in the replies that OPTE sets its gateway addresses as the
+    // source for L2/L3, and that we're not encapsulated.
+    let mut inner_v4_out = inner_v4;
+    std::mem::swap(&mut inner_v4_out.source, &mut inner_v4_out.destination);
+    let mut inner_v6_out = inner_v6;
+    std::mem::swap(&mut inner_v6_out.source, &mut inner_v6_out.destination);
+    let mut v4_out = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.gateway_mac,
+            source: g1_cfg.guest_mac,
+            ethertype: Ethertype::IPV4,
+        },
+        &inner_v4_out,
+        &inner_tcp,
+        &body,
+    );
+    let v4_out_raw = v4_out.copy_all();
+    let mut v6_out = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.gateway_mac,
+            source: g1_cfg.guest_mac,
+            ethertype: Ethertype::IPV6,
+        },
+        &inner_v6_out,
+        &inner_tcp,
+        &body,
+    );
+    let v6_out_raw = v6_out.copy_all();
+
+    let parsed = parse_outbound(&mut v4_out, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::Out, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::Out,
+        false,
+        partner_phys,
+        partner_v4.into(),
+        partner_mac,
+        hp,
+        0x1670,
+        &v4_out_raw,
+    );
+
+    let parsed = parse_outbound(&mut v6_out, VpcParser {}).unwrap();
+    let res = g1.port.process(Direction::Out, parsed);
+    let Ok(Hairpin(hp)) = res else { panic!("expected Hairpin, got {res:?}") };
+    pcap.add_pkt(&hp);
+    validate_generated_icmp(
+        &g1_cfg,
+        Direction::Out,
+        false,
+        partner_phys,
+        partner_v6.into(),
+        partner_mac,
+        hp,
+        0xa63f,
+        &v6_out_raw,
+    );
+}
+
+// Offload flags pushed into a packet by the driver itself should be
+// preserved. Inclusion of LSO flags and MSS should flag the packet as being
+// allowed for oversize handling: the mblk contains enough data for
+// the recipient OS to carve the packet up again into a form which
+// respects the negotiated MSS, if needed.
+#[test]
+fn offload_info_preserved() {
+    let (mut g1, g1_cfg, ..) = multi_external_ip_setup(1, true);
+    let g2_cfg = g2_cfg();
+    let guest_phys = TestIpPhys {
+        ip: g1_cfg.phys_ip,
+        mac: g1_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+    let partner_phys = TestIpPhys {
+        ip: g2_cfg.phys_ip,
+        mac: g2_cfg.guest_mac,
+        vni: g1_cfg.vni,
+    };
+
+    // Allow incoming TCP connection from anyone.
+    let rule = "dir=in action=allow priority=10 protocol=TCP";
+    firewall::add_fw_rule(
+        &g1.port,
+        &AddFwRuleReq {
+            port_name: g1.port.name().to_string(),
+            rule: rule.parse().unwrap(),
+        },
+    )
+    .unwrap();
+    incr!(g1, ["epoch", "firewall.rules.in"]);
+
+    // As above, construct a single large inbound packet.
+    // Give it a reasonable MSS and mark it as LSO-eligible.
+    let partner_v4 = "172.30.0.6".parse().unwrap();
+    let partner_mac = ox_vpc_mac([0xa, 0xb, 0xc]);
+    g1.vpc_map.add(IpAddr::from(partner_v4), g2_cfg.phys_addr());
+
+    let body: Vec<u8> = (0..9000u32).map(|i| i as u8).collect();
+    let inner_tcp = Tcp {
+        source: 1234,
+        destination: 5678,
+        flags: IngotTcpFlags::ACK,
+        ..Default::default()
+    };
+    let inner_v4 = Ipv4 {
+        source: partner_v4,
+        destination: g1_cfg.ipv4().private_ip,
+        protocol: IpProtocol::TCP,
+        total_len: u16::try_from(
+            Ipv4::MINIMUM_LENGTH + (&inner_tcp, &body).packet_length(),
+        )
+        .unwrap(),
+        ..Default::default()
+    };
+
+    let v4_in = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.guest_mac,
+            source: partner_mac,
+            ethertype: Ethertype::IPV4,
+        },
+        &inner_v4,
+        &inner_tcp,
+        &body,
+    );
+
+    // This encapsulation *deliberately* pushes the new headers as
+    // a separate mblk. We need OPTE to preserve these once the emit spec
+    // is fully applied.
+    let mut v4_in_e = encap(v4_in, partner_phys, guest_phys);
+    let mut parsed = parse_inbound(&mut v4_in_e, VpcParser {}).unwrap();
+    parsed.request_offload(MblkOffloadFlags::HW_LSO, 1448);
+    let res = g1.port.process(Direction::In, parsed);
+    expect_modified!(res, v4_in_e);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.in",
+            "stats.port.in_modified, stats.port.in_uft_miss",
+        ]
+    );
+    let offload = v4_in_e.offload_flags();
+    assert!(offload.flags.contains(MblkOffloadFlags::HW_LSO));
+    assert_eq!(offload.mss, 1448);
+
+    // Ensure the same behaviour holds outbound: guests will set these
+    // flags.
+    let mut inner_v4_out = inner_v4;
+    std::mem::swap(&mut inner_v4_out.source, &mut inner_v4_out.destination);
+    let mut v4_out = ulp_pkt(
+        Ethernet {
+            destination: g1_cfg.gateway_mac,
+            source: g1_cfg.guest_mac,
+            ethertype: Ethertype::IPV4,
+        },
+        &inner_v4_out,
+        &inner_tcp,
+        &body,
+    );
+    // Set offload flags *before* parsing this time, to ensure both cases are
+    // handled correctly.
+    v4_out.request_offload(MblkOffloadFlags::HW_LSO, 1448);
+    let mut parsed = parse_outbound(&mut v4_out, VpcParser {}).unwrap();
+    parsed.request_offload(MblkOffloadFlags::HW_LSO, 1448);
+    let res = g1.port.process(Direction::Out, parsed);
+    expect_modified!(res, v4_out);
+    incr!(
+        g1,
+        [
+            "firewall.flows.out, firewall.flows.in",
+            "uft.out",
+            "stats.port.out_modified, stats.port.out_uft_miss",
+        ]
+    );
+    let offload = v4_in_e.offload_flags();
+    assert!(offload.flags.contains(MblkOffloadFlags::HW_LSO));
+    assert_eq!(offload.mss, 1448);
 }
