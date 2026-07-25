@@ -8,6 +8,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use opte_ioctl::OpteHdl;
+use opte_test_utils::Emit;
 use opte_test_utils::Ethernet;
 use opte_test_utils::Ethertype;
 use opte_test_utils::GENEVE_PORT;
@@ -16,7 +17,6 @@ use opte_test_utils::HeaderLen;
 use opte_test_utils::IngotIpProto;
 use opte_test_utils::Ipv4;
 use opte_test_utils::Ipv6;
-use opte_test_utils::MsgBlk;
 use opte_test_utils::Udp;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -140,6 +140,9 @@ pub const OVERLAY_GW_V6: &str = "fd00::254";
 pub const SNOOP_TIMEOUT_EXPECT_PACKET: Duration = Duration::from_secs(5);
 /// Snoop timeout when expecting no packets (2 seconds).
 pub const SNOOP_TIMEOUT_EXPECT_NONE: Duration = Duration::from_secs(2);
+/// Timeout for snoop to report that it has bound to the capture device
+/// (5 seconds).
+pub const SNOOP_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Standard UDP port used for multicast tests.
 pub const MCAST_TEST_PORT: u16 = 9999;
@@ -500,24 +503,6 @@ impl OptePort {
         self.mcast_subscriptions.borrow_mut().retain(|g| *g != group);
         Ok(())
     }
-
-    /// Allow multicast CIDR traffic for this port.
-    ///
-    /// Multicast is handled automatically by the gateway layer, so we just
-    /// need to allow the CIDR through the firewall in both directions.
-    pub fn add_multicast_router_entry(&self, cidr: IpCidr) -> Result<()> {
-        // Allow multicast traffic in both directions
-        self.allow_cidr(cidr, Direction::In)?;
-        self.allow_cidr(cidr, Direction::Out)?;
-        Ok(())
-    }
-
-    /// Allow multicast CIDR through the overlay firewall for the given direction.
-    pub fn allow_cidr(&self, cidr: IpCidr, direction: Direction) -> Result<()> {
-        let adm = OpteHdl::open()?;
-        adm.allow_cidr(&self.name, cidr, direction)?;
-        Ok(())
-    }
 }
 
 impl Drop for OptePort {
@@ -617,12 +602,21 @@ impl SnoopGuard {
 
     /// Start a `snoop` capture with a specific packet count.
     /// Useful for tests that need to capture multiple packets (e.g., multi-next-hop fanout).
+    ///
+    /// We block until snoop announces "Using device" on stderr, which it emits
+    /// once the capture stream is bound. Returning before that point races
+    /// the capture against the test's first send, dropping the packet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if snoop exits or fails to bind within
+    /// [`SNOOP_READY_TIMEOUT`].
     pub fn start_with_count(
         dev_name: &str,
         filter: &str,
         count: u32,
     ) -> anyhow::Result<Self> {
-        let child = Command::new("pfexec")
+        let mut child = Command::new("pfexec")
             .args([
                 "snoop",
                 "-r",
@@ -637,6 +631,39 @@ impl SnoopGuard {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+
+        // Forward stderr lines over a channel so the readiness wait is
+        // bounded. The thread keeps draining after readiness; dropping the
+        // pipe instead could kill snoop with SIGPIPE on a later write.
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) =
+                std::io::BufRead::read_line(&mut reader, &mut line)
+            {
+                if n == 0 {
+                    break;
+                }
+                let _ = tx.send(std::mem::take(&mut line));
+            }
+        });
+
+        let deadline = Instant::now() + SNOOP_READY_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(line) if line.contains("Using device") => break,
+                Ok(_) => continue,
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("snoop failed to bind to {dev_name}: {e}");
+                }
+            }
+        }
+
         Ok(Self { child: Some(child) })
     }
 
@@ -820,12 +847,8 @@ pub fn inject_underlay_mcast_v4(
         ..Default::default()
     };
 
-    let mut inner_pkt =
-        MsgBlk::new_ethernet_pkt((inner_eth, inner_ip, inner_udp));
-    if !payload.is_empty() {
-        inner_pkt.append(MsgBlk::copy(payload));
-    }
-    let inner_len = inner_pkt.byte_len();
+    let inner_pkt = (inner_eth, inner_ip, inner_udp, payload);
+    let inner_len = inner_pkt.packet_length();
 
     // Geneve with no options. The default protocol type is Ethernet (0x6558).
     let geneve = Geneve { vni, ..Default::default() };
@@ -859,10 +882,7 @@ pub fn inject_underlay_mcast_v4(
         ethertype: Ethertype::IPV6,
     };
 
-    let mut frame =
-        MsgBlk::new_ethernet_pkt((outer_eth, outer_ip, outer_udp, geneve));
-    frame.append(inner_pkt);
-    let bytes: Vec<u8> = frame.iter().flat_map(|n| n.iter().copied()).collect();
+    let bytes = (outer_eth, outer_ip, outer_udp, geneve, inner_pkt).emit_vec();
 
     // Open the underlay link in raw mode and transmit the assembled frame.
     // The handle is closed when `_h` drops, before this function returns.

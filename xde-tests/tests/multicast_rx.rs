@@ -18,7 +18,6 @@
 use anyhow::Result;
 use opte_ioctl::OpteHdl;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
-use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastForwardingNextHop;
@@ -30,8 +29,6 @@ use oxide_vpc::api::Vni;
 use std::thread;
 use std::time::Duration;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
-use xde_tests::IPV4_MULTICAST_CIDR;
-use xde_tests::IPV6_ADMIN_LOCAL_MULTICAST_CIDR;
 use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SNOOP_TIMEOUT_EXPECT_NONE;
@@ -82,13 +79,6 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         replication: Replication::Underlay,
         source_filter: SourceFilter::default(),
     }])?;
-
-    // Allow IPv4 multicast traffic (224.0.0.0/4) via Multicast target.
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-
-    // Add router entries for multicast (allows both In and Out directions)
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr)?;
 
     // Subscribe both ports to the multicast group
     topol.nodes[0]
@@ -219,12 +209,6 @@ fn test_xde_multicast_rx_dual_family() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    // Allow IPv6 multicast traffic (ff04::/16 admin-local) via Multicast target
-    let mcast_cidr_v6 =
-        IpCidr::Ip6(IPV6_ADMIN_LOCAL_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr_v6)?;
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr_v6)?;
-
     // Subscribe both ports to the IPv6 multicast group
     topol.nodes[0]
         .port
@@ -294,9 +278,7 @@ fn test_multicast_rx_only_delivery() -> Result<()> {
     // configured because forwarding drives Tx replication only.
     let _mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
-    // Allow IPv4 multicast through the receiver's firewall and subscribe it.
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[1].port.add_multicast_router_entry(mcast_cidr)?;
+    // Subscribe the receiver to the group.
     topol.nodes[1]
         .port
         .subscribe_multicast(mcast_group.into())
@@ -458,9 +440,7 @@ fn test_multicast_config_no_spurious_traffic() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
             .subscribe_multicast(mcast_group.into())
             .expect("subscribe should succeed");

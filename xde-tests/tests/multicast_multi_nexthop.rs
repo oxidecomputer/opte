@@ -18,7 +18,6 @@ use opte_ioctl::OpteHdl;
 use opte_test_utils::geneve_verify;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::IpAddr;
-use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastForwardingNextHop;
@@ -28,7 +27,6 @@ use oxide_vpc::api::Replication;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
-use xde_tests::IPV4_MULTICAST_CIDR;
 use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SNOOP_TIMEOUT_EXPECT_NONE;
@@ -242,9 +240,6 @@ fn assert_splits_into_two_copies(
     let mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
     mcast.set_forwarding(next_hops.clone())?;
 
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
-
     topol.nodes[0]
         .port
         .subscribe_multicast(mcast_group.into())
@@ -391,9 +386,6 @@ fn assert_dual_select_one(
             source_filter,
         },
     ])?;
-
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    topol.nodes[0].port.add_multicast_router_entry(mcast_cidr)?;
 
     topol.nodes[0]
         .port
