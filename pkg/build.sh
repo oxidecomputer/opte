@@ -30,7 +30,7 @@ fi
 # This allows us to append a secondary version identifier to the package
 # version in the event of backports, or other scenarios which would otherwise
 # lead to a version conflict in the helios repository.
-typeset -ri TAG=0
+typeset -ri TAG=22
 
 API_VSN=$(./print-api-version.sh)
 PKG_VERSION="0.$API_VSN.$COMMIT_COUNT-$HELIOS_RELEASE.$TAG"
