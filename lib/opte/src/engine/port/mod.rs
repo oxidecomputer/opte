@@ -129,6 +129,7 @@ pub enum ProcessError {
     TcpFlow(TcpFlowStateError),
     BadEmitSpec,
     FlowTableFull { kind: &'static str, limit: u64 },
+    LftChildrenFull,
 }
 
 impl From<super::HdlPktError> for ProcessError {
@@ -544,7 +545,7 @@ pub enum DumpLayerError {
 // API version change until this is something that *can* actually be specified
 // on a per-port basis.
 pub trait FlowId:
-    fmt::Debug + Send + Sync + Copy + Eq + Ord + core::hash::Hash
+    fmt::Debug + Send + Sync + Copy + Eq + Ord + core::hash::Hash + 'static
 {
 }
 impl FlowId for InnerFlowId {}
@@ -2611,8 +2612,19 @@ impl<N: NetworkImpl> Port<N> {
                     match data.uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
                             self.new_uft_kstat(In, data);
-                            associate_lfts_upstack(data, &v, Direction::In);
-                            Ok(InternalProcessResult::Modified)
+                            match associate_lfts_upstack(
+                                data,
+                                &v,
+                                Direction::In,
+                            ) {
+                                Ok(_) => Ok(InternalProcessResult::Modified),
+                                Err(OpteError::MaxCapacity(_)) => {
+                                    Err(ProcessError::LftChildrenFull)
+                                }
+                                Err(_) => unreachable!(
+                                    "UFT association can only fail due to capacity checks."
+                                ),
+                            }
                         }
                         Err(OpteError::MaxCapacity(limit)) => {
                             Err(ProcessError::FlowTableFull {
@@ -2652,8 +2664,15 @@ impl<N: NetworkImpl> Port<N> {
             match data.uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
                     self.new_uft_kstat(In, data);
-                    associate_lfts_upstack(data, &v, Direction::In);
-                    Ok(InternalProcessResult::Modified)
+                    match associate_lfts_upstack(data, &v, Direction::In) {
+                        Ok(_) => Ok(InternalProcessResult::Modified),
+                        Err(OpteError::MaxCapacity(_)) => {
+                            Err(ProcessError::LftChildrenFull)
+                        }
+                        Err(_) => unreachable!(
+                            "UFT association can only fail due to capacity checks."
+                        ),
+                    }
                 }
                 Err(OpteError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -2818,8 +2837,15 @@ impl<N: NetworkImpl> Port<N> {
                 match data.uft_out.add(flow_before, hte) {
                     Ok(v) => {
                         self.new_uft_kstat(Out, data);
-                        associate_lfts_upstack(data, &v, Direction::Out);
-                        Ok(InternalProcessResult::Modified)
+                        match associate_lfts_upstack(data, &v, Direction::Out) {
+                            Ok(_) => Ok(InternalProcessResult::Modified),
+                            Err(OpteError::MaxCapacity(_)) => {
+                                Err(ProcessError::LftChildrenFull)
+                            }
+                            Err(_) => unreachable!(
+                                "UFT association can only fail due to capacity checks."
+                            ),
+                        }
                     }
                     Err(OpteError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -3217,7 +3243,7 @@ fn associate_lfts_upstack(
     _data: &mut PortData,
     uft: &Arc<FlowEntry<UftEntry<InnerFlowId>>>,
     dir: Direction,
-) {
+) -> Result<()> {
     // The goal here is to provide each LFT hit with two children where
     // possible. These are the UFT and, when it exists, the TCP flow entry.
     // What this means in practice is that while either is present, the LFTs
@@ -3231,7 +3257,7 @@ fn associate_lfts_upstack(
     // on the UFT to keep it a small cache without breaking flows.
     let uft_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(uft) as _;
     for lft in &uft.state().parents {
-        lft.push_child(&uft_dyn);
+        lft.push_child(&uft_dyn)?;
     }
 
     // Currently, we're explicitly holding a write lock on the parent port,
@@ -3254,9 +3280,11 @@ fn associate_lfts_upstack(
             old_lft.remove_child(&tcp_dyn);
         }
         for new_lft in new_parent_slot {
-            new_lft.push_child(&tcp_dyn);
+            new_lft.push_child(&tcp_dyn)?;
         }
     }
+
+    Ok(())
 }
 
 impl core::fmt::Debug for TcpFlowEntryState {
