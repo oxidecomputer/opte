@@ -2909,13 +2909,19 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
-            self.stats.vals.in_uft_flows.decr(1);
+            self.stats
+                .vals
+                .in_uft_flows
+                .set(u64::from(data.uft_in.num_flows()));
             self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
         }
 
         if let Some(ufid_out) = ufid_out {
             data.uft_out.remove(ufid_out);
-            self.stats.vals.out_uft_flows.decr(1);
+            self.stats
+                .vals
+                .out_uft_flows
+                .set(u64::from(data.uft_out.num_flows()));
             self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
         }
     }
@@ -2954,11 +2960,14 @@ impl<N: NetworkImpl> Port<N> {
     ) {
         if let Some(ufid_in) = ufid_in {
             data.uft_in.remove(ufid_in);
-            self.stats.vals.in_uft_flows.decr(1);
+            self.stats
+                .vals
+                .in_uft_flows
+                .set(u64::from(data.uft_in.num_flows()));
             self.uft_tcp_closed_probe(Direction::In, ufid_in);
         }
         data.uft_out.remove(ufid_out);
-        self.stats.vals.out_uft_flows.decr(1);
+        self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
         self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 
