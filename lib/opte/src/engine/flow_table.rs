@@ -218,7 +218,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         let can_insert =
             children.len() < Self::MAX_CHILDREN || children.contains(&to_place);
         if can_insert {
-            children.insert(ByAddr(Arc::downgrade(child)));
+            children.insert(to_place);
             Ok(())
         } else {
             Err(OpteError::MaxCapacity(
