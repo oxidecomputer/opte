@@ -2069,6 +2069,10 @@ unsafe extern "C" fn xde_mc_multicst(
     // used. This breaks protocols such as IPv6 NDP that expect multicast MACs
     // to be used.
     //
+    // In the future we may have a more sophisticated approach here that
+    // actually programs hardware multicast filters, either for things like NDP
+    // or in response to signals from the guest such as VIRTIO_NET_F_CTRL_RX.
+    //
     // viona (interface version 7, VNA_IOC_SET_MAC_FILTERS) forwards guest
     // VIRTIO_NET_F_CTRL_RX filter tables down as mac_multicast_add() and
     // mac_multicast_remove() calls, so this entry point sees per-guest
