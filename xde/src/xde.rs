@@ -2072,6 +2072,14 @@ unsafe extern "C" fn xde_mc_multicst(
     // In the future we may have a more sophisticated approach here that
     // actually programs hardware multicast filters, either for things like NDP
     // or in response to signals from the guest such as VIRTIO_NET_F_CTRL_RX.
+    //
+    // viona (interface version 7, VNA_IOC_SET_MAC_FILTERS) forwards guest
+    // VIRTIO_NET_F_CTRL_RX filter tables down as mac_multicast_add() and
+    // mac_multicast_remove() calls, so this entry point sees per-guest
+    // multicast joins and leaves. No correctness change is needed here since
+    // viona enforces the filter on its own rings. Acting on the signal, for
+    // example, to skip replicating multicast to uninterested ports, belongs
+    // to the multicast datapath design rather than this entry point.
     0
 }
 
