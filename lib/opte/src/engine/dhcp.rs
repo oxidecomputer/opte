@@ -433,6 +433,22 @@ impl Display for DhcpAction {
     }
 }
 
+impl crate::engine::props::ActionProperties for DhcpAction {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["client_mac", "client_ip", "gw_mac", "gw_ip", "reply_type"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "client_mac" => Some(self.client_mac.to_string()),
+            "client_ip" => Some(self.client_ip.to_string()),
+            "gw_mac" => Some(self.gw_mac.to_string()),
+            "gw_ip" => Some(self.gw_ip.to_string()),
+            "reply_type" => Some(self.reply_type.to_string()),
+            _ => None,
+        }
+    }
+}
+
 // XXX I read up just enough on DHCP to get initial lease working.
 // However, I imagine there could be post-lease messages between
 // client/server and those might be unicast, at which point these

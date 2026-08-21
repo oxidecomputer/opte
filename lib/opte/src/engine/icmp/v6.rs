@@ -91,6 +91,22 @@ impl Display for MessageType {
     }
 }
 
+impl crate::engine::props::ActionProperties for Icmpv6EchoReply {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["src_mac", "src_ip", "dst_mac", "dst_ip"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "src_mac" => Some(self.src_mac.to_string()),
+            "src_ip" => Some(self.src_ip.to_string()),
+            "dst_mac" => Some(self.dst_mac.to_string()),
+            "dst_ip" => Some(self.dst_ip.to_string()),
+            _ => None,
+        }
+    }
+}
+
 impl HairpinAction for Icmpv6EchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![
@@ -196,6 +212,22 @@ impl HairpinAction for Icmpv6EchoReply {
             .expect("Allocated space for pkt headers and body");
 
         Ok(AllowOrDeny::Allow(pkt_out))
+    }
+}
+
+impl crate::engine::props::ActionProperties for RouterAdvertisement {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["src_mac", "mac", "ip", "managed_cfg"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "src_mac" => Some(self.src_mac.to_string()),
+            "mac" => Some(self.mac.to_string()),
+            "ip" => Some(self.ip().to_string()),
+            "managed_cfg" => Some(self.managed_cfg.to_string()),
+            _ => None,
+        }
     }
 }
 
@@ -497,6 +529,23 @@ fn construct_neighbor_advert<'a>(
             lladdr: Some(RawHardwareAddress::from_bytes(&na.mac)),
         },
     ))
+}
+
+impl crate::engine::props::ActionProperties for NeighborAdvertisement {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["src_mac", "mac", "ip", "is_router", "allow_unspec"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "src_mac" => Some(self.src_mac.to_string()),
+            "mac" => Some(self.mac.to_string()),
+            "ip" => Some(self.ip().to_string()),
+            "is_router" => Some(self.is_router.to_string()),
+            "allow_unspec" => Some(self.allow_unspec.to_string()),
+            _ => None,
+        }
+    }
 }
 
 impl HairpinAction for NeighborAdvertisement {

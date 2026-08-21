@@ -16,6 +16,7 @@ use crate::api::InnerFlowId;
 use crate::api::L4Info;
 use crate::api::TcpFlowEntryDump;
 use opte_api::ActionDescEntryDump;
+use opte_api::Direction;
 use opte_api::ListLayersResp;
 use opte_api::RuleDump;
 use opte_api::UftEntryDump;
@@ -24,6 +25,132 @@ use std::io::Write;
 use std::string::String;
 use std::string::ToString;
 use tabwriter::TabWriter;
+
+#[derive(Debug, Clone)]
+pub struct PropRow<'a> {
+    pub layer: &'a str,
+    pub dir: Direction,
+    pub rule_id: PropRuleId,
+    pub name: &'a str,
+    pub value: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropRuleId {
+    Rule(u64),
+    Default,
+}
+
+/// Flatten dumped layers into `PropRow`s, filtered by direction, rule
+/// id, and/or property name. `None` (or empty slice for `prop_filter`)
+/// means no restriction.
+pub fn collect_prop_rows<'a>(
+    layers: &'a [DumpLayerResp],
+    direction: Option<Direction>,
+    rule_id: Option<u64>,
+    prop_filter: Option<&'a [String]>,
+) -> Vec<PropRow<'a>> {
+    let want_in = direction != Some(Direction::Out);
+    let want_out = direction != Some(Direction::In);
+    let prop_wanted = |name: &str| -> bool {
+        prop_filter.is_none_or(|allow| allow.iter().any(|n| n == name))
+    };
+
+    let mut rows = Vec::new();
+    for layer in layers {
+        let dirs = [
+            (want_in, Direction::In, &layer.rules_in),
+            (want_out, Direction::Out, &layer.rules_out),
+        ];
+        for (want, dir, rules) in dirs {
+            if !want {
+                continue;
+            }
+            for entry in rules {
+                if rule_id.is_some_and(|r| r != entry.id) {
+                    continue;
+                }
+                for prop in &entry.rule.action_properties {
+                    if !prop_wanted(&prop.name) {
+                        continue;
+                    }
+                    rows.push(PropRow {
+                        layer: &layer.name,
+                        dir,
+                        rule_id: PropRuleId::Rule(entry.id),
+                        name: &prop.name,
+                        value: &prop.value,
+                    });
+                }
+            }
+        }
+    }
+    rows
+}
+
+pub fn print_props(rows: &[PropRow<'_>]) -> std::io::Result<()> {
+    print_props_into(&mut std::io::stdout(), rows)
+}
+
+pub fn print_props_into(
+    writer: &mut impl Write,
+    rows: &[PropRow<'_>],
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "LAYER\tDIR\tRULE\tPROPERTY\tVALUE")?;
+    for row in rows {
+        let rule = match row.rule_id {
+            PropRuleId::Rule(id) => id.to_string(),
+            PropRuleId::Default => "DEF".to_string(),
+        };
+        writeln!(
+            t,
+            "{}\t{}\t{}\t{}\t{}",
+            row.layer, row.dir, rule, row.name, row.value,
+        )?;
+    }
+    t.flush()
+}
+
+/// Print rows as `LAYER:DIR:RULE:PROPERTY:VALUE`, with `:` and `\` in
+/// fields backslash-escaped. Modeled after `dladm show-linkprop -c`.
+pub fn print_props_parseable(rows: &[PropRow<'_>]) -> std::io::Result<()> {
+    print_props_parseable_into(&mut std::io::stdout(), rows)
+}
+
+pub fn print_props_parseable_into(
+    writer: &mut impl Write,
+    rows: &[PropRow<'_>],
+) -> std::io::Result<()> {
+    for row in rows {
+        let rule = match row.rule_id {
+            PropRuleId::Rule(id) => id.to_string(),
+            PropRuleId::Default => "-".to_string(),
+        };
+        writeln!(
+            writer,
+            "{}:{}:{}:{}:{}",
+            escape_parseable(row.layer),
+            escape_parseable(&row.dir.to_string()),
+            escape_parseable(&rule),
+            escape_parseable(row.name),
+            escape_parseable(row.value),
+        )?;
+    }
+    Ok(())
+}
+
+fn escape_parseable(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str(r"\\"),
+            ':' => out.push_str(r"\:"),
+            other => out.push(other),
+        }
+    }
+    out
+}
 
 /// Print a [`DumpLayerResp`].
 pub fn print_layer(resp: &DumpLayerResp) -> std::io::Result<()> {
@@ -313,4 +440,146 @@ pub fn write_hr(t: &mut impl Write) -> std::io::Result<()> {
 /// Print a horizontal rule.
 pub fn print_hr() {
     println!("{:-<70}", "-");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escape_parseable_passes_plain_chars() {
+        assert_eq!(escape_parseable("overlay"), "overlay");
+        assert_eq!(escape_parseable(""), "");
+        assert_eq!(escape_parseable("99"), "99");
+    }
+
+    #[test]
+    fn escape_parseable_escapes_colon_and_backslash() {
+        // IPv6 address: every ':' must be escaped.
+        assert_eq!(
+            escape_parseable("fd00:1122:7788:101::4"),
+            r"fd00\:1122\:7788\:101\:\:4",
+        );
+        // Backslash itself doubles up.
+        assert_eq!(escape_parseable(r"a\b"), r"a\\b");
+        // Combined.
+        assert_eq!(escape_parseable(r"a:b\c"), r"a\:b\\c");
+    }
+
+    fn rule_dump(
+        id: u64,
+        action: &str,
+        props: &[(&str, &str)],
+    ) -> opte_api::RuleTableEntryDump {
+        opte_api::RuleTableEntryDump {
+            id,
+            hits: 0,
+            rule: RuleDump {
+                priority: 0,
+                predicates: vec![],
+                data_predicates: vec![],
+                action: action.to_string(),
+                action_properties: props
+                    .iter()
+                    .map(|(n, v)| opte_api::ActionProperty {
+                        name: n.to_string(),
+                        value: v.to_string(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    fn layer(name: &str) -> DumpLayerResp {
+        DumpLayerResp {
+            name: name.to_string(),
+            rules_in: vec![rule_dump(0, "Decap", &[])],
+            rules_out: vec![
+                rule_dump(0, "Encap", &[("vni", "99"), ("phys_ip_src", "fd00::4")]),
+                rule_dump(1, "Encap", &[("vni", "100")]),
+            ],
+            default_in: "deny".into(),
+            default_in_hits: 0,
+            default_out: "deny".into(),
+            default_out_hits: 0,
+            ft_in: vec![],
+            ft_out: vec![],
+        }
+    }
+
+    #[test]
+    fn collect_no_filters_returns_all_props() {
+        let layers = vec![layer("overlay")];
+        let rows = collect_prop_rows(&layers, None, None, None);
+        // 0 inbound props (decap), 3 outbound props (2 + 1).
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.layer == "overlay"));
+    }
+
+    #[test]
+    fn collect_filters_by_direction() {
+        let layers = vec![layer("overlay")];
+        let rows = collect_prop_rows(
+            &layers,
+            Some(Direction::In),
+            None,
+            None,
+        );
+        assert!(rows.is_empty(), "decap has no exposed properties");
+    }
+
+    #[test]
+    fn collect_filters_by_rule_id() {
+        let layers = vec![layer("overlay")];
+        let rows = collect_prop_rows(&layers, None, Some(1), None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "vni");
+        assert_eq!(rows[0].value, "100");
+    }
+
+    #[test]
+    fn collect_filters_by_prop_name() {
+        let layers = vec![layer("overlay")];
+        let names: Vec<String> = vec!["vni".into()];
+        let rows = collect_prop_rows(&layers, None, None, Some(&names));
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.name == "vni"));
+    }
+
+    #[test]
+    fn collect_empty_prop_filter_matches_nothing() {
+        // Some(&[]) is "an explicit list of zero properties" — the CLI
+        // should pass None when --prop is omitted, not an empty Vec.
+        let layers = vec![layer("overlay")];
+        let empty: Vec<String> = vec![];
+        let rows = collect_prop_rows(&layers, None, None, Some(&empty));
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn print_props_parseable_emits_one_line_per_row() {
+        let rows = vec![
+            PropRow {
+                layer: "overlay",
+                dir: Direction::Out,
+                rule_id: PropRuleId::Rule(0),
+                name: "vni",
+                value: "99",
+            },
+            PropRow {
+                layer: "overlay",
+                dir: Direction::Out,
+                rule_id: PropRuleId::Default,
+                name: "phys_ip_src",
+                value: "fd00::4",
+            },
+        ];
+        let mut buf = Vec::new();
+        print_props_parseable_into(&mut buf, &rows).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert_eq!(
+            out,
+            "overlay:OUT:0:vni:99\noverlay:OUT:-:phys_ip_src:fd00\\:\\:4\n",
+        );
+    }
 }

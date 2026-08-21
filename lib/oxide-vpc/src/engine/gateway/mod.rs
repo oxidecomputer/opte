@@ -195,6 +195,19 @@ impl fmt::Display for RewriteSrcMac {
     }
 }
 
+impl opte::engine::props::ActionProperties for RewriteSrcMac {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["gateway_mac"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "gateway_mac" => Some(self.gateway_mac.to_string()),
+            _ => None,
+        }
+    }
+}
+
 impl StaticAction for RewriteSrcMac {
     fn gen_ht(
         &self,
@@ -406,6 +419,8 @@ impl VpcMeta {
         Self { vpc_mappings }
     }
 }
+
+impl opte::engine::props::ActionProperties for VpcMeta {}
 
 impl MetaAction for VpcMeta {
     fn mod_meta(

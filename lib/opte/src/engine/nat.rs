@@ -25,6 +25,7 @@ use super::port::meta::ActionMeta;
 use super::port::meta::ActionMetaValue;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
+use super::props::ActionProperties;
 use super::rule;
 use super::rule::ActionDesc;
 use super::rule::AllowOrDeny;
@@ -105,6 +106,21 @@ impl fmt::Display for OutboundNat {
     }
 }
 
+impl ActionProperties for OutboundNat {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["priv_ip", "external_ips"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "priv_ip" => Some(self.priv_ip.to_string()),
+            "external_ips" => {
+                Some(self.external_ips.iter().format(",").to_string())
+            }
+            _ => None,
+        }
+    }
+}
+
 impl StatefulAction for OutboundNat {
     fn gen_desc(
         &self,
@@ -165,6 +181,18 @@ impl InboundNat {
 impl fmt::Display for InboundNat {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} <=> (external)", self.priv_ip)
+    }
+}
+
+impl ActionProperties for InboundNat {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["priv_ip"]
+    }
+    fn get_property(&self, name: &str) -> Option<String> {
+        match name {
+            "priv_ip" => Some(self.priv_ip.to_string()),
+            _ => None,
+        }
     }
 }
 
@@ -400,6 +428,8 @@ impl fmt::Display for ExternalIpTagger {
         write!(f, "ExternalIpTagger")
     }
 }
+
+impl ActionProperties for ExternalIpTagger {}
 
 impl MetaAction for ExternalIpTagger {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
