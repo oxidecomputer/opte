@@ -80,6 +80,11 @@ pub enum OpteCmd {
     /// Requires that no XDE ports exist.
     ClearXdeUnderlay = 73,
 
+    /// Describe the XDE underlay devices. Probably only useful for development
+    /// and debugging purposes, as the underlay devices will always be cxgbe0/1 on actual
+    /// sleds, at least until Metro arrives.
+    ReadXdeUnderlay = 74,
+
     /// Set all external IP config for a port.
     SetExternalIps = 80,
 
@@ -145,6 +150,7 @@ impl TryFrom<c_int> for OpteCmd {
             71 => Ok(Self::DeleteXde),
             72 => Ok(Self::SetXdeUnderlay),
             73 => Ok(Self::ClearXdeUnderlay),
+            74 => Ok(Self::ReadXdeUnderlay),
             80 => Ok(Self::SetExternalIps),
             90 => Ok(Self::AllowCidr),
             91 => Ok(Self::RemoveCidr),
@@ -488,3 +494,21 @@ pub struct RuleDump {
     pub data_predicates: Vec<String>,
     pub action: String,
 }
+
+/// Tack on 'Resp' to the name to avoid polluting
+/// the space of symbols in XDE-proper.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct XdeUnderlayDeviceResp {
+    pub name: String,
+    pub mac: MacAddr,
+    pub mtu: u32,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct ReadXdeUnderlayResp {
+    /// Today, the number of expected underlay devices is zero or two.
+    /// It is convenient (and lazy) to simply report a possibly-empty list of them to userland.
+    pub devices: Vec<XdeUnderlayDeviceResp>,
+}
+
+impl CmdOk for ReadXdeUnderlayResp {}

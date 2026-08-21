@@ -17,6 +17,7 @@ use opte::api::Ipv6Addr;
 use opte::api::MAJOR_VERSION;
 use opte::api::MacAddr;
 use opte::api::MulticastUnderlay;
+use opte::api::ReadXdeUnderlayResp;
 use opte::api::Vni;
 use opte::print::print_layer;
 use opte::print::print_list_layers;
@@ -227,6 +228,9 @@ enum Command {
 
     /// Clear xde underlay devices
     ClearXdeUnderlay,
+
+    /// Describe the underlay devices, if they exist.
+    ShowXdeUnderlay,
 
     /// Set a virtual-to-physical mapping
     SetV2P { vpc_ip: IpAddr, vpc_mac: MacAddr, underlay_ip: Ipv6Addr, vni: Vni },
@@ -732,6 +736,18 @@ fn print_port(t: &mut impl Write, pi: PortInfo) -> std::io::Result<()> {
     Ok(())
 }
 
+fn print_xde_underlay(resp: ReadXdeUnderlayResp) -> std::io::Result<()> {
+    let mut t = TabWriter::new(std::io::stdout());
+    writeln!(t, "LINK\tMTU\tMAC")?;
+
+    for dev in resp.devices {
+        writeln!(t, "{}\t{}\t{}", dev.name, dev.mtu, dev.mac)?;
+    }
+
+    t.flush()?;
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cmd = Command::parse();
     let hdl = OpteHdl::open()?;
@@ -893,6 +909,11 @@ fn main() -> anyhow::Result<()> {
 
         Command::ClearXdeUnderlay => {
             let _ = hdl.clear_xde_underlay()?;
+        }
+
+        Command::ShowXdeUnderlay => {
+            let resp = hdl.read_xde_underlay()?;
+            print_xde_underlay(resp)?;
         }
 
         Command::RmFwRule { port, direction, id } => {
