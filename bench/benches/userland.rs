@@ -21,6 +21,7 @@ use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
 use opte_bench::packet::Icmp6;
 use opte_bench::packet::ParserKind;
+use opte_bench::packet::SlowpathEvict;
 use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
 use opte_bench::packet::ULP_SLOW_PATH;
@@ -44,11 +45,12 @@ pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
         Box::new(Icmp6),
         Box::new(ULP_FAST_PATH),
         Box::new(ULP_SLOW_PATH),
+        Box::new(SlowpathEvict),
     ];
 
     for experiment in all_tests {
         for case in experiment.test_cases() {
-            if do_parse {
+            if experiment.do_parse_benchmark() && do_parse {
                 test_parse(c, &**experiment, &*case);
             }
             test_handle(c, &**experiment, &*case);
@@ -151,6 +153,7 @@ pub fn test_handle<M: MeasurementInfo>(
     ));
 
     let parser = case.parse_with();
+    let can_fail = experiment.allow_failure();
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
@@ -174,7 +177,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -182,11 +185,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
@@ -198,7 +205,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -206,11 +213,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
