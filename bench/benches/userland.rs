@@ -336,7 +336,32 @@ fn source_filter_allows(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(wall, parse_and_process, source_filter_allows);
+fn periodic_cleanup<M: MeasurementInfo>(c: &mut Criterion<M>) {
+    let expt = SlowpathEvict;
+    for case in expt.test_cases() {
+        let port = case.create_port().unwrap();
+        let mut c = c.benchmark_group(format!("cleanup/{}", M::label()));
+
+        c.bench_with_input(
+            BenchmarkId::from_parameter(case.instance_name()),
+            &case,
+            |b, _i| {
+                b.iter_batched(
+                    || case.pre_handle(&port),
+                    |_| black_box(port.port.expire_flows()),
+                    criterion::BatchSize::LargeInput,
+                )
+            },
+        );
+    }
+}
+
+criterion_group!(
+    wall,
+    parse_and_process,
+    source_filter_allows,
+    periodic_cleanup
+);
 criterion_group!(
     name = alloc;
     config = new_crit(Allocs);

@@ -204,7 +204,9 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
                     match (best_prio, child.eviction_priority(now)) {
                         (None, a) => best_prio = a,
                         (Some(_), None) => {}
-                        (Some(old), Some(new)) => best_prio = Some(new.min(old)),
+                        (Some(old), Some(new)) => {
+                            best_prio = Some(new.min(old))
+                        }
                     }
                 }
             }
@@ -355,7 +357,10 @@ impl<S: FlowState> FlowTable<S> {
                 // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
-                entry.lifetime.n_children.store(children.len(), Ordering::Relaxed);
+                entry
+                    .lifetime
+                    .n_children
+                    .store(children.len(), Ordering::Relaxed);
                 if !children.is_empty() {
                     return true;
                 }
