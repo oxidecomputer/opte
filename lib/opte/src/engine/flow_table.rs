@@ -337,13 +337,24 @@ impl<S: FlowState> FlowTable<S> {
         }
     }
 
-    pub fn expire_flows<F>(&mut self, now: Moment, f: F) -> Vec<InnerFlowId>
+    pub fn expire_flows(&mut self, now: Moment) {
+        fn a<S>(val: &S) -> InnerFlowId { unreachable!() }
+
+        let p: Option<(&mut Self, _)> = if false {
+            Some((unreachable!(), a))
+        } else {
+            None
+        };
+        self.expire_flows_partner(p, now);
+    }
+
+    pub fn expire_flows_partner<F, T>(&mut self, mut partner: Option<(&mut FlowTable<T>, F)>, now: Moment)
     where
         F: Fn(&S) -> InnerFlowId,
+        T: FlowState
     {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
-        let mut expired = vec![];
 
         self.map.retain(|flowid, entry| {
             // A flow cannot be expired by the timer while it still has children
@@ -375,14 +386,15 @@ impl<S: FlowState> FlowTable<S> {
                     Some(now.raw_millis()),
                 );
                 entry.expiry_cleanup();
-                expired.push(f(entry.state()));
+                if let Some((partner, extractor)) = &mut partner {
+                    partner.expire(&extractor(entry.state()));
+                }
+
                 return false;
             }
 
             !entry.is_killed()
         });
-
-        expired
     }
 
     /// Determine whether there is currently space for a new entry to be
@@ -899,11 +911,9 @@ mod test {
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        ft.expire_flows(now);
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0), |_| {
-            FLOW_ID_DEFAULT
-        });
+        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0));
         assert_eq!(ft.num_flows(), 0);
     }
 
@@ -951,15 +961,15 @@ mod test {
         // A flow entry cannot be removed by the timer until all its children
         // have been evicted or expired.
         let t2 = now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0);
-        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft1.expire_flows(t2);
         assert_eq!(ft1.num_flows(), 1);
 
         // If we go via ft2 first, we will be able to remove its entries (which
         // have no children), which in turn makes ft1's entries available for
         // eviction.
-        ft2.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft2.expire_flows(t2);
         assert_eq!(ft2.num_flows(), 0);
-        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft1.expire_flows(t2);
         assert_eq!(ft1.num_flows(), 0);
     }
 
@@ -993,7 +1003,7 @@ mod test {
 
         // When fe2 is expired, it should pass on its expiry time to fe1.
         let t3 = t2 + Duration::new(FLOW_DEF_EXPIRE_SECS, 0);
-        ft2.expire_flows(t3, |_| FLOW_ID_DEFAULT);
+        ft2.expire_flows(t3);
         assert_eq!(ft2.num_flows(), 0);
         assert_eq!(fe1.last_hit(), t2);
     }

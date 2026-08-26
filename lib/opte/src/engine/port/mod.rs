@@ -1171,13 +1171,13 @@ impl<N: NetworkImpl> Port<N> {
         // A TCP state entry or UFT may in turn reference any number of LFT
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
-        let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.tcp_flows.expire_flows(now);
         self.stats.vals.tcp_flows.set(u64::from(data.tcp_flows.num_flows()));
 
-        let _ = data.uft_in.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.uft_in.expire_flows(now);
         self.stats.vals.in_uft_flows.set(u64::from(data.uft_in.num_flows()));
 
-        let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.uft_out.expire_flows(now);
         self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
 
         for l in &mut data.layers {
