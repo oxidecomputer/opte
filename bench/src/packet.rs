@@ -359,7 +359,7 @@ impl BenchPacket for SlowpathEvict {
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
         let cfg = g1_cfg2(UlpProcess::cfg());
-        [1 << 10, 1 << 15, 1 << 19, 1 << 20, 1 << 21, 1 << 22]
+        [1 << 10, 1 << 15, 1 << 19, 1 << 20]
             .into_iter()
             .map(|n| {
                 Box::new(AllSynInstance {

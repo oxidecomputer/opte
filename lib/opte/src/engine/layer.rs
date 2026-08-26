@@ -243,7 +243,10 @@ impl LayerFlowTable {
     fn expire_flows(&mut self, now: Moment) {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
-        self.ft_out.expire_flows_partner(Some((&mut self.ft_in, LftOutEntry::extract_pair)), now);
+        self.ft_out.expire_flows_partner(
+            Some((&mut self.ft_in, LftOutEntry::extract_pair)),
+            now,
+        );
         self.count = self.ft_out.num_flows();
     }
 

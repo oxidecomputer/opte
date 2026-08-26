@@ -1187,6 +1187,46 @@ impl<N: NetworkImpl> Port<N> {
         Ok(())
     }
 
+    /// Use the function `f` to probabilistically mark flows as being ready
+    /// for expiry by offsetting their timestamps into the past.
+    ///
+    /// `f` should return true for a flow which we want to mark (and mark its
+    /// children as) expirable.
+    #[cfg(any(feature = "std", test))]
+    pub fn inject_expiry(&self, mut f: impl FnMut() -> bool) {
+        use core::time::Duration;
+
+        let now = Moment::now();
+        let earlier = now - Duration::from_secs(61);
+        let earlierer = earlier - Duration::from_secs(61);
+
+        let data = self.data.write();
+        for dir in [Direction::In, Direction::Out] {
+            let map = match dir {
+                Direction::In => data.uft_in.iter(),
+                Direction::Out => data.uft_out.iter(),
+            };
+            for (_, entry) in map {
+                let tcp =
+                    entry.state().tcp_flow.as_ref().and_then(|v| v.upgrade());
+                if !f() {
+                    entry.hit_at(now);
+                    if let Some(tcp) = tcp {
+                        tcp.hit_at(now);
+                    }
+                    continue;
+                }
+                entry.hit_at(earlier);
+                if let Some(tcp) = tcp {
+                    tcp.hit_at(earlier);
+                }
+                for parent in &entry.state().parents {
+                    parent.inherit_last_hit_force(earlierer);
+                }
+            }
+        }
+    }
+
     /// Find a rule in the specified layer and return its id.
     ///
     /// Search for a matching rule in the specified layer that has the

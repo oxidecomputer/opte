@@ -6,6 +6,7 @@
 
 //! Moments, periodics, etc.
 use core::ops::Add;
+use core::ops::Sub;
 use core::time::Duration;
 
 cfg_if! {
@@ -58,6 +59,23 @@ impl Add<Duration> for Moment {
     }
 }
 
+impl Sub<Duration> for Moment {
+    type Output = Self;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        cfg_if! {
+            if #[cfg(all(not(feature = "std"), not(test)))] {
+                let new = self.inner - ((rhs.as_secs() * NANOS) +
+                    rhs.subsec_nanos()) as i64;
+                Moment { inner: new }
+            } else {
+                let new = self.inner - rhs;
+                Moment { inner: new }
+            }
+        }
+    }
+}
+
 impl Moment {
     /// Compute the delta between `now - self` and return as
     /// milliseconds.
@@ -81,7 +99,9 @@ impl Moment {
             } else {
                 static FIRST_TS: OnceLock<Instant> = OnceLock::new();
 
-                let first_ts = *FIRST_TS.get_or_init(Instant::now);
+                let first_ts = *FIRST_TS.get_or_init(||
+                    Instant::now() - Duration::from_mins(5)
+                );
                 Self { inner: Instant::now().saturating_duration_since(first_ts) }
             }
         }

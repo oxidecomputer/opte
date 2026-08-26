@@ -155,6 +155,11 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     /// than the stored value.
     fn inherit_last_hit(&self, new_time: Moment);
 
+    /// Forcibly set the last hit time on this entry to `new_time`, when
+    /// required by some tests/benchmarks.
+    #[cfg(any(feature = "std", test))]
+    fn inherit_last_hit_force(&self, new_time: Moment);
+
     /// Determine whether this flow entry can be evicted to make room for
     /// another, recursively checking all children when needed.
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority>;
@@ -181,6 +186,11 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
             Ordering::Relaxed,
             |prior| (prior < new).then_some(new),
         );
+    }
+
+    #[cfg(any(feature = "std", test))]
+    fn inherit_last_hit_force(&self, new_time: Moment) {
+        self.lifetime.last_hit.store(new_time.raw(), Ordering::Relaxed);
     }
 
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority> {
@@ -338,20 +348,27 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     pub fn expire_flows(&mut self, now: Moment) {
-        fn a<S>(val: &S) -> InnerFlowId { unreachable!() }
+        // The below collection of unreachable functions, types etc. is needed
+        // because we can't otherwise name a function type `F` for
+        // `expire_flows_partner`.
+        fn a<S>(_: &S) -> InnerFlowId {
+            unreachable!()
+        }
 
-        let p: Option<(&mut Self, _)> = if false {
-            Some((unreachable!(), a))
-        } else {
-            None
-        };
+        #[allow(unreachable_code)]
+        let p: Option<(&mut Self, _)> =
+            if false { Some((unreachable!(), a)) } else { None };
+
         self.expire_flows_partner(p, now);
     }
 
-    pub fn expire_flows_partner<F, T>(&mut self, mut partner: Option<(&mut FlowTable<T>, F)>, now: Moment)
-    where
+    pub fn expire_flows_partner<F, T>(
+        &mut self,
+        mut partner: Option<(&mut FlowTable<T>, F)>,
+        now: Moment,
+    ) where
         F: Fn(&S) -> InnerFlowId,
-        T: FlowState
+        T: FlowState,
     {
         let name_c = &self.name_c;
         let port_c = &self.port_c;

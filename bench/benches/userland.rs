@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Userland packet parsing and processing microbenchmarks.
 
@@ -30,6 +30,9 @@ use oxide_vpc::api::IpAddr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::SourceFilter;
+use rand::SeedableRng;
+use rand::distr::Bernoulli;
+use rand::distr::Distribution;
 use std::collections::BTreeSet;
 use std::hint::black_box;
 
@@ -340,19 +343,31 @@ fn periodic_cleanup<M: MeasurementInfo>(c: &mut Criterion<M>) {
     let expt = SlowpathEvict;
     for case in expt.test_cases() {
         let port = case.create_port().unwrap();
-        let mut c = c.benchmark_group(format!("cleanup/{}", M::label()));
+        for p_expire in [0.0, 0.1, 0.25, 0.5] {
+            let mut c = c.benchmark_group(format!(
+                "cleanup/{}/P{}",
+                M::label(),
+                p_expire
+            ));
+            let mut rng =
+                rand::rngs::StdRng::seed_from_u64(0x01de_097e_7e57_0712);
+            let dist = Bernoulli::new(p_expire).unwrap();
 
-        c.bench_with_input(
-            BenchmarkId::from_parameter(case.instance_name()),
-            &case,
-            |b, _i| {
-                b.iter_batched(
-                    || case.pre_handle(&port),
-                    |_| black_box(port.port.expire_flows()),
-                    criterion::BatchSize::LargeInput,
-                )
-            },
-        );
+            c.bench_with_input(
+                BenchmarkId::from_parameter(case.instance_name()),
+                &case,
+                |b, _i| {
+                    b.iter_batched(
+                        || {
+                            case.pre_handle(&port);
+                            port.port.inject_expiry(|| dist.sample(&mut rng));
+                        },
+                        |_| black_box(port.port.expire_flows()),
+                        criterion::BatchSize::LargeInput,
+                    )
+                },
+            );
+        }
     }
 }
 
