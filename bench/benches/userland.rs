@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Userland packet parsing and processing microbenchmarks.
 
@@ -21,6 +21,7 @@ use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
 use opte_bench::packet::Icmp6;
 use opte_bench::packet::ParserKind;
+use opte_bench::packet::SlowpathEvict;
 use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
 use opte_bench::packet::ULP_SLOW_PATH;
@@ -29,6 +30,9 @@ use oxide_vpc::api::IpAddr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::SourceFilter;
+use rand::SeedableRng;
+use rand::distr::Bernoulli;
+use rand::distr::Distribution;
 use std::collections::BTreeSet;
 use std::hint::black_box;
 
@@ -44,11 +48,12 @@ pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
         Box::new(Icmp6),
         Box::new(ULP_FAST_PATH),
         Box::new(ULP_SLOW_PATH),
+        Box::new(SlowpathEvict),
     ];
 
     for experiment in all_tests {
         for case in experiment.test_cases() {
-            if do_parse {
+            if experiment.do_parse_benchmark() && do_parse {
                 test_parse(c, &**experiment, &*case);
             }
             test_handle(c, &**experiment, &*case);
@@ -151,6 +156,7 @@ pub fn test_handle<M: MeasurementInfo>(
     ));
 
     let parser = case.parse_with();
+    let can_fail = experiment.allow_failure();
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
@@ -174,7 +180,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -182,11 +188,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
@@ -198,7 +208,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -206,11 +216,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
@@ -325,7 +339,44 @@ fn source_filter_allows(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(wall, parse_and_process, source_filter_allows);
+fn periodic_cleanup<M: MeasurementInfo>(c: &mut Criterion<M>) {
+    let expt = SlowpathEvict;
+    for case in expt.test_cases() {
+        let port = case.create_port().unwrap();
+        for p_expire in [0.0, 0.1, 0.25, 0.5] {
+            let mut c = c.benchmark_group(format!(
+                "cleanup/{}/P{}",
+                M::label(),
+                p_expire
+            ));
+            let mut rng =
+                rand::rngs::StdRng::seed_from_u64(0x01de_097e_7e57_0712);
+            let dist = Bernoulli::new(p_expire).unwrap();
+
+            c.bench_with_input(
+                BenchmarkId::from_parameter(case.instance_name()),
+                &case,
+                |b, _i| {
+                    b.iter_batched(
+                        || {
+                            case.pre_handle(&port);
+                            port.port.inject_expiry(|| dist.sample(&mut rng));
+                        },
+                        |_| black_box(port.port.expire_flows()),
+                        criterion::BatchSize::LargeInput,
+                    )
+                },
+            );
+        }
+    }
+}
+
+criterion_group!(
+    wall,
+    parse_and_process,
+    source_filter_allows,
+    periodic_cleanup
+);
 criterion_group!(
     name = alloc;
     config = new_crit(Allocs);

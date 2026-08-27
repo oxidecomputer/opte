@@ -25,6 +25,7 @@ use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU64;
+use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
@@ -66,6 +67,12 @@ impl Ttl {
     }
 }
 
+/// An eviction policy table which makes TCP flow entries without live flowstate
+/// parents trivially evictable. When present, the TCP flow state will signal
+/// a value to be used in its place.
+#[derive(Clone, Copy, Debug)]
+pub struct TtlDelegateTcp(pub Ttl);
+
 /// A metric of how stale a flow entry is, used to determine whether
 /// any existing entry can be evicted to make room for a new one.
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Default)]
@@ -104,6 +111,20 @@ impl<S: FlowState> ExpiryPolicy<S> for Ttl {
 
     fn eviction_priority(
         &self,
+        _entry: &FlowEntry<S>,
+        _now: Moment,
+    ) -> Option<EvictionPriority> {
+        None
+    }
+}
+
+impl<S: FlowState> ExpiryPolicy<S> for TtlDelegateTcp {
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+        self.0.is_expired(entry.last_hit(), now)
+    }
+
+    fn eviction_priority(
+        &self,
         entry: &FlowEntry<S>,
         _now: Moment,
     ) -> Option<EvictionPriority> {
@@ -134,12 +155,17 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     /// than the stored value.
     fn inherit_last_hit(&self, new_time: Moment);
 
+    /// Forcibly set the last hit time on this entry to `new_time`, when
+    /// required by some tests/benchmarks.
+    #[cfg(any(feature = "std", test))]
+    fn inherit_last_hit_force(&self, new_time: Moment);
+
     /// Determine whether this flow entry can be evicted to make room for
     /// another, recursively checking all children when needed.
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority>;
 
     /// Set `self` as a parent node to `child`.
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>);
+    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()>;
 
     /// Remove `child` from this entry's list of children.
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>);
@@ -162,6 +188,11 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         );
     }
 
+    #[cfg(any(feature = "std", test))]
+    fn inherit_last_hit_force(&self, new_time: Moment) {
+        self.lifetime.last_hit.store(new_time.raw(), Ordering::Relaxed);
+    }
+
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority> {
         let own_prio = self.policy.eviction_priority(self, now);
 
@@ -177,12 +208,16 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         // If we have an explicit priority, we keep the most-protected (lowest)
         // priority which we know of.
         let mut best_prio = own_prio;
-        for maybe_child in &*self.lifetime.children.read() {
-            if let Some(child) = maybe_child.0.upgrade() {
-                match (best_prio, child.eviction_priority(now)) {
-                    (None, a) => best_prio = a,
-                    (Some(_), None) => {}
-                    (Some(old), Some(new)) => best_prio = Some(new.min(old)),
+        if self.lifetime.n_children.load(Ordering::Relaxed) > 0 {
+            for maybe_child in &*self.lifetime.children.read() {
+                if let Some(child) = maybe_child.0.upgrade() {
+                    match (best_prio, child.eviction_priority(now)) {
+                        (None, a) => best_prio = a,
+                        (Some(_), None) => {}
+                        (Some(old), Some(new)) => {
+                            best_prio = Some(new.min(old))
+                        }
+                    }
                 }
             }
         }
@@ -190,14 +225,28 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         best_prio
     }
 
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) {
+    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()> {
         let mut children = self.lifetime.children.write();
-        children.insert(ByAddr(Arc::downgrade(child)));
+
+        // Sadly, BTreeSet::entry remains a nightly API.
+        let to_place = ByAddr(Arc::downgrade(child));
+        let can_insert =
+            children.len() < Self::MAX_CHILDREN || children.contains(&to_place);
+        if can_insert {
+            children.insert(to_place);
+            self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(OpteError::MaxCapacity(
+                u64::try_from(Self::MAX_CHILDREN).expect("usize is u64"),
+            ))
+        }
     }
 
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>) {
         let mut children = self.lifetime.children.write();
         children.remove(&ByAddr(Arc::downgrade(child)));
+        self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
     }
 
     fn mark_evicted(&self) {
@@ -293,28 +342,53 @@ impl<S: FlowState> FlowTable<S> {
     pub fn expire(&mut self, flowid: &InnerFlowId) {
         flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         if let Some(entry) = self.map.remove(flowid) {
-            entry.propagate_last_hit();
+            entry.expiry_cleanup();
             entry.mark_evicted();
         }
     }
 
-    pub fn expire_flows<F>(&mut self, now: Moment, f: F) -> Vec<InnerFlowId>
-    where
+    pub fn expire_flows(&mut self, now: Moment) {
+        // The below collection of unreachable functions, types etc. is needed
+        // because we can't otherwise name a function type `F` for
+        // `expire_flows_partner`.
+        fn a<S>(_: &S) -> InnerFlowId {
+            unreachable!()
+        }
+
+        #[allow(unreachable_code)]
+        let p: Option<(&mut Self, _)> =
+            if false { Some((unreachable!(), a)) } else { None };
+
+        self.expire_flows_partner(p, now);
+    }
+
+    pub fn expire_flows_partner<F, T>(
+        &mut self,
+        mut partner: Option<(&mut FlowTable<T>, F)>,
+        now: Moment,
+    ) where
         F: Fn(&S) -> InnerFlowId,
+        T: FlowState,
     {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
-        let mut expired = vec![];
 
         self.map.retain(|flowid, entry| {
             // A flow cannot be expired by the timer while it still has children
             // relying upon its existence. Check whether any remain, and remove
             // dangling references to child entries which have expired.
+            //
+            // The dangling entries here will have been left by `expire_flows`
+            // called on other layers.
             {
                 // We have a write lock on the port, so there shouldn't be
                 // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
+                entry
+                    .lifetime
+                    .n_children
+                    .store(children.len(), Ordering::Relaxed);
                 if !children.is_empty() {
                     return true;
                 }
@@ -328,15 +402,16 @@ impl<S: FlowState> FlowTable<S> {
                     Some(my_time.raw_millis()),
                     Some(now.raw_millis()),
                 );
-                entry.propagate_last_hit();
-                expired.push(f(entry.state()));
+                entry.expiry_cleanup();
+                if let Some((partner, extractor)) = &mut partner {
+                    partner.expire(&extractor(entry.state()));
+                }
+
                 return false;
             }
 
             !entry.is_killed()
         });
-
-        expired
     }
 
     /// Determine whether there is currently space for a new entry to be
@@ -503,7 +578,7 @@ pub trait Dump: fmt::Debug + Send + Sync {
 }
 
 /// Common functions needed from the interior state of a flow table entry.
-pub trait FlowState: Dump {
+pub trait FlowState: Dump + 'static {
     /// Return an iterator containing references to all flow entries from other
     /// tables which underpin `self`.
     fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>>;
@@ -520,6 +595,8 @@ struct FlowLifetime {
     /// Whether this flow entry has been explicitly removed.
     killed: AtomicBool,
 
+    n_children: AtomicUsize,
+
     /// Entries in remote tables which rely on the continued existence of
     /// this flow.
     ///
@@ -530,10 +607,11 @@ struct FlowLifetime {
 
 impl fmt::Debug for FlowLifetime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let FlowLifetime { last_hit, killed, children: _ } = self;
+        let FlowLifetime { last_hit, killed, n_children, children: _ } = self;
         f.debug_struct("FlowEntry")
             .field("last_hit", last_hit)
             .field("killed", killed)
+            .field("n_children", n_children)
             .field("children", &"<lock>")
             .finish()
     }
@@ -584,6 +662,12 @@ pub struct FlowEntry<S: FlowState> {
 }
 
 impl<S: FlowState> FlowEntry<S> {
+    /// In OPTE, we generally expect at most two children per LFT entry: the
+    /// UFT entry and TCP entry. We can keep some extra space for now to allow
+    /// for this to change in future, as well as to provide some breathing room
+    /// if we need to replace one of those relationships.
+    const MAX_CHILDREN: usize = 16;
+
     fn dump(&self) -> S::DumpVal {
         self.state.dump(self.hits.load(Ordering::Relaxed))
     }
@@ -652,11 +736,13 @@ impl<S: FlowState> FlowEntry<S> {
     }
 
     /// Update the last hit time of this flow entry's parents if it has been
-    /// used more recently.
-    fn propagate_last_hit(&self) {
+    /// used more recently, and remove any of their references to `self`.
+    fn expiry_cleanup(self: &Arc<Self>) {
         let my_time = self.last_hit();
+        let dyn_entry = Arc::clone(self) as Arc<dyn FlowEntryInfo>;
         for parent in self.state.parents() {
             parent.inherit_last_hit(my_time);
+            parent.remove_child(&dyn_entry);
         }
     }
 
@@ -670,6 +756,7 @@ impl<S: FlowState> FlowEntry<S> {
             lifetime: Arc::new(FlowLifetime {
                 last_hit: Moment::now().raw().into(),
                 killed: false.into(),
+                n_children: 0.into(),
                 children: KRwLock::new(BTreeSet::new()),
             }),
         }
@@ -770,7 +857,6 @@ mod test {
     use crate::api::PortInfo;
     use crate::engine::ip::v4::Protocol;
     use crate::engine::packet::AddrPair;
-    use crate::engine::packet::FLOW_ID_DEFAULT;
     use core::time::Duration;
 
     impl Dump for () {
@@ -841,11 +927,9 @@ mod test {
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        ft.expire_flows(now);
         assert_eq!(ft.num_flows(), 1);
-        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0), |_| {
-            FLOW_ID_DEFAULT
-        });
+        ft.expire_flows(now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0));
         assert_eq!(ft.num_flows(), 0);
     }
 
@@ -888,20 +972,20 @@ mod test {
         let fe2 = ft2.add(flowid, ()).unwrap();
 
         let now = fe2.last_hit();
-        fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>)).unwrap();
 
         // A flow entry cannot be removed by the timer until all its children
         // have been evicted or expired.
         let t2 = now + Duration::new(FLOW_DEF_EXPIRE_SECS, 0);
-        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft1.expire_flows(t2);
         assert_eq!(ft1.num_flows(), 1);
 
         // If we go via ft2 first, we will be able to remove its entries (which
         // have no children), which in turn makes ft1's entries available for
         // eviction.
-        ft2.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft2.expire_flows(t2);
         assert_eq!(ft2.num_flows(), 0);
-        ft1.expire_flows(t2, |_| FLOW_ID_DEFAULT);
+        ft1.expire_flows(t2);
         assert_eq!(ft1.num_flows(), 0);
     }
 
@@ -925,7 +1009,7 @@ mod test {
             ft2.add(flowid, ParentSet(vec![fe1.clone() as Arc<_>])).unwrap();
 
         let t1 = fe2.last_hit();
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
 
         // Updating the last-hit time of a flow won't immediately propagate to
         // its children.
@@ -935,7 +1019,7 @@ mod test {
 
         // When fe2 is expired, it should pass on its expiry time to fe1.
         let t3 = t2 + Duration::new(FLOW_DEF_EXPIRE_SECS, 0);
-        ft2.expire_flows(t3, |_| FLOW_ID_DEFAULT);
+        ft2.expire_flows(t3);
         assert_eq!(ft2.num_flows(), 0);
         assert_eq!(fe1.last_hit(), t2);
     }
@@ -1078,9 +1162,11 @@ mod test {
         let fe_out_of_chain = ft2_2.add(flowid, ()).unwrap();
         let fe3 = ft3.add(flowid, ()).unwrap();
 
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
-        fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
-        fe_out_of_chain.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
+        fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
+        fe_out_of_chain
+            .push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>))
+            .unwrap();
 
         // If we invalidate fe1, then all of its *direct descendants* will also
         // be invalid.
@@ -1147,19 +1233,19 @@ mod test {
         // When an explicit priority is requested by any descendent, we choose the
         // strongest requirement that the flow remain in place. Each flow we push
         // here makes the flow less likely for eviction.
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Evictable(NonZeroU16::MAX)),
         );
 
-        fe1.push_child(&(fe2_2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2_2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
         );
 
-        fe1.push_child(&(fe2_3.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2_3.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Protected),

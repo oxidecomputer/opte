@@ -129,6 +129,7 @@ pub enum ProcessError {
     TcpFlow(TcpFlowStateError),
     BadEmitSpec,
     FlowTableFull { kind: &'static str, limit: u64 },
+    LftChildrenFull,
 }
 
 impl From<super::HdlPktError> for ProcessError {
@@ -544,7 +545,7 @@ pub enum DumpLayerError {
 // API version change until this is something that *can* actually be specified
 // on a per-port basis.
 pub trait FlowId:
-    fmt::Debug + Send + Sync + Copy + Eq + Ord + core::hash::Hash
+    fmt::Debug + Send + Sync + Copy + Eq + Ord + core::hash::Hash + 'static
 {
 }
 impl FlowId for InnerFlowId {}
@@ -1170,13 +1171,13 @@ impl<N: NetworkImpl> Port<N> {
         // A TCP state entry or UFT may in turn reference any number of LFT
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
-        let _ = data.tcp_flows.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.tcp_flows.expire_flows(now);
         self.stats.vals.tcp_flows.set(u64::from(data.tcp_flows.num_flows()));
 
-        let _ = data.uft_in.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.uft_in.expire_flows(now);
         self.stats.vals.in_uft_flows.set(u64::from(data.uft_in.num_flows()));
 
-        let _ = data.uft_out.expire_flows(now, |_| FLOW_ID_DEFAULT);
+        data.uft_out.expire_flows(now);
         self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
 
         for l in &mut data.layers {
@@ -1184,6 +1185,46 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         Ok(())
+    }
+
+    /// Use the function `f` to probabilistically mark flows as being ready
+    /// for expiry by offsetting their timestamps into the past.
+    ///
+    /// `f` should return true for a flow which we want to mark (and mark its
+    /// children as) expirable.
+    #[cfg(any(feature = "std", test))]
+    pub fn inject_expiry(&self, mut f: impl FnMut() -> bool) {
+        use core::time::Duration;
+
+        let now = Moment::now();
+        let earlier = now - Duration::from_secs(61);
+        let earlierer = earlier - Duration::from_secs(61);
+
+        let data = self.data.write();
+        for dir in [Direction::In, Direction::Out] {
+            let map = match dir {
+                Direction::In => data.uft_in.iter(),
+                Direction::Out => data.uft_out.iter(),
+            };
+            for (_, entry) in map {
+                let tcp =
+                    entry.state().tcp_flow.as_ref().and_then(|v| v.upgrade());
+                if !f() {
+                    entry.hit_at(now);
+                    if let Some(tcp) = tcp {
+                        tcp.hit_at(now);
+                    }
+                    continue;
+                }
+                entry.hit_at(earlier);
+                if let Some(tcp) = tcp {
+                    tcp.hit_at(earlier);
+                }
+                for parent in &entry.state().parents {
+                    parent.inherit_last_hit_force(earlierer);
+                }
+            }
+        }
     }
 
     /// Find a rule in the specified layer and return its id.
@@ -2611,8 +2652,19 @@ impl<N: NetworkImpl> Port<N> {
                     match data.uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
                             self.new_uft_kstat(In, data);
-                            associate_lfts_upstack(data, &v, Direction::In);
-                            Ok(InternalProcessResult::Modified)
+                            match associate_lfts_upstack(
+                                data,
+                                &v,
+                                Direction::In,
+                            ) {
+                                Ok(_) => Ok(InternalProcessResult::Modified),
+                                Err(OpteError::MaxCapacity(_)) => {
+                                    Err(ProcessError::LftChildrenFull)
+                                }
+                                Err(_) => unreachable!(
+                                    "UFT association can only fail due to capacity checks."
+                                ),
+                            }
                         }
                         Err(OpteError::MaxCapacity(limit)) => {
                             Err(ProcessError::FlowTableFull {
@@ -2652,8 +2704,15 @@ impl<N: NetworkImpl> Port<N> {
             match data.uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
                     self.new_uft_kstat(In, data);
-                    associate_lfts_upstack(data, &v, Direction::In);
-                    Ok(InternalProcessResult::Modified)
+                    match associate_lfts_upstack(data, &v, Direction::In) {
+                        Ok(_) => Ok(InternalProcessResult::Modified),
+                        Err(OpteError::MaxCapacity(_)) => {
+                            Err(ProcessError::LftChildrenFull)
+                        }
+                        Err(_) => unreachable!(
+                            "UFT association can only fail due to capacity checks."
+                        ),
+                    }
                 }
                 Err(OpteError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -2818,8 +2877,15 @@ impl<N: NetworkImpl> Port<N> {
                 match data.uft_out.add(flow_before, hte) {
                     Ok(v) => {
                         self.new_uft_kstat(Out, data);
-                        associate_lfts_upstack(data, &v, Direction::Out);
-                        Ok(InternalProcessResult::Modified)
+                        match associate_lfts_upstack(data, &v, Direction::Out) {
+                            Ok(_) => Ok(InternalProcessResult::Modified),
+                            Err(OpteError::MaxCapacity(_)) => {
+                                Err(ProcessError::LftChildrenFull)
+                            }
+                            Err(_) => unreachable!(
+                                "UFT association can only fail due to capacity checks."
+                            ),
+                        }
                     }
                     Err(OpteError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
@@ -3226,7 +3292,7 @@ fn associate_lfts_upstack(
     _data: &mut PortData,
     uft: &Arc<FlowEntry<UftEntry<InnerFlowId>>>,
     dir: Direction,
-) {
+) -> Result<()> {
     // The goal here is to provide each LFT hit with two children where
     // possible. These are the UFT and, when it exists, the TCP flow entry.
     // What this means in practice is that while either is present, the LFTs
@@ -3240,7 +3306,7 @@ fn associate_lfts_upstack(
     // on the UFT to keep it a small cache without breaking flows.
     let uft_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(uft) as _;
     for lft in &uft.state().parents {
-        lft.push_child(&uft_dyn);
+        lft.push_child(&uft_dyn)?;
     }
 
     // Currently, we're explicitly holding a write lock on the parent port,
@@ -3263,9 +3329,11 @@ fn associate_lfts_upstack(
             old_lft.remove_child(&tcp_dyn);
         }
         for new_lft in new_parent_slot {
-            new_lft.push_child(&tcp_dyn);
+            new_lft.push_child(&tcp_dyn)?;
         }
     }
+
+    Ok(())
 }
 
 impl core::fmt::Debug for TcpFlowEntryState {

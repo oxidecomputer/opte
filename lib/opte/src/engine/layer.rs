@@ -40,7 +40,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -241,11 +243,10 @@ impl LayerFlowTable {
     fn expire_flows(&mut self, now: Moment) {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
-        let to_expire =
-            self.ft_out.expire_flows(now, LftOutEntry::extract_pair);
-        for flow in to_expire {
-            self.ft_in.expire(&flow);
-        }
+        self.ft_out.expire_flows_partner(
+            Some((&mut self.ft_in, LftOutEntry::extract_pair)),
+            now,
+        );
         self.count = self.ft_out.num_flows();
     }
 
@@ -326,8 +327,18 @@ impl LayerFlowTable {
         Self {
             count: 0,
             limit,
-            ft_in: FlowTable::new(port, &format!("{layer}_in"), limit, None),
-            ft_out: FlowTable::new(port, &format!("{layer}_out"), limit, None),
+            ft_in: FlowTable::new(
+                port,
+                &format!("{layer}_in"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
+            ft_out: FlowTable::new(
+                port,
+                &format!("{layer}_out"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
         }
     }
 

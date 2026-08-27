@@ -8,8 +8,9 @@ use super::*;
 use measurement::Instrumentation;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum IperfMode {
+    #[default]
     ClientSend,
     ServerSend,
     // TODO: need an updated illumos package.
@@ -28,15 +29,10 @@ impl std::fmt::Display for IperfMode {
     }
 }
 
-impl Default for IperfMode {
-    fn default() -> Self {
-        Self::ClientSend
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum IperfProto {
+    #[default]
     Tcp,
     Udp {
         /// Target bandwidth in MiB/s.
@@ -56,12 +52,6 @@ impl std::fmt::Display for IperfProto {
                 write!(f, "UDP({pkt_sz}B, {bw}MiB/s)")
             }
         }
-    }
-}
-
-impl Default for IperfProto {
-    fn default() -> Self {
-        Self::Tcp
     }
 }
 
