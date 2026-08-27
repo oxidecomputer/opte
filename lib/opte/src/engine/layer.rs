@@ -40,7 +40,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -326,8 +328,18 @@ impl LayerFlowTable {
         Self {
             count: 0,
             limit,
-            ft_in: FlowTable::new(port, &format!("{layer}_in"), limit, None),
-            ft_out: FlowTable::new(port, &format!("{layer}_out"), limit, None),
+            ft_in: FlowTable::new(
+                port,
+                &format!("{layer}_in"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
+            ft_out: FlowTable::new(
+                port,
+                &format!("{layer}_out"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
         }
     }
 
