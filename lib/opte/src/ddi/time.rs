@@ -65,8 +65,8 @@ impl Sub<Duration> for Moment {
     fn sub(self, rhs: Duration) -> Self::Output {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let new = self.inner - ((rhs.as_secs() * NANOS) +
-                    rhs.subsec_nanos()) as i64;
+                let new = self.inner - ((rhs.as_secs() * NANOS) as i64 +
+                    rhs.subsec_nanos() as i64);
                 Moment { inner: new }
             } else {
                 let new = self.inner - rhs;
