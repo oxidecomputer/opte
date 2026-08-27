@@ -857,7 +857,6 @@ mod test {
     use crate::api::PortInfo;
     use crate::engine::ip::v4::Protocol;
     use crate::engine::packet::AddrPair;
-    use crate::engine::packet::FLOW_ID_DEFAULT;
     use core::time::Duration;
 
     impl Dump for () {
