@@ -28,6 +28,7 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
+use itertools::Either;
 use opte_api::OpteError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -266,6 +267,15 @@ pub struct FlowTable<S: FlowState> {
     limit: NonZeroU32,
     policy: Arc<dyn ExpiryPolicy<S>>,
     map: BTreeMap<InnerFlowId, Arc<FlowEntry<S>>>,
+
+    // When looking up an eviction candidate, we cannot perform a whole table
+    // scan. Ideally we would have a secondary candidate list maintained by
+    // the periodic cleanup task.
+    //
+    // For now, and in any future case where we have no valid entries in said
+    // list, we want to examine a subset of `map` but don't want to keep
+    // rechecking the first `n` entries.
+    eviction_cursor: Option<InnerFlowId>,
 }
 
 impl<S: FlowState> FlowTable<S> {
@@ -475,47 +485,72 @@ impl<S: FlowState> FlowTable<S> {
     ///
     /// Entries which have been killed due to the loss of a dependency will be
     /// used where possible.
-    pub fn find_evictable_entry(&self) -> Option<(InnerFlowId, &FlowEntry<S>)> {
+    pub fn find_evictable_entry(
+        &mut self,
+    ) -> Option<(InnerFlowId, &FlowEntry<S>)> {
         let now = Moment::now();
 
         // TODO: some form of datastructure to accelerate this?
         // Who would be responsible for keeping that up to date?
-        // If that cache is wrong, we're just hitting the O(n) scan anyhow.
+        // If that cache is wrong, we're just hitting the limited scan anyhow.
+        const SCAN_BUDGET: usize = 2048;
+        let len = self.map.len();
+        let to_scan = len.min(SCAN_BUDGET);
 
         let mut to_evict = None;
-        for (key, entry) in self.map.iter() {
-            if entry.is_killed() {
-                to_evict = Some((EvictionKey::Dead, *key, entry));
-                break;
-            }
 
-            // If we have no information, then default to preserving the flow.
-            let prio = entry.eviction_priority(now).unwrap_or_default();
-            if let EvictionPriority::Protected = prio {
-                continue;
-            }
+        let mut visited = 0;
+        while visited < to_scan {
+            let map = if let Some(from) = self.eviction_cursor.take() {
+                Either::Left(self.map.range(from..))
+            } else {
+                Either::Right(self.map.iter())
+            };
 
-            let last_hit = entry.last_hit();
-
-            match to_evict {
-                None => {
-                    to_evict = Some((
-                        EvictionKey::Evictable(prio, last_hit),
-                        *key,
-                        entry,
-                    ))
+            for (key, entry) in map {
+                // Note: we can't use .take() on map because we need to discover
+                // the flow ID we'll be starting with on the next scan.
+                if visited >= to_scan {
+                    self.eviction_cursor = Some(*key);
+                    break;
                 }
-                Some((EvictionKey::Evictable(curr_prio, curr_time), ..))
-                    if prio > curr_prio
+                visited += 1;
+
+                if entry.is_killed() {
+                    to_evict = Some((EvictionKey::Dead, *key, entry));
+                    break;
+                }
+
+                // If we have no information, then default to preserving the flow.
+                let prio = entry.eviction_priority(now).unwrap_or_default();
+                if let EvictionPriority::Protected = prio {
+                    continue;
+                }
+
+                let last_hit = entry.last_hit();
+
+                match to_evict {
+                    None => {
+                        to_evict = Some((
+                            EvictionKey::Evictable(prio, last_hit),
+                            *key,
+                            entry,
+                        ))
+                    }
+                    Some((
+                        EvictionKey::Evictable(curr_prio, curr_time),
+                        ..,
+                    )) if prio > curr_prio
                         || (prio == curr_prio && last_hit < curr_time) =>
-                {
-                    to_evict = Some((
-                        EvictionKey::Evictable(prio, last_hit),
-                        *key,
-                        entry,
-                    ));
+                    {
+                        to_evict = Some((
+                            EvictionKey::Evictable(prio, last_hit),
+                            *key,
+                            entry,
+                        ));
+                    }
+                    Some(_) => {}
                 }
-                Some(_) => {}
             }
         }
 
@@ -559,6 +594,7 @@ impl<S: FlowState> FlowTable<S> {
             limit,
             policy,
             map: BTreeMap::new(),
+            eviction_cursor: None,
         }
     }
 
