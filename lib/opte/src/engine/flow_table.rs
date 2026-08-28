@@ -26,6 +26,7 @@ use core::num::NonZeroU32;
 use core::ops::ControlFlow;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU64;
+use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
@@ -209,12 +210,16 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         // If we have an explicit priority, we keep the most-protected (lowest)
         // priority which we know of.
         let mut best_prio = own_prio;
-        for maybe_child in &*self.lifetime.children.read() {
-            if let Some(child) = maybe_child.0.upgrade() {
-                match (best_prio, child.eviction_priority(now)) {
-                    (None, a) => best_prio = a,
-                    (Some(_), None) => {}
-                    (Some(old), Some(new)) => best_prio = Some(new.min(old)),
+        if self.lifetime.n_children.load(Ordering::Relaxed) > 0 {
+            for maybe_child in &*self.lifetime.children.read() {
+                if let Some(child) = maybe_child.0.upgrade() {
+                    match (best_prio, child.eviction_priority(now)) {
+                        (None, a) => best_prio = a,
+                        (Some(_), None) => {}
+                        (Some(old), Some(new)) => {
+                            best_prio = Some(new.min(old))
+                        }
+                    }
                 }
             }
         }
@@ -231,6 +236,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
             children.len() < Self::MAX_CHILDREN || children.contains(&to_place);
         if can_insert {
             children.insert(to_place);
+            self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
             Ok(())
         } else {
             Err(OpteError::MaxCapacity(
@@ -242,6 +248,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>) {
         let mut children = self.lifetime.children.write();
         children.remove(&ByAddr(Arc::downgrade(child)));
+        self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
     }
 
     fn mark_evicted(&self) {
@@ -391,6 +398,10 @@ impl<S: FlowState> FlowTable<S> {
                 // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
+                entry
+                    .lifetime
+                    .n_children
+                    .store(children.len(), Ordering::Relaxed);
                 if !children.is_empty() {
                     return true;
                 }
@@ -450,6 +461,10 @@ impl<S: FlowState> FlowTable<S> {
                 // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
+                entry
+                    .lifetime
+                    .n_children
+                    .store(children.len(), Ordering::Relaxed);
                 if !children.is_empty() {
                     return true;
                 }
@@ -719,6 +734,10 @@ struct FlowLifetime {
     /// Whether this flow entry has been explicitly removed.
     killed: AtomicBool,
 
+    /// An estimate of the number of elements in [`Self::children`], used
+    /// to avoid locking and querying consistently empty elements.
+    n_children: AtomicUsize,
+
     /// Entries in remote tables which rely on the continued existence of
     /// this flow.
     ///
@@ -729,10 +748,11 @@ struct FlowLifetime {
 
 impl fmt::Debug for FlowLifetime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let FlowLifetime { last_hit, killed, children: _ } = self;
+        let FlowLifetime { last_hit, killed, n_children, children: _ } = self;
         f.debug_struct("FlowEntry")
             .field("last_hit", last_hit)
             .field("killed", killed)
+            .field("n_children", n_children)
             .field("children", &"<lock>")
             .finish()
     }
@@ -877,6 +897,7 @@ impl<S: FlowState> FlowEntry<S> {
             lifetime: Arc::new(FlowLifetime {
                 last_hit: Moment::now().raw().into(),
                 killed: false.into(),
+                n_children: 0.into(),
                 children: KRwLock::new(BTreeSet::new()),
             }),
         }
@@ -939,7 +960,13 @@ fn update_eviction_incumbent<'a, S: FlowState>(
         EvictionSource::Cache
     };
 
-    if entry.is_killed() {
+    // We may be visiting this entry before the periodic task is able to reap
+    // it. If so, we have a max-priority candidate, due to it losing either the
+    // support of a crucial LFT or timer expiry.
+    if entry.is_killed()
+        || (entry.lifetime.n_children.load(Ordering::Relaxed) > 0
+            && entry.is_expired(now))
+    {
         *versus =
             Some(Candidate { key: EvictionKey::Dead, id: *id, entry, source });
         ControlFlow::Break(())?;
