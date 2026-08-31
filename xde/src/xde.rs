@@ -126,6 +126,17 @@
 //!    is kept per-port, updated by `refresh_maps()` whenever the canonical
 //!    forwarding table changes.
 //!
+//! ### Multicast directions
+//! The multicast state stores, and the identity/membership split between
+//! them, are described in detail in the [`overlay`] module docs. XDE implements
+//! both directions over that state. Rx delivery, described above, is the
+//! external-ingress half: a decapsulated packet addressed to an admin-scoped
+//! underlay group is fanned out to the ports on this sled that subscribed to
+//! it, and each copy goes through that member's source filter. For the other
+//! direction, the per-port `mcast_fwd` state and Tx fan-out serve
+//! guest-originated sends, which resolve the group through the M2P table
+//! during encapsulation, before XDE's multicast forwarding stage.
+//!
 //! ### [`TokenLock`] and [`DevMap`] updates
 //! The `TokenLock` primitive provides us with logical mutual exclusion around
 //! the underlay and the ability to modify the canonical [`DevMap`] -- without
@@ -148,6 +159,8 @@
 //! the final `refresh_maps()` calls during port deletion). The management lock
 //! ensures no concurrent modifications, allowing underlay port Arcs to be
 //! safely unwrapped.
+//!
+//! [`overlay`]: oxide_vpc::engine::overlay
 
 use crate::dev_map::DevMap;
 use crate::dev_map::ReadOnlyDevMap;
@@ -2451,7 +2464,7 @@ fn select_nexthops(
 /// replication based on the XDE-wide multicast forwarding table.
 ///
 /// Always delivers to local same-sled subscribers regardless of replication mode.
-/// Routes to next hop unicast addresses for ALL replication modes to determine
+/// Routes to next hop unicast addresses for every replication mode to determine
 /// reachability and underlay port/MAC. Packet destination is always the multicast
 /// address with multicast MAC. The [`Replication`] type is a Tx-only instruction
 /// telling the switch which port groups to replicate to: External (front panel),
@@ -2477,11 +2490,18 @@ fn handle_mcast_tx<'a>(
         + usize::from(ctx.tun_meoi.meoi_l3hlen)
         + usize::from(ctx.tun_meoi.meoi_l4hlen);
 
-    // Local same-sled delivery: always deliver to subscribers on this sled,
-    // independent of the Tx-only Replication instruction (not an access control mechanism).
+    // Local same-sled delivery on the guest-egress path: the sending guest
+    // has already gotten past the M2P lookup in the overlay layer, so this
+    // loop only decides which other local ports can receive a copy.
+    //
+    // The external-ingress fan-out is separate; `handle_mcast_rx` handles
+    // copies arriving from the underlay.
+    //
+    // We always deliver to subscribers on this sled, independent of the Tx-only
+    // Replication instruction (not an access control mechanism).
     //
     // The Replication type only affects how switches handle the packet on Tx.
-    // Subscription is keyed by underlay (outer) IPv6 multicast address.
+    // Subscription is keyed by the underlay (outer) IPv6 multicast address.
     let underlay_addr =
         oxide_vpc::api::Ipv6Addr::from(ctx.underlay_dst.bytes());
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
@@ -2755,12 +2775,23 @@ fn handle_mcast_tx<'a>(
 
 /// Handle multicast packet reception from the underlay.
 ///
-/// OPTE is always a leaf node in the multicast replication tree.
-/// This function only delivers packets to local subscribers.
+/// This is the external-ingress half of multicast. A packet addressed to an
+/// admin-scoped underlay group arrives already decapsulated by the caller,
+/// and we fan it out to the ports on this sled that are subscribed to that
+/// group. Each copy must go through that member's source filter.
+///
+/// Note: OPTE is always a leaf node in the multicast replication tree; no
+/// further replication toward the underlay (or across transit, or anything
+/// similar) can happen here.
+///
+/// There is no per-packet M2P lookup here. Subscriptions are keyed
+/// by the underlay group, and (by this point) the subscribe ioctl has already
+/// translated the overlay group through M2P. The guest-egress half, where M2P
+/// decides which overlay groups a guest may send to, lives in the overlay
+/// layer's encap action.
 ///
 /// The Replication type is Tx-only (instructions to the switch), so the
-/// replication field is ignored on Rx. Local delivery is based purely on
-/// subscriptions.
+/// replication field is ignored on Rx.
 fn handle_mcast_rx(
     ctx: MulticastRxContext,
     stream: &DlsStream,
