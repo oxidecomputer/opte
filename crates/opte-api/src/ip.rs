@@ -844,14 +844,25 @@ impl Ipv6Addr {
         }
     }
 
-    /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix
-    /// (admin-local scope with flags=0) as used by Omicron for underlay multicast.
+    /// Return `true` if this is a multicast IPv6 address with the ff04::/16
+    /// prefix (admin-local scope with flags=0) as used by Omicron for underlay
+    /// multicast.
     ///
     /// This specifically checks for the ff04::/16 prefix where:
     /// - First byte: 0xFF (all multicast addresses)
     /// - Second byte: 0x04 (flags=0, scope=4 admin-local)
     ///
-    /// See [RFC 7346] for details on IPv6 multicast address scopes.
+    /// See [RFC 7346] for details on IPv6 multicast address scopes. Routers
+    /// must not forward a packet beyond the scope its destination names
+    /// ([RFC 4291 §2.7]). Admin-local keeps rack traffic in the rack,
+    /// link-local is dropped at the first hop, and global leaks past the
+    /// rack.
+    ///
+    /// Requiring flags=0 follows Omicron's allocation rather than the RFCs.
+    /// T=0 denotes an IANA-assigned well-known group ([RFC 4291 §2.7]), and
+    /// [RFC 3307 §4] requires dynamically allocated groups to set T=1. These
+    /// groups are operator-allocated, so ff14:: would be the conformant
+    /// choice. Transient groups are rejected here regardless.
     ///
     /// Omicron allocates multicast addresses from a /64 subnet within
     /// ff04::/16, and the narrower /64 constraint is enforced upstream
@@ -860,6 +871,8 @@ impl Ipv6Addr {
     /// for correct packet handling at this layer.
     ///
     /// [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346.html
+    /// [RFC 4291 §2.7]: https://www.rfc-editor.org/rfc/rfc4291#section-2.7
+    /// [RFC 3307 §4]: https://www.rfc-editor.org/rfc/rfc3307#section-4
     pub const fn is_admin_scoped_multicast(&self) -> bool {
         if !self.is_multicast() {
             return false;
@@ -1091,13 +1104,11 @@ impl MulticastUnderlay {
 
     /// Create a new `MulticastUnderlay` without validation.
     ///
-    /// Safety: The caller must ensure that `addr` is an admin-scoped IPv6
-    /// multicast address (ff04::/16). Using this with an invalid address
-    /// violates the type's invariant and may lead to undefined behavior.
+    /// Callers of this fn must still uphold the type's invariant by supplying
+    /// an admin-scoped multicast address (ff04::/16). So, no validation here.
     ///
-    /// This is intended for cases where validation has already been performed
-    /// (e.g., after an explicit `is_admin_scoped_multicast()` check) to avoid
-    /// redundant validation overhead.
+    /// On the packet path, the address is read directly from the wire, and
+    /// the forwarding and subscription table lookups don't recheck it.
     #[inline]
     pub const fn new_unchecked(addr: Ipv6Addr) -> Self {
         Self(addr)
@@ -1846,7 +1857,7 @@ mod test {
         assert!(to_ipv6("ff04::1").is_admin_scoped_multicast());
         assert!(to_ipv6("ff04:1234:5678:9abc::1").is_admin_scoped_multicast());
 
-        // Test other administrative scopes (NOT accepted)
+        // Test other administrative scopes (not accepted)
         assert!(!to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local
         assert!(!to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local
 
