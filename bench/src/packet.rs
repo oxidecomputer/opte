@@ -26,6 +26,10 @@ use opte_test_utils::icmp::gen_icmp_echo;
 use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
 use opte_test_utils::*;
+use rand::SeedableRng;
+use rand::distr::Bernoulli;
+use rand::distr::Distribution;
+use rand::rngs::StdRng;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -350,7 +354,10 @@ impl BenchPacketInstance for UlpProcessInstance {
     }
 }
 
-pub struct SlowpathEvict;
+pub struct SlowpathEvict {
+    pub capacities: Vec<NonZeroU32>,
+    pub p_expires: Vec<f64>,
+}
 
 impl BenchPacket for SlowpathEvict {
     fn packet_label(&self) -> &'static str {
@@ -359,12 +366,12 @@ impl BenchPacket for SlowpathEvict {
 
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
         let cfg = g1_cfg2(UlpProcess::cfg());
-        [1 << 10, 1 << 15, 1 << 19, 1 << 20]
-            .into_iter()
-            .map(|n| {
+        itertools::iproduct!(&self.capacities, &self.p_expires)
+            .map(|(capacity, p_expire)| {
                 Box::new(AllSynInstance {
                     index: 0.into(),
-                    capacity: n.try_into().unwrap(),
+                    capacity: *capacity,
+                    p_expire: *p_expire,
                     cfg: cfg.clone(),
                 }) as Box<dyn BenchPacketInstance>
             })
@@ -384,7 +391,7 @@ impl BenchPacket for SlowpathEvict {
 pub struct AllSynInstance {
     index: AtomicU64,
     capacity: NonZeroU32,
-
+    p_expire: f64,
     cfg: VpcCfg,
 }
 
@@ -419,10 +426,15 @@ impl BenchPacketInstance for AllSynInstance {
                 e => panic!("unexpected err condition {e:?}"),
             }
         }
+
+        let mut rng = StdRng::seed_from_u64(0x01de_097e_7e57_0712);
+        let dist = Bernoulli::new(self.p_expire).unwrap();
+
+        port.port.inject_expiry(|| dist.sample(&mut rng));
     }
 
     fn instance_name(&self) -> String {
-        format!("{}", self.capacity)
+        format!("{}/P{}", self.capacity, self.p_expire)
     }
 
     fn generate(&self) -> (MsgBlk, Direction) {

@@ -30,9 +30,6 @@ use oxide_vpc::api::IpAddr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::SourceFilter;
-use rand::SeedableRng;
-use rand::distr::Bernoulli;
-use rand::distr::Distribution;
 use std::collections::BTreeSet;
 use std::hint::black_box;
 
@@ -48,7 +45,13 @@ pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
         Box::new(Icmp6),
         Box::new(ULP_FAST_PATH),
         Box::new(ULP_SLOW_PATH),
-        Box::new(SlowpathEvict),
+        Box::new(SlowpathEvict {
+            capacities: [1 << 10, 1 << 15, 1 << 19, 1 << 20]
+                .into_iter()
+                .filter_map(NonZeroU32::new)
+                .collect(),
+            p_expires: vec![0.0],
+        }),
     ];
 
     for experiment in all_tests {
@@ -340,34 +343,34 @@ fn source_filter_allows(c: &mut Criterion) {
 }
 
 fn periodic_cleanup<M: MeasurementInfo>(c: &mut Criterion<M>) {
-    let expt = SlowpathEvict;
+    let (capacities, p_expires) = if std::env::var("CI").is_ok() {
+        (&[1 << 10, 1 << 15][..], vec![0.0, 0.25])
+    } else {
+        (&[1 << 10, 1 << 15, 1 << 19, 1 << 20][..], vec![0.0, 0.1, 0.25, 0.5])
+    };
+    let expt = SlowpathEvict {
+        capacities: capacities
+            .iter()
+            .copied()
+            .filter_map(NonZeroU32::new)
+            .collect(),
+        p_expires,
+    };
     for case in expt.test_cases() {
         let port = case.create_port().unwrap();
-        for p_expire in [0.0, 0.1, 0.25, 0.5] {
-            let mut c = c.benchmark_group(format!(
-                "cleanup/{}/P{}",
-                M::label(),
-                p_expire
-            ));
-            let mut rng =
-                rand::rngs::StdRng::seed_from_u64(0x01de_097e_7e57_0712);
-            let dist = Bernoulli::new(p_expire).unwrap();
+        let mut c = c.benchmark_group(format!("cleanup/{}", M::label()));
 
-            c.bench_with_input(
-                BenchmarkId::from_parameter(case.instance_name()),
-                &case,
-                |b, _i| {
-                    b.iter_batched(
-                        || {
-                            case.pre_handle(&port);
-                            port.port.inject_expiry(|| dist.sample(&mut rng));
-                        },
-                        |_| black_box(port.port.expire_flows()),
-                        criterion::BatchSize::LargeInput,
-                    )
-                },
-            );
-        }
+        c.bench_with_input(
+            BenchmarkId::from_parameter(case.instance_name()),
+            &case,
+            |b, _i| {
+                b.iter_batched(
+                    || case.pre_handle(&port),
+                    |_| black_box(port.port.expire_flows()),
+                    criterion::BatchSize::LargeInput,
+                )
+            },
+        );
     }
 }
 
