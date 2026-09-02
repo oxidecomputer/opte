@@ -81,7 +81,7 @@ version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
+poptrie = { git = "https://github.com/nicolaskagami/poptrie", branch = "main" }
 
 [profile.dev]
 opt-level = 1
@@ -95,3 +95,10 @@ inherits = "release"
 lto = true
 codegen-units = 1
 
+
+# RFD 662 POC: build against the local poptrie checkout (tracks the fork's
+# main, which has lookup_with_prefix and the manual Default impl). The
+# alignment constraint from xde's 8-byte kmem allocator is handled on the
+# oxide-vpc side by keying tries with heap-free (uN, u8) prefixes.
+[patch."https://github.com/nicolaskagami/poptrie"]
+poptrie = { path = "../poptrie" }

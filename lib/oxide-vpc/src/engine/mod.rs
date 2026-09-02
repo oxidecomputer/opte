@@ -13,6 +13,7 @@ pub mod overlay;
 pub mod router;
 
 use crate::api::BOUNDARY_SERVICES_VNI;
+use crate::api::RouterList;
 use crate::cfg::VpcCfg;
 use crate::engine::geneve::OxideOptions;
 use crate::engine::geneve::ValidOxideOption;
@@ -32,6 +33,7 @@ use ingot::types::HeaderLen;
 use opte::api::IpAddr;
 use opte::api::Vni;
 use opte::ddi::mblk::MsgBlk;
+use opte::ddi::sync::KRwLock;
 use opte::engine::Direction;
 use opte::engine::HdlErrAction;
 use opte::engine::HdlPktAction;
@@ -115,6 +117,9 @@ impl VpcParser {
 pub struct VpcNetwork {
     pub cfg: VpcCfg,
     pub v2b: Arc<Virt2Boundary>,
+    /// The port's prioritized router list for boundary TEP selection.
+    /// Shared with the overlay layer's `EncapAction`.
+    pub router_list: Arc<KRwLock<RouterList>>,
 }
 
 impl core::fmt::Debug for VpcNetwork {
@@ -562,8 +567,10 @@ impl NetworkImpl for VpcNetwork {
                         ));
                     }
 
-                    let Some(nhs) =
-                        self.v2b.get(&recipient).filter(|v| !v.is_empty())
+                    let Some(nhs) = self
+                        .v2b
+                        .lookup_best(&self.router_list.read(), &recipient)
+                        .filter(|v| !v.is_empty())
                     else {
                         return Err(HdlPktError(
                             "no external nexthop for ICMP reply",

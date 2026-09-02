@@ -84,6 +84,8 @@ pub use oxide_vpc::engine::firewall;
 pub use oxide_vpc::engine::gateway;
 pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
+pub use opte::ddi::sync::KRwLock;
+pub use oxide_vpc::api::RouterList;
 pub use oxide_vpc::engine::overlay;
 pub use oxide_vpc::engine::overlay::Mcast2Phys;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
@@ -270,6 +272,7 @@ fn oxide_net_builder(
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
     v2b: Arc<Virt2Boundary>,
+    router_list: Arc<KRwLock<RouterList>>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
@@ -291,7 +294,7 @@ fn oxide_net_builder(
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, m2p, v2b, one_limit)
+    overlay::setup(&pb, cfg, v2p, m2p, v2b, router_list, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -364,9 +367,14 @@ pub fn oxide_net_setup2(
 
     let v2b = Arc::new(Virt2Boundary::new());
     let m2p = Arc::new(Mcast2Phys::new());
+    let router_list = Arc::new(KRwLock::new(RouterList::default_only()));
 
     let converted_cfg = oxide_vpc::cfg::VpcCfg::with_mtu(cfg.clone(), 1500);
-    let vpc_net = VpcNetwork { cfg: converted_cfg.clone(), v2b: v2b.clone() };
+    let vpc_net = VpcNetwork {
+        cfg: converted_cfg.clone(),
+        v2b: v2b.clone(),
+        router_list: router_list.clone(),
+    };
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
 
@@ -392,6 +400,7 @@ pub fn oxide_net_setup2(
         port_v2p,
         m2p.clone(),
         v2b,
+        router_list,
     )
     .create(vpc_net, uft_limit, tcp_limit)
     .unwrap();

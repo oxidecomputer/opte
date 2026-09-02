@@ -1312,6 +1312,7 @@ dependencies = [
  "serde",
  "tabwriter",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -1447,8 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "poptrie"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/poptrie?branch=main#5bf62f6b889c61e0608d8463ed11da28e130cb34"
+version = "0.2.0"
 
 [[package]]
 name = "postcard"
