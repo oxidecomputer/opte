@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use super::mac::MacAddr;
 use crate::DomainName;
@@ -527,6 +527,28 @@ impl Ipv4Addr {
         self.inner[0] == 169 && self.inner[1] == 254
     }
 
+    /// Returns true if this is in the "this host on this network" block
+    /// (0.0.0.0/8).
+    ///
+    /// [RFC 1122 §3.2.1.3] allows a host to use these before it learns its
+    /// address, so this is broader than [`Ipv4Addr::is_unspecified`].
+    ///
+    /// [RFC 1122 §3.2.1.3]: https://www.rfc-editor.org/rfc/rfc1122#section-3.2.1.3
+    pub const fn is_this_network(&self) -> bool {
+        self.inner[0] == 0
+    }
+
+    /// Returns true if this is in the reserved class E block (240.0.0.0/4).
+    ///
+    /// The IANA special-purpose registry ([RFC 6890]) marks the block,
+    /// reserved by [RFC 1112 §4], as "Source: False".
+    ///
+    /// [RFC 6890]: https://www.rfc-editor.org/rfc/rfc6890
+    /// [RFC 1112 §4]: https://www.rfc-editor.org/rfc/rfc1112#section-4
+    pub const fn is_reserved(&self) -> bool {
+        self.inner[0] >= 240
+    }
+
     /// Return the multicast MAC address associated with this multicast IPv4
     /// address. If the IPv4 address is not multicast, None will be returned.
     ///
@@ -791,6 +813,35 @@ impl Ipv6Addr {
     /// Returns true if this is a link-local address (fe80::/10).
     pub const fn is_link_local(&self) -> bool {
         self.inner[0] == 0xfe && (self.inner[1] & 0xc0) == 0x80
+    }
+
+    /// Returns a description of the embedded-IPv4 form this address takes, or
+    /// `None` if it embeds no IPv4 address.
+    ///
+    /// The IPv4-mapped ([RFC 4291 §2.5.5.2]) and IPv4-compatible
+    /// ([RFC 4291 §2.5.5.1]) forms convert to an IPv4 address and so would
+    /// carry IPv4 semantics past any IPv4 checks, while the NAT64 well-known
+    /// prefix ([RFC 6052 §2.1]) does not convert. [RFC 6052 §3.1]
+    /// network-specific prefixes are drawn from the operator's own address
+    /// space and cannot be recognized without knowing the configured prefix.
+    ///
+    /// [RFC 4291 §2.5.5.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.1
+    /// [RFC 4291 §2.5.5.2]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2
+    /// [RFC 6052 §2.1]: https://www.rfc-editor.org/rfc/rfc6052#section-2.1
+    /// [RFC 6052 §3.1]: https://www.rfc-editor.org/rfc/rfc6052#section-3.1
+    pub const fn embedded_ipv4_form(&self) -> Option<&'static str> {
+        match self.inner {
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ..] => {
+                Some("IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
+            }
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..] => {
+                Some("IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
+            }
+            [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, ..] => {
+                Some("NAT64 well-known (64:ff9b::/96, RFC 6052 §2.1)")
+            }
+            _ => None,
+        }
     }
 
     /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix

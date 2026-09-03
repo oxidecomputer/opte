@@ -979,6 +979,67 @@ impl SourceFilter {
             SourceFilter::Include(s) | SourceFilter::Exclude(s) => s,
         }
     }
+
+    /// Validate that every `Include` source is fit to serve as an (S,G)
+    /// source.
+    ///
+    /// Both the subscribe and forwarding paths accept operator-supplied
+    /// source lists, so both validate here rather than each carrying its own
+    /// rules.
+    ///
+    /// `Exclude` sets are left unchecked. Their entries name traffic to drop,
+    /// and an address that could never be a legitimate source may still be
+    /// one an operator wants to block.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message naming the rejected address and the reason.
+    pub fn validate_sources(&self) -> Result<(), String> {
+        let SourceFilter::Include(sources) = self else {
+            return Ok(());
+        };
+        for src in sources {
+            if let Some(reason) = invalid_multicast_source(*src) {
+                return Err(format!("source filter address {src} {reason}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Returns the reason `src` is unfit to serve as a multicast (S,G) source, or
+/// `None` if it is acceptable.
+///
+/// The rule set matches the source validators in dpd, nexus, and mgd. Shared
+/// address space (100.64.0.0/10, [RFC 6598]) is permitted on purpose: it can
+/// source traffic inside an operator network.
+///
+/// [RFC 6598]: https://www.rfc-editor.org/rfc/rfc6598
+fn invalid_multicast_source(src: IpAddr) -> Option<String> {
+    if src.is_multicast() {
+        return Some("is multicast".to_string());
+    }
+
+    if src.is_unspecified()
+        || src.is_loopback()
+        || src.is_broadcast()
+        || src.is_link_local()
+    {
+        return Some("is a special-use address".to_string());
+    }
+
+    match src {
+        IpAddr::Ip4(v4) if v4.is_this_network() => {
+            Some("is in 0.0.0.0/8 (this host on this network)".to_string())
+        }
+        IpAddr::Ip4(v4) if v4.is_reserved() => {
+            Some("is in the reserved class E block (240.0.0.0/4)".to_string())
+        }
+        IpAddr::Ip4(_) => None,
+        IpAddr::Ip6(v6) => v6
+            .embedded_ipv4_form()
+            .map(|form| format!("embeds an IPv4 address, {form}")),
+    }
 }
 
 /// Subscribe a port to a multicast group.
@@ -1498,6 +1559,75 @@ impl opte::api::cmd::CmdOk for DetachSubnetResp {}
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// Build an `Include` filter holding a single source.
+    fn filter_with(src: IpAddr) -> SourceFilter {
+        SourceFilter::Include(BTreeSet::from([src]))
+    }
+
+    #[test]
+    fn validate_sources_accepts_ordinary_unicast() {
+        for src in [
+            IpAddr::Ip4("192.168.1.1".parse().unwrap()),
+            // Shared address space (100.64.0.0/10, RFC 6598) can source
+            // traffic inside an operator network.
+            IpAddr::Ip4("100.64.0.1".parse().unwrap()),
+            // The class E boundary is exact.
+            IpAddr::Ip4("223.255.255.255".parse().unwrap()),
+            IpAddr::Ip6("2001:db8::1".parse().unwrap()),
+            // A NAT64 network-specific prefix that starts with 64:ff9b but is
+            // not the well-known /96.
+            IpAddr::Ip6("64:ff9b:0:1::c000:201".parse().unwrap()),
+        ] {
+            assert!(
+                filter_with(src).validate_sources().is_ok(),
+                "{src} should be accepted as a source"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_sources_rejects_unfit_addresses() {
+        for src in [
+            IpAddr::Ip4("224.1.1.1".parse().unwrap()),
+            IpAddr::Ip4("127.0.0.1".parse().unwrap()),
+            IpAddr::Ip4("255.255.255.255".parse().unwrap()),
+            IpAddr::Ip4("169.254.1.1".parse().unwrap()),
+            // 0.0.0.0/8, this host on this network, RFC 1122 §3.2.1.3
+            IpAddr::Ip4("0.0.0.0".parse().unwrap()),
+            IpAddr::Ip4("0.1.2.3".parse().unwrap()),
+            // 240.0.0.0/4, class E, RFC 1112 §4
+            IpAddr::Ip4("240.0.0.1".parse().unwrap()),
+            IpAddr::Ip4("255.255.255.254".parse().unwrap()),
+            IpAddr::Ip6("ff0e::1".parse().unwrap()),
+            IpAddr::Ip6("::1".parse().unwrap()),
+            IpAddr::Ip6("fe80::1".parse().unwrap()),
+            // ::ffff:192.0.2.1, RFC 4291 §2.5.5.2
+            IpAddr::Ip6("::ffff:c000:201".parse().unwrap()),
+            // ::192.0.2.1, RFC 4291 §2.5.5.1
+            IpAddr::Ip6("::c000:201".parse().unwrap()),
+            // 64:ff9b::192.0.2.1, RFC 6052 §2.1
+            IpAddr::Ip6("64:ff9b::c000:201".parse().unwrap()),
+        ] {
+            assert!(
+                filter_with(src).validate_sources().is_err(),
+                "{src} should be rejected as a source"
+            );
+        }
+    }
+
+    /// An `Exclude` set names traffic to drop, so its entries are not held to
+    /// the (S,G) source rules. An address that could never be a legitimate
+    /// source may still be one an operator wants to block.
+    #[test]
+    fn validate_sources_ignores_exclude_sets() {
+        let filter = SourceFilter::Exclude(BTreeSet::from([
+            IpAddr::Ip4("0.1.2.3".parse().unwrap()),
+            IpAddr::Ip4("240.0.0.1".parse().unwrap()),
+            IpAddr::Ip6("fe80::1".parse().unwrap()),
+        ]));
+        assert!(filter.validate_sources().is_ok());
+    }
 
     #[test]
     fn ports_from_str_good() {
