@@ -657,6 +657,10 @@ struct PortStats {
     /// being processed.
     in_process_err: KStatU64,
 
+    /// The number of inbound packets which resulted were dropped due to
+    /// overfilling an LFT's list of tracked children.
+    in_child_capacity_err: KStatU64,
+
     /// The number of inbound packets which matched a UFT entry.
     in_uft_hit: KStatU64,
 
@@ -706,6 +710,10 @@ struct PortStats {
     /// The number of outbound packets which resulted in an error
     /// while being processed.
     out_process_err: KStatU64,
+
+    /// The number of inbound packets which resulted were dropped due to
+    /// overfilling an LFT's list of tracked children.
+    out_child_capacity_err: KStatU64,
 
     /// The number of outbound packets which matched a UFT entry.
     out_uft_hit: KStatU64,
@@ -3051,6 +3059,11 @@ impl<N: NetworkImpl> Port<N> {
 
             Ok(InternalProcessResult::Hairpin(_)) => stats.in_hairpin.incr(1),
 
+            Err(ProcessError::LftChildrenFull) => {
+                stats.in_process_err.incr(1);
+                stats.in_child_capacity_err.incr(1);
+            }
+
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
             // would like to to this just yet, and I don't want to
@@ -3082,6 +3095,11 @@ impl<N: NetworkImpl> Port<N> {
             Ok(InternalProcessResult::Modified) => stats.out_modified.incr(1),
 
             Ok(InternalProcessResult::Hairpin(_)) => stats.out_hairpin.incr(1),
+
+            Err(ProcessError::LftChildrenFull) => {
+                stats.out_process_err.incr(1);
+                stats.out_child_capacity_err.incr(1);
+            }
 
             // XXX We should split the different error types out into
             // individual stats. However, I'm not sure exactly how I
