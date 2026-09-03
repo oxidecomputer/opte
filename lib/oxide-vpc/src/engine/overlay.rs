@@ -6,7 +6,90 @@
 
 //! The Oxide Network VPC Overlay.
 //!
-//! This implements the Oxide Network VPC Overlay.
+//! # Multicast composition
+//!
+//! Multicast state is split across two stores on the sled and a third on the
+//! switches. The split is the same at both layers: one store holds identity
+//! ("what is this group") and the other membership ("which members are in it").
+//!
+//! ```text
+//!                 identity                    membership
+//!                 "what is this group"        "which members are in it"
+//!                 ------------------------    -------------------------
+//!  sled (OPTE)    M2P                         subscription table
+//!                 233.252.0.1                 ff04::e9fc:1
+//!                   -> ff04::e9fc:1             -> {port, source filter}
+//!
+//!  switch (DPD)   external entry              replication list
+//!                 233.252.0.1                 ff04::e9fc:1
+//!                   -> ff04::e9fc:1             -> {member sled rear ports}
+//! ```
+//!
+//! The examples above follow the control plane's allocation setup,
+//! assigning underlay groups from a /64 inside `ff04::/16` and embedding the
+//! IPv4 group in the low 32 bits, so that `233.252.0.1` maps to `ff04::e9fc:1`.
+//! Maghemite and dendrite enforce the /64 as well. OPTE, on the other hand,
+//! validates only the `ff04::/16` scope and treats the underlay group as opaque
+//! otherwise.
+//!
+//! ## Identity: the M2P table
+//!
+//! [`Mcast2Phys`] holds the group's identity translation, mapping an
+//! external group address to the admin-scoped underlay group that carries
+//! it (1:1). There is one entry per group per sled. The table knows nothing
+//! about members or ports.
+//!
+//! V2P resolves to one sled's underlay address. M2P resolves to an underlay
+//! group that the switches fan out to many sleds. `Phys` denotes the underlay
+//! in both cases, hence the naming. Same layer, but different cardinality.
+//!
+//! ## Membership: the subscription table
+//!
+//! Per-port membership lives in a separate subscription table, populated by
+//! `McastSubscribeReq { port_name, group, filter }`. Each member carries its
+//! own source filter, where [`SourceFilter`] defaults to excluding nothing
+//! and therefore accepts any source. `Include` sources get validated as
+//! usable (S,G) sources. `Exclude` sets aren't checked due to the possibility
+//! of an operator wanting to block an address that could never be a real
+//! source anyway. The Rx delivery set is computed from these subscriptions at
+//! delivery time, and is not stored as a third, separate table.
+//!
+//! ## Underlay replication lists
+//!
+//! The switches hold the remaining store, i.e., the underlay
+//! replication lists that map an underlay group to the rear ports of the member
+//! sleds. Those lists are driven by DDM exchange, and OPTE never sees them.
+//!
+//! ## Where does the state come from?
+//!
+//! Nexus owns the intent. The sled agent programs it over the ioctl surface and
+//! attempts to reconcile state when the sled drifts.
+//!
+//! ## Ingress and egress
+//!
+//! The two directions rely on different state. Guest-originated (Tx) traffic
+//! reaches [`EncapAction`], which resolves the destination through M2P per
+//! flow and denies the send when no such mapping exists. The deny binds at
+//! flow establishment. Removing a mapping stops new flows from establishing,
+//! while established ones keep encapsulating until they age out.
+//!
+//! External-ingress delivery never reads the M2P store per packet: XDE
+//! decaps the packet and fans a copy out to each subscribed port, applying
+//! that member's source filter.
+//!
+//! Ingress still uses M2P, just earlier: the subscribe ioctl translates the
+//! overlay group a port joins into the underlay key it listens on. The table
+//! serves egress in the data path and ingress at subscribe time.
+//!
+//! ```text
+//!  Tx  guest -> gateway -> EncapAction --M2P--> ff04::e9fc:1 -> switch (PRE)
+//!                                    deny when unmapped
+//!
+//!  Rx  ff04::e9fc:1 -> XDE decap -> subscriptions + source filter -> ports
+//!                                    M2P used at subscribe time (not here)
+//! ```
+//!
+//! [`SourceFilter`]: crate::api::SourceFilter
 use super::geneve::OxideOptions;
 use super::router::RouterTargetInternal;
 use crate::api::DEFAULT_MULTICAST_VNI;
@@ -245,6 +328,13 @@ impl StaticAction for EncapAction {
         // destination IP is a multicast address. Multicast operates at the fleet
         // level (cross-VPC) and doesn't go through VPC routing, so router
         // metadata is not required in that case.
+        //
+        // This is the guest-egress decision point for multicast. Encapsulation
+        // runs only on outbound (Tx) traffic originated by a guest, so the M2P
+        // lookup below decides which overlay groups a guest may send to.
+        // External-ingress delivery takes the opposite path: decapsulated
+        // copies of an underlay group are fanned out to subscribed ports by
+        // XDE, and never touch this mapping.
         let is_mcast_addr = dst_ip.is_multicast();
 
         let (is_internal, phys_target, is_mcast) = if is_mcast_addr {
@@ -262,7 +352,8 @@ impl StaticAction for EncapAction {
                     true,
                 ),
                 None => {
-                    // No M2P mapping configured for this multicast group; deny.
+                    // No M2P mapping configured for this multicast group, so
+                    // deny the guest-originated send.
                     return Ok(AllowOrDeny::Deny);
                 }
             }
@@ -624,8 +715,9 @@ impl StaticAction for DecapAction {
 /// ## Validation Policy on Rx Path
 /// This validator accepts multicast packets with either of two VNI values:
 /// - **VNI 77 (DEFAULT_MULTICAST_VNI)**: Fleet-wide multicast, accepted by all
-///   ports regardless of VPC. This enables rack-wide multicast delivery.
-/// - **Guest's VPC VNI**: Enables per-VPC multicast isolation **in the future**.
+///   ports regardless of VPC, giving rack-wide delivery.
+/// - **Guest's VPC VNI**: reserved for per-VPC multicast isolation, which no
+///   current encapsulation exercises.
 ///
 /// The validator enforces VPC isolation by rejecting multicast packets with
 /// VNI values that don't match either the fleet-wide VNI or this port's VPC.
@@ -1029,7 +1121,7 @@ impl MappingResource for Virt2Phys {
 }
 
 impl Mcast2Phys {
-    /// Create a new empty multicast-to-physical mapping table.
+    /// Create a new empty multicast-to-underlay mapping table.
     pub fn new() -> Self {
         Self {
             ip4: KMutex::new(BTreeMap::new()),
