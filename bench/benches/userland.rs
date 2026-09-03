@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2024 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Userland packet parsing and processing microbenchmarks.
 
@@ -21,6 +21,7 @@ use opte_bench::packet::Dhcp6;
 use opte_bench::packet::Icmp4;
 use opte_bench::packet::Icmp6;
 use opte_bench::packet::ParserKind;
+use opte_bench::packet::SlowpathEvict;
 use opte_bench::packet::TestCase;
 use opte_bench::packet::ULP_FAST_PATH;
 use opte_bench::packet::ULP_SLOW_PATH;
@@ -44,11 +45,18 @@ pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
         Box::new(Icmp6),
         Box::new(ULP_FAST_PATH),
         Box::new(ULP_SLOW_PATH),
+        Box::new(SlowpathEvict {
+            capacities: [1 << 10, 1 << 15, 1 << 19, 1 << 20]
+                .into_iter()
+                .filter_map(NonZeroU32::new)
+                .collect(),
+            p_expires: vec![0.0],
+        }),
     ];
 
     for experiment in all_tests {
         for case in experiment.test_cases() {
-            if do_parse {
+            if experiment.do_parse_benchmark() && do_parse {
                 test_parse(c, &**experiment, &*case);
             }
             test_handle(c, &**experiment, &*case);
@@ -151,6 +159,7 @@ pub fn test_handle<M: MeasurementInfo>(
     ));
 
     let parser = case.parse_with();
+    let can_fail = experiment.allow_failure();
     c.bench_with_input(
         BenchmarkId::from_parameter(case.instance_name()),
         &case,
@@ -174,7 +183,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -182,11 +191,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     GenericUlp {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
@@ -198,7 +211,7 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                             Out => {
                                 let pkt = Packet::parse_outbound(
@@ -206,11 +219,15 @@ pub fn test_handle<M: MeasurementInfo>(
                                     VpcParser {},
                                 )
                                 .unwrap();
-                                port.port.process(dir, black_box(pkt)).unwrap()
+                                port.port.process(dir, black_box(pkt))
                             }
                         };
-                        assert!(!matches!(res, ProcessResult::Drop { .. }));
-                        if let Modified(spec) = res {
+
+                        if !can_fail {
+                            assert!(res.is_ok());
+                        }
+
+                        if let Ok(Modified(spec)) = res {
                             black_box(spec.apply(pkt_m));
                         }
                     }
@@ -325,7 +342,44 @@ fn source_filter_allows(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(wall, parse_and_process, source_filter_allows);
+fn periodic_cleanup<M: MeasurementInfo>(c: &mut Criterion<M>) {
+    let (capacities, p_expires) = if std::env::var("CI").is_ok() {
+        (&[1 << 10, 1 << 15][..], vec![0.0, 0.25])
+    } else {
+        (&[1 << 10, 1 << 15, 1 << 19, 1 << 20][..], vec![0.0, 0.1, 0.25, 0.5])
+    };
+    let expt = SlowpathEvict {
+        capacities: capacities
+            .iter()
+            .copied()
+            .filter_map(NonZeroU32::new)
+            .collect(),
+        p_expires,
+    };
+    for case in expt.test_cases() {
+        let port = case.create_port().unwrap();
+        let mut c = c.benchmark_group(format!("cleanup/{}", M::label()));
+
+        c.bench_with_input(
+            BenchmarkId::from_parameter(case.instance_name()),
+            &case,
+            |b, _i| {
+                b.iter_batched(
+                    || case.pre_handle(&port),
+                    |_| black_box(port.port.expire_flows()),
+                    criterion::BatchSize::LargeInput,
+                )
+            },
+        );
+    }
+}
+
+criterion_group!(
+    wall,
+    parse_and_process,
+    source_filter_allows,
+    periodic_cleanup
+);
 criterion_group!(
     name = alloc;
     config = new_crit(Allocs);
