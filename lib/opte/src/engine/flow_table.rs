@@ -332,14 +332,17 @@ impl<S: FlowState> FlowTable<S> {
         flows
     }
 
-    pub fn expire(&mut self, flowid: &InnerFlowId) {
+    pub(crate) fn expire(&mut self, flowid: &InnerFlowId, mark_evicted: bool) {
         flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         if let Some(entry) = self.map.remove(flowid) {
             entry.expiry_cleanup();
-            entry.mark_evicted();
+            if mark_evicted {
+                entry.mark_evicted();
+            }
         }
     }
 
+    /// Remove all flows from `self` which are past their expiry time.
     pub fn expire_flows(&mut self, now: Moment) {
         let name_c = &self.name_c;
         let port_c = &self.port_c;
@@ -360,6 +363,11 @@ impl<S: FlowState> FlowTable<S> {
                     return true;
                 }
             }
+            // If we move to per-layer lock granularity, then we may need to extend
+            // the lifetime of the above writelock and/or poison `entry` such that
+            // `port::associate_lfts_upstack` fails. See that function for
+            // commentary on the guarantees provided by the port-wide lock.
+
             if entry.is_expired(now) {
                 let my_time = entry.last_hit();
                 flow_expired_probe(
@@ -378,9 +386,16 @@ impl<S: FlowState> FlowTable<S> {
         });
     }
 
+    /// Remove all flows from `self` which are past their expiry time,
+    /// identifying the partner flow `extractor(&flow_state)` of each and
+    /// removing it from `partner`.
+    ///
+    /// Flows identified by `extractor` in `partner` *MUST* share the same
+    /// [`FlowLifetime`] as the entry removed from `self`.
     pub fn expire_flows_partner<F, T>(
         &mut self,
-        mut partner: Option<(&mut FlowTable<T>, F)>,
+        partner: &mut FlowTable<T>,
+        extractor: F,
         now: Moment,
     ) where
         F: Fn(&S) -> InnerFlowId,
@@ -405,6 +420,8 @@ impl<S: FlowState> FlowTable<S> {
                     return true;
                 }
             }
+            // The same lock commentary from `expire_flows` applies here.
+
             if entry.is_expired(now) {
                 let my_time = entry.last_hit();
                 flow_expired_probe(
@@ -415,9 +432,19 @@ impl<S: FlowState> FlowTable<S> {
                     Some(now.raw_millis()),
                 );
                 entry.expiry_cleanup();
-                if let Some((partner, extractor)) = &mut partner {
-                    partner.expire(&extractor(entry.state()));
+
+                // We don't need to call into `mark_evicted` here or when when
+                // removing the partner flow in this case because we know that the
+                // partner flow has the same lifetime, and so the same (empty) child
+                // set.
+                let partner_flow = extractor(entry.state());
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(other) = partner.get(&partner_flow) {
+                        assert!(Arc::ptr_eq(&entry.lifetime, &other.lifetime))
+                    }
                 }
+                partner.expire(&partner_flow, false);
 
                 return false;
             }
@@ -436,7 +463,7 @@ impl<S: FlowState> FlowTable<S> {
         }
 
         if let Some((key, _)) = self.find_evictable_entry() {
-            self.expire(&key);
+            self.expire(&key, true);
             Ok(())
         } else {
             Err(OpteError::MaxCapacity(self.limit.get() as u64))

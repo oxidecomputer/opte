@@ -244,7 +244,8 @@ impl LayerFlowTable {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
         self.ft_out.expire_flows_partner(
-            Some((&mut self.ft_in, LftOutEntry::extract_pair)),
+            &mut self.ft_in,
+            LftOutEntry::extract_pair,
             now,
         );
         self.count = self.ft_out.num_flows();
@@ -846,8 +847,13 @@ impl Layer {
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
             self.stats.vals.evictions.incr(1);
-            self.ft.ft_out.expire(&out_key);
-            self.ft.ft_in.expire(&in_key);
+
+            // These two entries share the same `FlowLifetime`, so
+            // we can avoid wasting work by marking all children as
+            // `killed` only for the first entry.
+            self.ft.ft_out.expire(&out_key, true);
+            self.ft.ft_in.expire(&in_key, false);
+
             self.ft.count = self.ft.ft_out.num_flows();
         }
     }
