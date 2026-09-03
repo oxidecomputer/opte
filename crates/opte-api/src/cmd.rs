@@ -116,6 +116,12 @@ pub enum OpteCmd {
     McastUnsubscribeAll = 108,
     /// Read out all M2P (multicast group -> underlay multicast) mappings.
     DumpMcast2Phys = 109,
+
+    /// Replace a port's prioritized router list for boundary TEP
+    /// selection.
+    SetRouterList = 110,
+    /// Read a port's prioritized router list.
+    DumpRouterList = 111,
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -158,6 +164,8 @@ impl TryFrom<c_int> for OpteCmd {
             107 => Ok(Self::DumpMcastSubscriptions),
             108 => Ok(Self::McastUnsubscribeAll),
             109 => Ok(Self::DumpMcast2Phys),
+            110 => Ok(Self::SetRouterList),
+            111 => Ok(Self::DumpRouterList),
             _ => Err(()),
         }
     }

@@ -36,6 +36,7 @@ use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
 use oxide_vpc::api::DelRouterEntryReq;
 use oxide_vpc::api::DelRouterEntryResp;
 use oxide_vpc::api::DhcpCfg;
+use oxide_vpc::api::DumpRouterListReq;
 use oxide_vpc::api::ExternalIpCfg;
 use oxide_vpc::api::Filters as FirewallFilters;
 use oxide_vpc::api::FirewallAction;
@@ -56,6 +57,7 @@ use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::Replication;
 use oxide_vpc::api::RouterClass;
+use oxide_vpc::api::RouterList;
 use oxide_vpc::api::RouterTarget;
 use oxide_vpc::api::SNat4Cfg;
 use oxide_vpc::api::SNat6Cfg;
@@ -63,10 +65,12 @@ use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
+use oxide_vpc::api::SetRouterListReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::TunnelEndpoint;
+use oxide_vpc::api::TunnelRouterId;
 use oxide_vpc::api::VpcCfg;
 use oxide_vpc::print::print_m2p;
 use oxide_vpc::print::print_mcast_fwd;
@@ -78,6 +82,7 @@ use std::io;
 use std::io::Write;
 use std::str::FromStr;
 use tabwriter::TabWriter;
+use uuid::Uuid;
 
 /// Administer the Oxide Packet Transformation Engine (OPTE)
 #[derive(Debug, Parser)]
@@ -240,10 +245,39 @@ enum Command {
     },
 
     /// Set a virtual-to-boundary mapping
-    SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+    SetV2B {
+        prefix: IpCidr,
+        tunnel_endpoint: Vec<Ipv6Addr>,
+        /// The router whose table to modify (default router if omitted)
+        #[arg(long)]
+        router_id: Option<Uuid>,
+    },
 
     /// Clear a virtual-to-boundary mapping
-    ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+    ClearV2B {
+        prefix: IpCidr,
+        tunnel_endpoint: Vec<Ipv6Addr>,
+        /// The router whose table to modify (default router if omitted)
+        #[arg(long)]
+        router_id: Option<Uuid>,
+    },
+
+    /// Replace a port's prioritized router list for boundary TEP
+    /// selection.
+    ///
+    /// Entries are `<priority>=<router uuid>` or `<priority>=default`,
+    /// e.g. `set-router-list -p opte0 10=6fe93b02-… 1000=default`.
+    SetRouterList {
+        #[arg(short)]
+        port: String,
+        entries: Vec<RouterListEntryArg>,
+    },
+
+    /// Show a port's prioritized router list.
+    DumpRouterList {
+        #[arg(short)]
+        port: String,
+    },
 
     /// Set a multicast-to-physical (M2P) mapping
     ///
@@ -467,6 +501,35 @@ impl From<Filters> for FirewallFilters {
             .set_protocol(f.protocol)
             .set_ports(f.ports)
             .clone()
+    }
+}
+
+/// One router-list entry: `<priority>=<router uuid>` or
+/// `<priority>=default`.
+#[derive(Clone, Debug)]
+struct RouterListEntryArg {
+    priority: u16,
+    router: TunnelRouterId,
+}
+
+impl FromStr for RouterListEntryArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (prio, rtr) = s.split_once('=').ok_or_else(|| {
+            format!("expected <priority>=<uuid|default>, got {s}")
+        })?;
+        let priority = prio
+            .parse::<u16>()
+            .map_err(|e| format!("bad priority {prio}: {e}"))?;
+        let router = match rtr {
+            "default" => None,
+            uuid => Some(
+                uuid.parse::<Uuid>()
+                    .map_err(|e| format!("bad router id {uuid}: {e}"))?,
+            ),
+        };
+        Ok(Self { priority, router })
     }
 }
 
@@ -912,7 +975,7 @@ fn main() -> anyhow::Result<()> {
             hdl.clear_v2p(&req)?;
         }
 
-        Command::SetV2B { prefix, tunnel_endpoint } => {
+        Command::SetV2B { prefix, tunnel_endpoint, router_id } => {
             let tep = tunnel_endpoint
                 .into_iter()
                 .map(|ip| TunnelEndpoint {
@@ -920,11 +983,11 @@ fn main() -> anyhow::Result<()> {
                     vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
                 })
                 .collect();
-            let req = SetVirt2BoundaryReq { vip: prefix, tep };
+            let req = SetVirt2BoundaryReq { router_id, vip: prefix, tep };
             hdl.set_v2b(&req)?;
         }
 
-        Command::ClearV2B { prefix, tunnel_endpoint } => {
+        Command::ClearV2B { prefix, tunnel_endpoint, router_id } => {
             let tep = tunnel_endpoint
                 .into_iter()
                 .map(|ip| TunnelEndpoint {
@@ -932,8 +995,30 @@ fn main() -> anyhow::Result<()> {
                     vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
                 })
                 .collect();
-            let req = ClearVirt2BoundaryReq { vip: prefix, tep };
+            let req = ClearVirt2BoundaryReq { router_id, vip: prefix, tep };
             hdl.clear_v2b(&req)?;
+        }
+
+        Command::SetRouterList { port, entries } => {
+            let list = RouterList::new(
+                entries.into_iter().map(|e| (e.priority, e.router)).collect(),
+            )
+            .map_err(|e| anyhow::anyhow!("invalid router list: {e}"))?;
+            let req = SetRouterListReq { port_name: port, list };
+            hdl.set_router_list(&req)?;
+        }
+
+        Command::DumpRouterList { port } => {
+            let resp =
+                hdl.dump_router_list(&DumpRouterListReq { port_name: port })?;
+            println!("PRIORITY\tROUTER");
+            for (prio, rtr) in resp.list.entries() {
+                let rtr = match rtr {
+                    None => "default".to_string(),
+                    Some(id) => id.to_string(),
+                };
+                println!("{prio}\t{rtr}");
+            }
         }
 
         Command::SetM2P { group, underlay } => {
@@ -1122,4 +1207,30 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn router_list_entry_parses() {
+        let e: RouterListEntryArg = "1000=default".parse().unwrap();
+        assert_eq!(e.priority, 1000);
+        assert_eq!(e.router, None);
+
+        let id = "6fe93b02-9b02-4c40-9dbd-33b50b3ba9f4";
+        let e: RouterListEntryArg = format!("10={id}").parse().unwrap();
+        assert_eq!(e.priority, 10);
+        assert_eq!(e.router, Some(id.parse().unwrap()));
+    }
+
+    #[test]
+    fn router_list_entry_rejects_bad_input() {
+        assert!("10".parse::<RouterListEntryArg>().is_err());
+        assert!("=default".parse::<RouterListEntryArg>().is_err());
+        assert!("banana=default".parse::<RouterListEntryArg>().is_err());
+        assert!("70000=default".parse::<RouterListEntryArg>().is_err());
+        assert!("10=not-a-uuid".parse::<RouterListEntryArg>().is_err());
+    }
 }

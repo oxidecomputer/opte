@@ -472,6 +472,67 @@ impl PartialEq for TunnelEndpoint {
 
 impl Eq for TunnelEndpoint {}
 
+/// Identifies a router whose boundary table (V2B) may be consulted for
+/// TEP selection. `None` is the default router, i.e. tunnel routes
+/// advertised without a router id.
+pub type TunnelRouterId = Option<Uuid>;
+
+/// A prioritized list of routers consulted for boundary TEP selection.
+///
+/// Entries are held sorted by priority (lower value = higher priority)
+/// and priorities are unique. Selection across routers is by longest
+/// prefix match first; priority only breaks equal-length ties.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RouterList(Vec<(u16, TunnelRouterId)>);
+
+/// The priority given to the default router when a port has no
+/// explicit router list.
+pub const DEFAULT_ROUTER_PRIORITY: u16 = 1000;
+
+/// The most routers a single port's list may name. Every entry is a
+/// table consulted per V2B miss, so keep the bound tight; it is far
+/// beyond any sensible configuration.
+pub const MAX_ROUTER_LIST_ENTRIES: usize = 64;
+
+impl RouterList {
+    pub fn new(
+        mut entries: Vec<(u16, TunnelRouterId)>,
+    ) -> Result<Self, String> {
+        if entries.len() > MAX_ROUTER_LIST_ENTRIES {
+            return Err(format!(
+                "router list has {} entries, max is {MAX_ROUTER_LIST_ENTRIES}",
+                entries.len()
+            ));
+        }
+        entries.sort_by_key(|(prio, _)| *prio);
+        if entries.windows(2).any(|w| w[0].0 == w[1].0) {
+            return Err("duplicate priority in router list".to_string());
+        }
+        Ok(Self(entries))
+    }
+
+    /// The list used when nothing has been configured: just the
+    /// default router.
+    pub fn default_only() -> Self {
+        Self(vec![(DEFAULT_ROUTER_PRIORITY, None)])
+    }
+
+    /// Iterate routers in priority order (best first).
+    pub fn iter(&self) -> impl Iterator<Item = &TunnelRouterId> {
+        self.0.iter().map(|(_, r)| r)
+    }
+
+    pub fn entries(&self) -> &[(u16, TunnelRouterId)] {
+        &self.0
+    }
+}
+
+impl Default for RouterList {
+    fn default() -> Self {
+        Self::default_only()
+    }
+}
+
 /// The physical address for a guest, minus the VNI.
 ///
 /// We save space in the VPC mappings by grouping guest
@@ -684,7 +745,8 @@ pub struct V2bMapResp {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2BoundaryResp {
-    pub mappings: V2bMapResp,
+    /// Per-router mappings; `None` is the default router.
+    pub routers: Vec<(TunnelRouterId, V2bMapResp)>,
 }
 
 impl CmdOk for DumpVirt2BoundaryResp {}
@@ -744,19 +806,43 @@ pub struct ClearMcast2PhysReq {
     pub underlay: MulticastUnderlay,
 }
 
-/// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
+/// Set a mapping from a VPC IP to boundary tunnel endpoint destination
+/// in the given router's table (`None` = default router).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2BoundaryReq {
+    pub router_id: TunnelRouterId,
     pub vip: IpCidr,
     pub tep: Vec<TunnelEndpoint>,
 }
 
-/// Clear a mapping from VPC IP to a boundary tunnel endpoint destination.
+/// Clear a mapping from VPC IP to a boundary tunnel endpoint destination
+/// in the given router's table (`None` = default router).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearVirt2BoundaryReq {
+    pub router_id: TunnelRouterId,
     pub vip: IpCidr,
     pub tep: Vec<TunnelEndpoint>,
 }
+
+/// Replace a port's prioritized router list for boundary TEP selection.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetRouterListReq {
+    pub port_name: String,
+    pub list: RouterList,
+}
+
+/// Read a port's prioritized router list.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpRouterListReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpRouterListResp {
+    pub list: RouterList,
+}
+
+impl CmdOk for DumpRouterListResp {}
 
 /// Add an entry to the router. Addresses may be either IPv4 or IPv6, though the
 /// destination and target must match in protocol version.
