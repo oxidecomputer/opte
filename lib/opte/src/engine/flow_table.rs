@@ -28,6 +28,7 @@ use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
+use itertools::Either;
 use opte_api::OpteError;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -266,9 +267,22 @@ pub struct FlowTable<S: FlowState> {
     limit: NonZeroU32,
     policy: Arc<dyn ExpiryPolicy<S>>,
     map: BTreeMap<InnerFlowId, Arc<FlowEntry<S>>>,
+
+    // When looking up an eviction candidate, we cannot perform a whole table
+    // scan. Ideally we would have a secondary candidate list maintained by
+    // the periodic cleanup task.
+    //
+    // For now, and in any future case where we have no valid entries in said
+    // list, we want to examine a subset of `map` but don't want to keep
+    // rechecking the first `n` entries.
+    eviction_cursor: Option<InnerFlowId>,
 }
 
 impl<S: FlowState> FlowTable<S> {
+    /// The maximum number of distinct entries that a single call to
+    /// [`Self::find_evictable_entry`] will consider.
+    const SCAN_BUDGET: usize = 2048;
+
     /// Add a new entry to the flow table, returning a shared refrence to
     /// the entry.
     ///
@@ -475,51 +489,80 @@ impl<S: FlowState> FlowTable<S> {
     ///
     /// Entries which have been killed due to the loss of a dependency will be
     /// used where possible.
-    pub fn find_evictable_entry(&self) -> Option<(InnerFlowId, &FlowEntry<S>)> {
+    pub fn find_evictable_entry(
+        &mut self,
+    ) -> Option<(InnerFlowId, &FlowEntry<S>)> {
         let now = Moment::now();
 
         // TODO: some form of datastructure to accelerate this?
         // Who would be responsible for keeping that up to date?
-        // If that cache is wrong, we're just hitting the O(n) scan anyhow.
+        // If that cache is wrong, we're just hitting the limited scan anyhow.
+        let len = self.map.len();
+        let to_scan = len.min(Self::SCAN_BUDGET);
 
         let mut to_evict = None;
-        for (key, entry) in self.map.iter() {
-            if entry.is_killed() {
-                to_evict = Some((EvictionKey::Dead, *key, entry));
-                break;
-            }
 
-            // If we have no information, then default to preserving the flow.
-            let prio = entry.eviction_priority(now).unwrap_or_default();
-            if let EvictionPriority::Protected = prio {
-                continue;
-            }
+        let mut visited = 0;
+        while visited < to_scan {
+            let map = if let Some(from) = self.eviction_cursor.take()
+                && to_scan < len
+            {
+                Either::Left(self.map.range(from..))
+            } else {
+                Either::Right(self.map.iter())
+            };
 
-            let last_hit = entry.last_hit();
-
-            match to_evict {
-                None => {
-                    to_evict = Some((
-                        EvictionKey::Evictable(prio, last_hit),
-                        *key,
-                        entry,
-                    ))
+            for (key, entry) in map {
+                // Note: we can't use .take() on map because we need to discover
+                // the flow ID we'll be starting with on the next scan.
+                if visited >= to_scan {
+                    self.eviction_cursor = Some(*key);
+                    break;
                 }
-                Some((EvictionKey::Evictable(curr_prio, curr_time), ..))
-                    if prio > curr_prio
+                visited += 1;
+
+                if entry.is_killed() {
+                    to_evict = Some((EvictionKey::Dead, *key, entry));
+                    break;
+                }
+
+                // If we have no information, then default to preserving the flow.
+                let prio = entry.eviction_priority(now).unwrap_or_default();
+                if let EvictionPriority::Protected = prio {
+                    continue;
+                }
+
+                let last_hit = entry.last_hit();
+
+                match to_evict {
+                    None => {
+                        to_evict = Some((
+                            EvictionKey::Evictable(prio, last_hit),
+                            *key,
+                            entry,
+                        ))
+                    }
+                    Some((
+                        EvictionKey::Evictable(curr_prio, curr_time),
+                        ..,
+                    )) if prio > curr_prio
                         || (prio == curr_prio && last_hit < curr_time) =>
-                {
-                    to_evict = Some((
-                        EvictionKey::Evictable(prio, last_hit),
-                        *key,
-                        entry,
-                    ));
+                    {
+                        to_evict = Some((
+                            EvictionKey::Evictable(prio, last_hit),
+                            *key,
+                            entry,
+                        ));
+                    }
+                    Some(_) => {}
                 }
-                Some(_) => {}
             }
         }
 
-        to_evict.map(|(_, k, v)| (k, v.as_ref()))
+        to_evict.map(|(_, k, v)| {
+            self.eviction_cursor = Some(k);
+            (k, v.as_ref())
+        })
     }
 
     /// Get the maximum number of entries this flow table may hold.
@@ -559,6 +602,7 @@ impl<S: FlowState> FlowTable<S> {
             limit,
             policy,
             map: BTreeMap::new(),
+            eviction_cursor: None,
         }
     }
 
@@ -921,7 +965,7 @@ mod test {
         }
     }
 
-    pub const FT_SIZE: Option<NonZeroU32> = NonZeroU32::new(16);
+    pub const FT_SIZE: NonZeroU32 = NonZeroU32::new(16).unwrap();
 
     #[derive(Debug, Clone)]
     struct FixedPolicy {
@@ -956,8 +1000,7 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft =
-            FlowTable::new("port", "flow-expired-test", FT_SIZE.unwrap(), None);
+        let mut ft = FlowTable::new("port", "flow-expired-test", FT_SIZE, None);
         assert_eq!(ft.num_flows(), 0);
         ft.add(flowid, ()).unwrap();
         let now = Moment::now();
@@ -979,8 +1022,7 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft =
-            FlowTable::new("port", "flow-clear-test", FT_SIZE.unwrap(), None);
+        let mut ft = FlowTable::new("port", "flow-clear-test", FT_SIZE, None);
         assert_eq!(ft.num_flows(), 0);
         ft.add(flowid, ()).unwrap();
         assert_eq!(ft.num_flows(), 1);
@@ -999,10 +1041,8 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft1 =
-            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
-        let mut ft2 =
-            FlowTable::new("port", "child-table", FT_SIZE.unwrap(), None);
+        let mut ft1 = FlowTable::new("port", "parent-table", FT_SIZE, None);
+        let mut ft2 = FlowTable::new("port", "child-table", FT_SIZE, None);
         let fe1 = ft1.add(flowid, ()).unwrap();
         let fe2 = ft2.add(flowid, ()).unwrap();
 
@@ -1035,10 +1075,8 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft1 =
-            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
-        let mut ft2 =
-            FlowTable::new("port", "child-table", FT_SIZE.unwrap(), None);
+        let mut ft1 = FlowTable::new("port", "parent-table", FT_SIZE, None);
+        let mut ft2 = FlowTable::new("port", "child-table", FT_SIZE, None);
         let fe1 = ft1.add(flowid, ()).unwrap();
         let fe2 =
             ft2.add(flowid, ParentSet(vec![fe1.clone() as Arc<_>])).unwrap();
@@ -1072,11 +1110,11 @@ mod test {
 
         // Fill up the tables.
         let mut default_ft =
-            FlowTable::new("port", "no-prio-table", FT_SIZE.unwrap(), None);
+            FlowTable::new("port", "no-prio-table", FT_SIZE, None);
         let mut evict_ft = FlowTable::new(
             "port",
             "prio-table",
-            FT_SIZE.unwrap(),
+            FT_SIZE,
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
@@ -1100,18 +1138,18 @@ mod test {
         // With the default policy and a table full of UDP entries, we can't make
         // room for anything new.
         assert!(default_ft.add(flowid, ()).is_err());
-        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert_eq!(default_ft.num_flows(), FT_SIZE.get());
 
         // On a table where every flow is evictable, we can!
         assert!(evict_ft.add(flowid, ()).is_ok());
-        assert_eq!(evict_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert_eq!(evict_ft.num_flows(), FT_SIZE.get());
 
         // If we soft-kill a flow entry (i.e., one of its ancestors was evicted)
         // then we can make room to insert a new one.
         default_ft.map.values().next().unwrap().mark_evicted();
-        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert_eq!(default_ft.num_flows(), FT_SIZE.get());
         assert!(default_ft.add(flowid, ()).is_ok());
-        assert_eq!(default_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert_eq!(default_ft.num_flows(), FT_SIZE.get());
     }
 
     #[test]
@@ -1137,7 +1175,7 @@ mod test {
         let mut evict_ft = FlowTable::new(
             "port",
             "prio-table",
-            FT_SIZE.unwrap(),
+            FT_SIZE,
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
@@ -1169,7 +1207,7 @@ mod test {
         // This is the entry we will evict, regardless of the age of all others.
         assert!(evict_ft.map.contains_key(&sacrificial_flow));
         assert!(evict_ft.add(flowid, ()).is_ok());
-        assert_eq!(evict_ft.num_flows(), FT_SIZE.unwrap().get());
+        assert_eq!(evict_ft.num_flows(), FT_SIZE.get());
         assert!(!evict_ft.map.contains_key(&sacrificial_flow));
     }
 
@@ -1184,14 +1222,11 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft1 =
-            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
-        let mut ft2 =
-            FlowTable::new("port", "child-table", FT_SIZE.unwrap(), None);
+        let mut ft1 = FlowTable::new("port", "parent-table", FT_SIZE, None);
+        let mut ft2 = FlowTable::new("port", "child-table", FT_SIZE, None);
         let mut ft2_2 =
-            FlowTable::new("port", "other-child-table", FT_SIZE.unwrap(), None);
-        let mut ft3 =
-            FlowTable::new("port", "grandchild-table", FT_SIZE.unwrap(), None);
+            FlowTable::new("port", "other-child-table", FT_SIZE, None);
+        let mut ft3 = FlowTable::new("port", "grandchild-table", FT_SIZE, None);
         let fe1 = ft1.add(flowid, ()).unwrap();
         let fe2 = ft2.add(flowid, ()).unwrap();
         let fe_out_of_chain = ft2_2.add(flowid, ()).unwrap();
@@ -1223,12 +1258,11 @@ mod test {
             proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
         };
 
-        let mut ft1 =
-            FlowTable::new("port", "parent-table", FT_SIZE.unwrap(), None);
+        let mut ft1 = FlowTable::new("port", "parent-table", FT_SIZE, None);
         let mut ft2 = FlowTable::new(
             "port",
             "child-table",
-            FT_SIZE.unwrap(),
+            FT_SIZE,
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Evictable(NonZeroU16::MAX)),
@@ -1238,7 +1272,7 @@ mod test {
         let mut ft2_2 = FlowTable::new(
             "port",
             "other-child-table",
-            FT_SIZE.unwrap(),
+            FT_SIZE,
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
@@ -1248,7 +1282,7 @@ mod test {
         let mut ft2_3 = FlowTable::new(
             "port",
             "other-other-child-table",
-            FT_SIZE.unwrap(),
+            FT_SIZE,
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Protected),
@@ -1294,6 +1328,81 @@ mod test {
             fe1.eviction_priority(now),
             Some(EvictionPriority::Evictable(NonZeroU16::MAX)),
         );
+    }
+
+    #[test]
+    fn eviction_candidate_scan_saves_progress() {
+        let scan_budget = u32::try_from(FlowTable::<()>::SCAN_BUDGET).unwrap();
+        let table_size: NonZeroU32 = 5000.try_into().unwrap();
+        let perturb_at = 4500;
+        assert!(table_size.get() > scan_budget);
+        assert!((scan_budget..table_size.get()).contains(&perturb_at));
+
+        let sacrificial_flow = InnerFlowId {
+            proto: Protocol::UDP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: perturb_at as u16, dst_port: 443 }
+                .into(),
+        };
+
+        let mut evict_ft = FlowTable::new(
+            "port",
+            "prio-table",
+            table_size,
+            Some(Arc::new(FixedPolicy {
+                time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
+                default: Some(EvictionPriority::Protected),
+                manual: vec![(
+                    sacrificial_flow,
+                    EvictionPriority::Evictable(16.try_into().unwrap()),
+                )]
+                .into_iter()
+                .collect(),
+            })),
+        );
+        for i in 0..evict_ft.limit.get() {
+            let new_id = InnerFlowId {
+                proto: Protocol::UDP.into(),
+                addrs: AddrPair::V4 {
+                    src: "192.168.2.10".parse().unwrap(),
+                    dst: "76.76.21.21".parse().unwrap(),
+                },
+                proto_info: PortInfo { src_port: i as u16, dst_port: 443 }
+                    .into(),
+            };
+            evict_ft.add(new_id, ()).unwrap();
+
+            if i == perturb_at {
+                assert_eq!(new_id, sacrificial_flow);
+                let entry = evict_ft.map.get(&new_id).unwrap();
+                entry.hit_at(entry.last_hit() - Duration::from_secs(61));
+            }
+        }
+
+        assert!(evict_ft.eviction_cursor.is_none());
+
+        // The usable entry should only be seen after several scans, in this
+        // case. Each scan, successful or otherwise, will advance the cursor.
+        assert!(evict_ft.find_evictable_entry().is_none());
+        let c1 = evict_ft.eviction_cursor.unwrap();
+        assert!(evict_ft.find_evictable_entry().is_none());
+        let c2 = evict_ft.eviction_cursor.unwrap();
+        assert!(c1 < c2);
+        assert!(evict_ft.find_evictable_entry().is_some());
+        let c3 = evict_ft.eviction_cursor.unwrap();
+        assert!(c2 < c3);
+
+        evict_ft.expire(&c3, true);
+
+        // A scan should wrap around at the end of the map, if we hit the end
+        // with some remaining budget. Accordingly exepct that the flow ID
+        // checkpoint is *lower* this time.
+        assert!(evict_ft.find_evictable_entry().is_none());
+        let c4 = evict_ft.eviction_cursor.unwrap();
+        assert!(c4 < c3);
     }
 
     #[test]
