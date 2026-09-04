@@ -1395,7 +1395,7 @@ mod test {
         let c3 = evict_ft.eviction_cursor.unwrap();
         assert!(c2 < c3);
 
-        evict_ft.expire(&c3);
+        evict_ft.expire(&c3, true);
 
         // A scan should wrap around at the end of the map, if we hit the end
         // with some remaining budget. Accordingly exepct that the flow ID
