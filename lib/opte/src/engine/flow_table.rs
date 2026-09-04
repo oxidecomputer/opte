@@ -391,7 +391,7 @@ impl<S: FlowState> FlowTable<S> {
     /// removing it from `partner`.
     ///
     /// Flows identified by `extractor` in `partner` *MUST* share the same
-    /// [`FlowLifetime`] as the entry removed from `self`.
+    /// `FlowLifetime` as the entry removed from `self`.
     pub fn expire_flows_partner<F, T>(
         &mut self,
         partner: &mut FlowTable<T>,
