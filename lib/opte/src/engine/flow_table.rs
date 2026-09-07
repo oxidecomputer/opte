@@ -144,7 +144,7 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority>;
 
     /// Set `self` as a parent node to `child`.
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>);
+    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()>;
 
     /// Remove `child` from this entry's list of children.
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>);
@@ -200,9 +200,21 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         best_prio
     }
 
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) {
+    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()> {
         let mut children = self.lifetime.children.write();
-        children.insert(ByAddr(Arc::downgrade(child)));
+
+        // Sadly, BTreeSet::entry remains a nightly API.
+        let to_place = ByAddr(Arc::downgrade(child));
+        let can_insert =
+            children.len() < Self::MAX_CHILDREN || children.contains(&to_place);
+        if can_insert {
+            children.insert(to_place);
+            Ok(())
+        } else {
+            Err(OpteError::MaxCapacity(
+                u64::try_from(Self::MAX_CHILDREN).expect("usize is u64"),
+            ))
+        }
     }
 
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>) {
@@ -303,7 +315,7 @@ impl<S: FlowState> FlowTable<S> {
     pub fn expire(&mut self, flowid: &InnerFlowId) {
         flow_expired_probe(&self.port_c, &self.name_c, flowid, None, None);
         if let Some(entry) = self.map.remove(flowid) {
-            entry.propagate_last_hit();
+            entry.expiry_cleanup();
             entry.mark_evicted();
         }
     }
@@ -338,7 +350,7 @@ impl<S: FlowState> FlowTable<S> {
                     Some(my_time.raw_millis()),
                     Some(now.raw_millis()),
                 );
-                entry.propagate_last_hit();
+                entry.expiry_cleanup();
                 expired.push(f(entry.state()));
                 return false;
             }
@@ -513,7 +525,7 @@ pub trait Dump: fmt::Debug + Send + Sync {
 }
 
 /// Common functions needed from the interior state of a flow table entry.
-pub trait FlowState: Dump {
+pub trait FlowState: Dump + 'static {
     /// Return an iterator containing references to all flow entries from other
     /// tables which underpin `self`.
     fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>>;
@@ -594,6 +606,12 @@ pub struct FlowEntry<S: FlowState> {
 }
 
 impl<S: FlowState> FlowEntry<S> {
+    /// In OPTE, we generally expect at most three children per LFT entry: the
+    /// in/out UFT entries and TCP entry. We can keep some extra space for now
+    /// to allow for this to change in future, as well as to provide some
+    /// breathing room if we need to replace one of those relationships.
+    const MAX_CHILDREN: usize = 16;
+
     fn dump(&self) -> S::DumpVal {
         self.state.dump(self.hits.load(Ordering::Relaxed))
     }
@@ -662,11 +680,13 @@ impl<S: FlowState> FlowEntry<S> {
     }
 
     /// Update the last hit time of this flow entry's parents if it has been
-    /// used more recently.
-    fn propagate_last_hit(&self) {
+    /// used more recently, and remove any of their references to `self`.
+    fn expiry_cleanup(self: &Arc<Self>) {
         let my_time = self.last_hit();
+        let dyn_entry = Arc::clone(self) as Arc<dyn FlowEntryInfo>;
         for parent in self.state.parents() {
             parent.inherit_last_hit(my_time);
+            parent.remove_child(&dyn_entry);
         }
     }
 
@@ -898,7 +918,7 @@ mod test {
         let fe2 = ft2.add(flowid, ()).unwrap();
 
         let now = fe2.last_hit();
-        fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>)).unwrap();
 
         // A flow entry cannot be removed by the timer until all its children
         // have been evicted or expired.
@@ -935,7 +955,7 @@ mod test {
             ft2.add(flowid, ParentSet(vec![fe1.clone() as Arc<_>])).unwrap();
 
         let t1 = fe2.last_hit();
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
 
         // Updating the last-hit time of a flow won't immediately propagate to
         // its children.
@@ -1088,9 +1108,11 @@ mod test {
         let fe_out_of_chain = ft2_2.add(flowid, ()).unwrap();
         let fe3 = ft3.add(flowid, ()).unwrap();
 
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
-        fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
-        fe_out_of_chain.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
+        fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
+        fe_out_of_chain
+            .push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>))
+            .unwrap();
 
         // If we invalidate fe1, then all of its *direct descendants* will also
         // be invalid.
@@ -1157,19 +1179,19 @@ mod test {
         // When an explicit priority is requested by any descendent, we choose the
         // strongest requirement that the flow remain in place. Each flow we push
         // here makes the flow less likely for eviction.
-        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Evictable(NonZeroU16::MAX)),
         );
 
-        fe1.push_child(&(fe2_2.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2_2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Evictable(NonZeroU16::MIN)),
         );
 
-        fe1.push_child(&(fe2_3.clone() as Arc<dyn FlowEntryInfo>));
+        fe1.push_child(&(fe2_3.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         assert_eq!(
             fe1.eviction_priority(now),
             Some(EvictionPriority::Protected),
