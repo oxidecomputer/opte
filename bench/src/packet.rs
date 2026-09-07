@@ -26,7 +26,13 @@ use opte_test_utils::icmp::gen_icmp_echo;
 use opte_test_utils::icmp::gen_icmpv6_echo;
 use opte_test_utils::icmp::generate_ndisc;
 use opte_test_utils::*;
+use rand::SeedableRng;
+use rand::distr::Bernoulli;
+use rand::distr::Distribution;
+use rand::rngs::StdRng;
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 pub type TestCase = (MsgBlk, Direction);
 
@@ -42,6 +48,16 @@ pub trait BenchPacket {
 
     /// Return a list of discrete scenarios
     fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>>;
+
+    /// Are `generate`d packets worth benchmarking for parser performance?
+    fn do_parse_benchmark(&self) -> bool {
+        true
+    }
+
+    /// Is packet processing allowed to fail due to table size constraints?
+    fn allow_failure(&self) -> bool {
+        false
+    }
 }
 
 /// An individual packet to time the parse/process timing of.
@@ -73,13 +89,9 @@ pub struct UlpProcess {
 pub const ULP_FAST_PATH: UlpProcess = UlpProcess { fast_path: true };
 pub const ULP_SLOW_PATH: UlpProcess = UlpProcess { fast_path: false };
 
-impl BenchPacket for UlpProcess {
-    fn packet_label(&self) -> &'static str {
-        if self.fast_path { "ULP-FastPath" } else { "ULP-SlowPath" }
-    }
-
-    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
-        let ip_cfg = IpCfg::DualStack {
+impl UlpProcess {
+    fn cfg() -> IpCfg {
+        IpCfg::DualStack {
             ipv4: Ipv4Cfg {
                 vpc_subnet: "172.30.0.0/22".parse().unwrap(),
                 private_ip: "172.30.0.5".parse().unwrap(),
@@ -110,9 +122,17 @@ impl BenchPacket for UlpProcess {
                 attached_subnets: BTreeMap::default(),
                 transit_ips: BTreeMap::default(),
             },
-        };
+        }
+    }
+}
 
-        let cfg = g1_cfg2(ip_cfg);
+impl BenchPacket for UlpProcess {
+    fn packet_label(&self) -> &'static str {
+        if self.fast_path { "ULP-FastPath" } else { "ULP-SlowPath" }
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        let cfg = g1_cfg2(UlpProcess::cfg());
 
         itertools::iproduct!(
             [IpVariant::V4, IpVariant::V6],
@@ -331,6 +351,145 @@ impl BenchPacketInstance for UlpProcessInstance {
         }
 
         Some(g1)
+    }
+}
+
+pub struct SlowpathEvict {
+    pub capacities: Vec<NonZeroU32>,
+    pub p_expires: Vec<f64>,
+}
+
+impl BenchPacket for SlowpathEvict {
+    fn packet_label(&self) -> &'static str {
+        "Eviction"
+    }
+
+    fn test_cases(&self) -> Vec<Box<dyn BenchPacketInstance>> {
+        let cfg = g1_cfg2(UlpProcess::cfg());
+        itertools::iproduct!(&self.capacities, &self.p_expires)
+            .map(|(capacity, p_expire)| {
+                Box::new(AllSynInstance {
+                    index: 0.into(),
+                    capacity: *capacity,
+                    p_expire: *p_expire,
+                    cfg: cfg.clone(),
+                }) as Box<dyn BenchPacketInstance>
+            })
+            .collect()
+    }
+
+    fn do_parse_benchmark(&self) -> bool {
+        false
+    }
+
+    fn allow_failure(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+pub struct AllSynInstance {
+    index: AtomicU64,
+    capacity: NonZeroU32,
+    p_expire: f64,
+    cfg: VpcCfg,
+}
+
+impl BenchPacketInstance for AllSynInstance {
+    fn create_port(&self) -> Option<PortAndVps> {
+        let mut g1 =
+            oxide_net_setup("g1_port", &self.cfg, None, Some(self.capacity));
+        g1.port.start();
+        set!(g1, "port_state=running");
+
+        Some(g1)
+    }
+
+    fn parse_with(&self) -> ParserKind {
+        ParserKind::OxideVpc
+    }
+
+    fn pre_handle(&self, port: &PortAndVps) {
+        while port.port.num_flows("firewall", Direction::In)
+            < self.capacity.get() - 1
+        {
+            let (mut pkt, dir) = self.generate();
+            let pkt = parse_inbound(&mut pkt, VpcParser {}).unwrap();
+            match port.port.process(dir, pkt) {
+                Ok(_) => {}
+                Err(opte::engine::port::ProcessError::Layer(
+                    opte::engine::layer::LayerError::FlowTableFull { .. },
+                ))
+                | Err(opte::engine::port::ProcessError::FlowTableFull {
+                    ..
+                }) => break,
+                e => panic!("unexpected err condition {e:?}"),
+            }
+        }
+
+        let mut rng = StdRng::seed_from_u64(0x01de_097e_7e57_0712);
+        let dist = Bernoulli::new(self.p_expire).unwrap();
+
+        port.port.inject_expiry(|| dist.sample(&mut rng));
+    }
+
+    fn instance_name(&self) -> String {
+        format!("{}/P{}", self.capacity, self.p_expire)
+    }
+
+    fn generate(&self) -> (MsgBlk, Direction) {
+        let my_index = self.index.fetch_add(1, Ordering::Relaxed);
+
+        // SYN packets (or small UDP) are the easiest way to prod at
+        // UFT expiry behaviour.
+        let src_port = (my_index / u64::from(u16::MAX)) as u16;
+        let dst_port = (my_index % u64::from(u16::MAX)) as u16;
+
+        let body = &[][..];
+
+        let eth = Ethernet {
+            destination: self.cfg.guest_mac,
+            source: BS_MAC_ADDR,
+            ethertype: Ethertype::IPV4,
+        };
+
+        let tcp = UlpRepr::Tcp(Tcp {
+            source: src_port,
+            destination: dst_port,
+            flags: TcpFlags::SYN,
+            sequence: 1234,
+            acknowledgement: 3456,
+            window_size: 1,
+            ..Default::default()
+        });
+
+        let ip = L3Repr::Ipv4(Ipv4 {
+            source: Ipv4Addr::from_const([172, 30, 0, 6]),
+            destination: self.cfg.ipv4().private_ip,
+            protocol: IngotIpProto::TCP,
+            total_len: (Ipv4::MINIMUM_LENGTH + (&tcp, &body).packet_length())
+                as u16,
+            ..Default::default()
+        });
+
+        let guest_phys = TestIpPhys {
+            ip: self.cfg.phys_ip,
+            mac: self.cfg.guest_mac,
+            vni: self.cfg.vni,
+        };
+
+        let partner_phys = TestIpPhys {
+            ip: Ipv6Addr::from([
+                0xFD00, 0x0000, 0x00F7, 0x0116, 0x0000, 0x0000, 0x0000, 0x0001,
+            ]),
+            mac: ox_vpc_mac([0xF0, 0x00, 0x66]),
+            vni: self.cfg.vni,
+        };
+
+        (
+            encap(ulp_pkt(eth, ip, tcp, body), partner_phys, guest_phys),
+            Direction::In,
+        )
     }
 }
 

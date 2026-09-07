@@ -130,6 +130,7 @@ pfexec cp /input/xde/work/release/xde /kernel/drv/amd64
 pfexec add_drv xde
 
 banner "bench"
+CI=1
 cargo kbench local
 cargo ubench
 
