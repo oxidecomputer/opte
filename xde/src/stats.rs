@@ -175,6 +175,7 @@ impl XdeStats {
             (In, ParseError::UnrecognisedTunnelOpt { .. }) => {
                 &self.in_drop_bad_tun_opt
             }
+            (In, _) => &self.in_drop_misc,
 
             (Out, ParseError::IngotError(e)) => match e.error() {
                 IngotError::Unwanted => &self.out_drop_unwanted_proto,

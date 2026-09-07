@@ -20,6 +20,7 @@
 #![feature(alloc_error_handler)]
 #![feature(rustc_private)]
 #![deny(unused_must_use)]
+#![deny(clippy::manual_let_else)]
 
 mod ioctl;
 

@@ -28,7 +28,7 @@ They require that:
  * the XDE kernel module and `opteadm` are installed, either via IPS or the `cargo xtask install` command.
  * you have installed the IPS packages `flamegraph`, `demangle`, `iperf` and `sparse`.
 
-They implement zont-to-zone iperf traffic in two scenarios:
+They implement zone-to-zone iperf traffic in two scenarios:
 
  * `cargo kbench local` on one machine.
    This uses an identical test setup to `xde-tests/loopback`.

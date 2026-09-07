@@ -201,6 +201,8 @@ pub enum Error {
     Unsupported,
     /// Invalid data, e.g., non-UTF8 status code messages.
     InvalidData,
+    /// Exceeded maximum recursion depth parsing nested options
+    ExceededMaxDepth,
 }
 
 /// A DHCPv6 Unique Identifier (DUID).

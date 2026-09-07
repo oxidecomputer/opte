@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for TrackedAlloc {
     }
 }
 
-pub trait MemMeasure {
+pub trait MemMeasure: 'static {
     fn read() -> u64;
     fn formatter() -> &'static dyn ValueFormatter;
     fn label() -> &'static str;

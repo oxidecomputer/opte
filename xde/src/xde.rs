@@ -189,6 +189,7 @@ use crate::warn;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -247,11 +248,14 @@ use opte::ddi::sync::TokenGuard;
 use opte::ddi::sync::TokenLock;
 use opte::ddi::time::Interval;
 use opte::ddi::time::Periodic;
+use opte::engine::LightweightMeta;
 use opte::engine::NetworkImpl;
 use opte::engine::ether::ETHER_ADDR_LEN;
 use opte::engine::ether::EtherAddr;
 use opte::engine::ether::Ethernet;
+use opte::engine::ether::EthernetMut;
 use opte::engine::ether::EthernetRef;
+use opte::engine::ether::ValidEthernet;
 use opte::engine::geneve::Vni;
 use opte::engine::geneve::WalkOptions;
 use opte::engine::headers::IpAddr;
@@ -286,6 +290,7 @@ use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::InternetGatewayMap;
 use oxide_vpc::api::ListPortsResp;
+use oxide_vpc::api::MAX_MULTICAST_NEXT_HOPS;
 use oxide_vpc::api::McastForwardingEntry;
 use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
@@ -321,11 +326,11 @@ use oxide_vpc::engine::router;
 
 const ETHERNET_MTU: u16 = 1500;
 
-// Type alias for multicast forwarding table:
-// Maps underlay multicast addresses to next hops with replication and source filters.
-// The source filter is the aggregated filter for the destination sled (union of
-// all subscriber filters on that sled). Packets are only forwarded if the
-// aggregated filter allows the source.
+// Type alias for multicast forwarding table: maps underlay multicast addresses
+// to switch next hops with replication and source filters. Each source filter is
+// aggregated over the subscriber set reachable through that next hop. Packets are
+// only forwarded to a selected next hop if its aggregated filter allows the
+// source.
 type McastForwardingTable = BTreeMap<
     MulticastUnderlay,
     BTreeMap<NextHopV6, (Replication, SourceFilter)>,
@@ -633,6 +638,8 @@ pub struct XdeDev {
 
     pub vni: Vni,
 
+    postbox_key: VniMac,
+
     // These are clones of the underlay ports initialized by the
     // driver.
     pub u1: Arc<XdeUnderlayPort>,
@@ -701,7 +708,7 @@ const _: () = assert!(
 
 impl Default for PerEntryState {
     fn default() -> Self {
-        Self { devs: KMutex::new(Arc::new(DevMap::new())), _pad: [0u8; 48] }
+        Self { devs: KMutex::new(Default::default()), _pad: [0u8; 48] }
     }
 }
 
@@ -709,6 +716,23 @@ impl Default for PerEntryState {
 struct UnderlayDev {
     stream: DlsStream,
     ports_map: Vec<PerEntryState>,
+}
+
+impl UnderlayDev {
+    fn open(
+        ResolvedLink(link_name, link_id): ResolvedLink<'_>,
+    ) -> Result<Self, OpteError> {
+        let stream =
+            DlsStream::open(link_id).map_err(|e| OpteError::System {
+                errno: EFAULT,
+                msg: format!("failed to grab open stream for {link_name}: {e}"),
+            })?;
+
+        Ok(Self {
+            stream,
+            ports_map: (0..ncpus()).map(|_| PerEntryState::default()).collect(),
+        })
+    }
 }
 
 impl core::fmt::Debug for UnderlayDev {
@@ -1156,6 +1180,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 
     let mtu = req.mtu.unwrap_or(u32::from(ETHERNET_MTU));
     let cfg = VpcCfg::with_mtu(req.cfg.clone(), mtu);
+    let postbox_key = VniMac::new(cfg.vni, cfg.guest_mac);
 
     // Because we hold the token, no one else will add to/remove from
     // the XdeDev map in parallel. Quickly check that there is no
@@ -1166,7 +1191,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         if devs.get_by_name(&req.xde_devname).is_some() {
             return Err(OpteError::PortExists(req.xde_devname.clone()));
         }
-        if devs.get_by_key(VniMac::new(cfg.vni, cfg.guest_mac)).is_some() {
+        if devs.get_by_key(postbox_key).is_some() {
             return Err(OpteError::MacExists {
                 port: req.xde_devname.clone(),
                 vni: cfg.vni,
@@ -1205,7 +1230,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         link_state: mac::link_state_t::Down,
         mtu,
         port: new_port(
-            req.xde_devname.clone(),
+            &req.xde_devname,
             &cfg,
             state.vpc_map.clone(),
             state.m2p.clone(),
@@ -1215,11 +1240,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         )?,
         port_v2p,
         vni: cfg.vni,
+        postbox_key,
         port_igw_map: KMutex::new(None),
         u1,
         u2,
         underlay_capab,
-        routes: RouteCache::default(),
+        routes: RouteCache::new(&req.xde_devname)?,
         port_map: KRwLock::new(Default::default()),
         mcast_fwd: KRwLock::new(Arc::new(token.mcast_fwd.read().clone())),
     });
@@ -1699,21 +1725,9 @@ unsafe extern "C" fn xde_attach(
 
 /// Setup underlay port atop the given link.
 fn create_underlay_port(
-    resolved: ResolvedLink<'_>,
+    rl @ ResolvedLink(link_name, link_id): ResolvedLink<'_>,
 ) -> Result<(XdeUnderlayPort, OffloadInfo), OpteError> {
-    let ResolvedLink(link_name, link_id) = resolved;
-    let stream = DlsStream::open(link_id).map_err(|e| OpteError::System {
-        errno: EFAULT,
-        msg: format!("failed to grab open stream for {link_name}: {e}"),
-    })?;
-
-    let cpus = ncpus();
-    let mut ports_map = Vec::with_capacity(cpus);
-    for _ in 0..cpus {
-        ports_map.push(PerEntryState::default());
-    }
-
-    let stream = Arc::new(UnderlayDev { stream, ports_map });
+    let stream = Arc::new(UnderlayDev::open(rl)?);
 
     // Use a link flow to steer only Geneve traffic to our Rx handler.
     let mut flow_desc = mac::MacFlowDesc::new();
@@ -2081,6 +2095,14 @@ unsafe extern "C" fn xde_mc_multicst(
     // In the future we may have a more sophisticated approach here that
     // actually programs hardware multicast filters, either for things like NDP
     // or in response to signals from the guest such as VIRTIO_NET_F_CTRL_RX.
+    //
+    // viona (interface version 7, VNA_IOC_SET_MAC_FILTERS) forwards guest
+    // VIRTIO_NET_F_CTRL_RX filter tables down as mac_multicast_add() and
+    // mac_multicast_remove() calls, so this entry point sees per-guest
+    // multicast joins and leaves. No correctness change is needed here since
+    // viona enforces the filter on its own rings. Acting on the signal, for
+    // example, to skip replicating multicast to uninterested ports, belongs
+    // to the multicast datapath design rather than this entry point.
     0
 }
 
@@ -2114,13 +2136,14 @@ fn guest_loopback_probe(
     );
 }
 
+#[must_use]
 fn guest_loopback(
     src_dev: &XdeDev,
     dst_dev: &XdeDev,
     port_key: VniMac,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
-) {
+) -> Option<MsgBlk> {
     use Direction::*;
 
     let mblk_addr = pkt.mblk_addr();
@@ -2135,7 +2158,7 @@ fn guest_loopback(
             opte::engine::dbg!("Loopback bad packet: {:?}", e);
             bad_packet_parse_probe(None, Direction::In, mblk_addr, &e);
 
-            return;
+            return None;
         }
     };
 
@@ -2146,7 +2169,7 @@ fn guest_loopback(
         Ok(ulp_meoi) => ulp_meoi,
         Err(e) => {
             opte::engine::dbg!("{}", e);
-            return;
+            return None;
         }
     };
 
@@ -2183,17 +2206,20 @@ fn guest_loopback(
             if let Some(pkt) = pkt {
                 postbox.post_local(port_key, pkt);
             }
+
+            None
         }
 
         Ok(ProcessResult::Drop { reason }) => {
             opte::engine::dbg!("loopback rx drop: {:?}", reason);
+            None
         }
 
-        Ok(ProcessResult::Hairpin(_hppkt)) => {
-            // There should be no reason for an loopback
-            // inbound packet to generate a hairpin response
-            // from the destination port.
-            opte::engine::dbg!("unexpected loopback rx hairpin");
+        Ok(ProcessResult::Hairpin(hppkt)) => {
+            // A port can generate a message like an ICMP
+            // packet-too-big, which we must feed back to the
+            // original port.
+            Some(hppkt)
         }
 
         Err(e) => {
@@ -2203,6 +2229,7 @@ fn guest_loopback(
                 dst_dev.port.name(),
                 e
             );
+            None
         }
     }
 }
@@ -2325,6 +2352,124 @@ struct MulticastRxContext<'a> {
     inner_eth_off: usize,
 }
 
+/// The next hop chosen to carry a flow's single copy for each replication
+/// target.
+///
+/// A field is `None` when no next hop for that target admits the flow's source.
+struct ReplicationSelection {
+    /// Egress to the external network via the switch front panel.
+    external: Option<NextHopV6>,
+    /// Underlay delivery to sleds behind the switch.
+    underlay: Option<NextHopV6>,
+}
+
+/// Select one next hop per replication target to carry a flow's single copy.
+///
+/// The control plane programs multiple next hops sharing a target for switch
+/// redundancy, not to represent disjoint multicast destination sets. For a
+/// given target, each candidate switch reaches the same external network or the
+/// same sled subscribers because group membership is mirrored across the
+/// redundant switches. A multicast stream, therefore, needs only a single copy
+/// per target leaving this sled. Emitting to every candidate would duplicate
+/// the stream, and a receiver cannot tell duplicate copies apart, so it cannot
+/// deduplicate.
+///
+/// One candidate is chosen per target per flow while all remain programmed in
+/// the forwarding table, so any peer can carry the flow on failover. The caller
+/// suppresses the redundant copy on the others.
+///
+/// Only next hops whose source filter admits `inner_src` are candidates. For an
+/// any-source group (the default `Exclude(empty)`) every hop for the target
+/// qualifies.
+///
+/// For a source-filtered group, only the hops that permit this source qualify,
+/// so a denied source never selects a hop that would have dropped it while
+/// another would have forwarded.
+///
+/// Among the candidates, selection is keyed on the inner flow's L4 hash (the
+/// flow's CRC32, the same key the V2B boundary path uses to ECMP over tunnel
+/// endpoints). For multicast, that hash includes the inner source and group
+/// (and L4 fields when present), so a given flow pins deterministically to one
+/// switch across reboots and OPTE instances while distinct flows are spread
+/// across switches.
+///
+/// Selection coalesces the targets onto one hop before splitting the flow
+/// into per-target copies. A `Both` replication next hop satisfies both
+/// targets with a single packet, so that when the `Both` partition is non-empty
+/// the flow indexes it with `l4_hash % len` and both targets resolve to
+/// that hop. Only when no single hop covers the pair are the targets
+/// resolved independently, each then indexing its own partition with the
+/// same modulo, in which case the split copies carry disjoint replication
+/// instructions. Splitting when a `Both` replication hop is available
+/// would double sled Tx for traffic one packet satisfies.
+///
+/// Source filters are evaluated once per hop here. Filtered hops increment
+/// [`mcast_tx_fwd_source_filtered`] and fire the corresponding probe,
+/// preserving per-hop drop telemetry without re-checking in the emit loop.
+///
+/// [`mcast_tx_fwd_source_filtered`]: crate::stats::XdeStats::mcast_tx_fwd_source_filtered
+fn select_nexthops(
+    next_hops: &BTreeMap<NextHopV6, (Replication, SourceFilter)>,
+    ctx: &MulticastTxContext,
+) -> ReplicationSelection {
+    // Eligible hops for this flow are held on the stack, partitioned by
+    // replication mode during the scan. Omicron elects a single incumbent
+    // switch as the forwarding next hop today, so one entry is expected in
+    // general practice, with transient overlap while the reconciler replaces
+    // it. The set ioctl bounds each group's map to
+    // `MAX_MULTICAST_NEXT_HOPS`, so no partition can exceed its capacity.
+    let mut both = heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let mut external =
+        heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let mut underlay =
+        heapless::Vec::<NextHopV6, MAX_MULTICAST_NEXT_HOPS>::new();
+    let xde = get_xde_state();
+    for (next_hop, (replication, source_filter)) in next_hops.iter() {
+        if !source_filter.allows(ctx.inner_src) {
+            xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
+
+            let (af, src_ptr, dst_ptr) =
+                dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
+            __dtrace_probe_mcast__fwd__source__filtered(
+                af,
+                src_ptr,
+                dst_ptr,
+                ctx.vni.as_u32() as uintptr_t,
+                &next_hop.addr as *const _ as uintptr_t,
+                source_filter.mode() as uintptr_t,
+            );
+            continue;
+        }
+
+        let _ = match replication {
+            Replication::Both => both.push(*next_hop),
+            Replication::External => external.push(*next_hop),
+            Replication::Underlay => underlay.push(*next_hop),
+            // `Reserved` serves neither target, so it is never a candidate.
+            Replication::Reserved => continue,
+        };
+    }
+
+    // `checked_rem` yields `None` on an empty partition, folding the
+    // emptiness test into the modulo.
+    let hash = ctx.l4_hash as usize;
+
+    // Coalesce first: pin the flow to a single `Both` replication hop when
+    // one exists.
+    if let Some(idx) = hash.checked_rem(both.len()) {
+        let chosen = Some(both[idx]);
+        return ReplicationSelection { external: chosen, underlay: chosen };
+    }
+
+    // No single hop covers both targets, so the flow splits: each target
+    // hashes over its own partition, and the copies carry disjoint
+    // replication instructions.
+    ReplicationSelection {
+        external: hash.checked_rem(external.len()).map(|idx| external[idx]),
+        underlay: hash.checked_rem(underlay.len()).map(|idx| underlay[idx]),
+    }
+}
+
 /// Handle multicast packet forwarding for same-sled delivery and underlay
 /// replication based on the XDE-wide multicast forwarding table.
 ///
@@ -2418,17 +2563,31 @@ fn handle_mcast_tx<'a>(
                 ctx.vni.as_u32() as uintptr_t,
                 dev.port.name_cstr().as_ptr() as uintptr_t,
             );
-            guest_loopback(src_dev, dev, *key, my_pkt, postbox);
+            if let Some(hp) =
+                guest_loopback(src_dev, dev, *key, my_pkt, postbox)
+            {
+                // As in the unicast case below, each destination device may
+                // generate a hairpin packet. In this case we only expect this to
+                // be possible for IPv6 multicast traffic, and we limit the depth
+                // to one such reply.
+                _ = guest_loopback(
+                    dev,
+                    src_dev,
+                    src_dev.postbox_key,
+                    hp,
+                    postbox,
+                )
+            }
             let xde = get_xde_state();
             xde.stats.vals.mcast_tx_local().incr(1);
         }
     }
 
-    // Next hop forwarding: send packets to configured next hops.
+    // Next hop forwarding: send packets to configured switch next hops.
     //
-    // At the leaf level, we process all next hops in the forwarding table.
-    // Each next hop's `Replication` is a Tx-only instruction telling the switch
-    // which ports to replicate to:
+    // At the leaf level, we process the forwarding table, but we do not
+    // transmit to every next hop. Each next hop's `Replication` is a Tx-only
+    // instruction telling the chosen switch which ports to replicate to:
     // - External: ports set for external multicast traffic (egress to external networks)
     // - Underlay: replicate to other sleds (using multicast outer dst)
     // - Both: both external and underlay replication
@@ -2445,28 +2604,39 @@ fn handle_mcast_tx<'a>(
     }
 
     if let Some(next_hops) = cpu_mcast_fwd.get(&underlay_key) {
-        // We found forwarding entries, replicate to each next hop
-        for (next_hop, (replication, source_filter)) in next_hops.iter() {
-            // Check aggregated source filter before forwarding.
-            // This filter is the union of all subscriber filters for
-            // this next hop. If no subscriber would accept this source,
-            // skip forwarding.
-            if !source_filter.allows(ctx.inner_src) {
-                let xde = get_xde_state();
-                xde.stats.vals.mcast_tx_fwd_source_filtered().incr(1);
-                let (af, src_ptr, dst_ptr) =
-                    dtrace_addrs(&ctx.inner_src, &ctx.inner_dst);
-                __dtrace_probe_mcast__fwd__source__filtered(
-                    af,
-                    src_ptr,
-                    dst_ptr,
-                    ctx.vni.as_u32() as uintptr_t,
-                    &next_hop.addr as *const _ as uintptr_t,
-                    source_filter.mode() as uintptr_t,
-                );
-                continue;
-            }
+        // A next hop is a switch that replicates to every
+        // destination in the requested target's multicast delivery set. Next
+        // hops sharing a target are redundant switch paths to that set:
+        // external candidates reach the same external multicast network, and
+        // underlay candidates reach the same sled subscribers. Emitting to
+        // every next hop for a target would duplicate the stream.
+        //
+        // Pick one hop per target, preferring a single `Both` hop that
+        // satisfies the pair with one packet and falling back to independent
+        // per-target choices only when no such hop exists.
+        //
+        // Source filters and drop telemetry are handled inside `select_nexthops`.
+        let ReplicationSelection {
+            external: chosen_external,
+            underlay: chosen_underlay,
+        } = select_nexthops(next_hops, &ctx);
 
+        // At most two emissions: one when a single hop covers both targets,
+        // otherwise one per chosen hop. The emitted replication reflects
+        // which targets chose the hop, not the replication its entry
+        // carries.
+        let (first, second) = match (chosen_external, chosen_underlay) {
+            (Some(ext), Some(und)) if ext == und => {
+                (Some((ext, Replication::Both)), None)
+            }
+            (ext, und) => (
+                ext.map(|hop| (hop, Replication::External)),
+                und.map(|hop| (hop, Replication::Underlay)),
+            ),
+        };
+
+        for (next_hop, effective_replication) in first.into_iter().chain(second)
+        {
             // Clone packet with headers using pullup
             let Ok(mut fwd_pkt) =
                 ctx.out_pkt.pullup(NonZeroUsize::new(pullup_len))
@@ -2504,7 +2674,11 @@ fn handle_mcast_tx<'a>(
             }
             // Update Geneve multicast option with the Tx-only replication
             // instruction for the switch.
-            update_mcast_replication(&mut fwd_pkt, geneve_offset, *replication);
+            update_mcast_replication(
+                &mut fwd_pkt,
+                geneve_offset,
+                effective_replication,
+            );
 
             // Route to switch unicast address to determine which underlay
             // port/MAC to use. Packet destination is multicast address with
@@ -2548,7 +2722,7 @@ fn handle_mcast_tx<'a>(
                 (AF_INET6 as usize, &outer_ip6 as *const _ as uintptr_t);
 
             // Fire DTrace probes and increment stats based on replication mode
-            match replication {
+            match effective_replication {
                 oxide_vpc::api::Replication::Underlay => {
                     __dtrace_probe_mcast__underlay__fwd(
                         af,
@@ -2755,7 +2929,6 @@ unsafe extern "C" fn xde_mc_tx(
         return ptr::null_mut();
     };
 
-    let mut hairpin_chain = MsgBlkChain::empty();
     let mut tx_postbox = TxPostbox::new();
 
     // We don't need to read-lock port_map or mcast_fwd unless we actually need them.
@@ -2772,11 +2945,16 @@ unsafe extern "C" fn xde_mc_tx(
             &mut tx_postbox,
             &mut port_map,
             &mut mcast_fwd,
-            &mut hairpin_chain,
         );
     }
 
-    let (local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
+    let (mut local_pkts, [u1_pkts, u2_pkts]) = tx_postbox.deconstruct();
+
+    // Remove any packets which have been hairpinned back to us.
+    // If we attempt to deliver them while holding a readlock in
+    // `port_map`, then if re-enter XDE in the same stack we could
+    // take a re-entrant read lock and panic.
+    let hairpin_chain = local_pkts.take(src_dev.postbox_key);
 
     // Local same-sled delivery (via mac_rx to guest ports).
     if let Some(port_map) = port_map {
@@ -2784,7 +2962,7 @@ unsafe extern "C" fn xde_mc_tx(
     }
 
     // `port_map` has been moved, making it safe to deliver hairpin
-    // packets (which may cause us to re-enter XDE in the same stack).
+    // packets.
     src_dev.deliver(hairpin_chain);
 
     src_dev.u1.stream.stream.tx_drop_on_no_desc(
@@ -2802,14 +2980,14 @@ unsafe extern "C" fn xde_mc_tx(
     ptr::null_mut()
 }
 
-#[inline]
+#[cfg_attr(feature = "profiling", inline(never), unsafe(no_mangle))]
+#[cfg_attr(not(feature = "profiling"), inline)]
 fn xde_mc_tx_one<'a>(
     src_dev: &'a XdeDev,
     mut pkt: MsgBlk,
     postbox: &mut TxPostbox,
     port_map: &mut Option<KRwLockReadGuard<'a, Arc<DevMap>>>,
     mcast_fwd: &mut Option<KRwLockReadGuard<'a, Arc<McastForwardingTable>>>,
-    hairpin_chain: &mut MsgBlkChain,
 ) {
     let parser = src_dev.port.network().parser();
     let mblk_addr = pkt.mblk_addr();
@@ -2822,7 +3000,7 @@ fn xde_mc_tx_one<'a>(
             // NOTE: We are using the individual mblk_t as read only
             // here to get the pointer value so that the DTrace consumer
             // can examine the packet on failure.
-            opte::engine::dbg!("Rx bad packet: {:?}", e);
+            opte::engine::dbg!("Tx bad packet: {:?}", e);
             bad_packet_parse_probe(
                 Some(src_dev.port.name_cstr()),
                 Direction::Out,
@@ -2928,7 +3106,21 @@ fn xde_mc_tx_one<'a>(
                     // We have found a matching Port on this host; "loop back"
                     // the packet into the inbound processing path of the
                     // destination Port.
-                    guest_loopback(src_dev, dst_dev, key, out_pkt, postbox);
+                    if let Some(hp) =
+                        guest_loopback(src_dev, dst_dev, key, out_pkt, postbox)
+                    {
+                        // The recipient *could* generate its own hairpin, which
+                        // will almost certainly be an ICMP error packet. We only allow
+                        // ourselves to recurse like this once, since ICMP should
+                        // never generate further ICMP errors.
+                        _ = guest_loopback(
+                            dst_dev,
+                            src_dev,
+                            src_dev.postbox_key,
+                            hp,
+                            postbox,
+                        )
+                    }
                 } else {
                     opte::engine::dbg!(
                         "underlay dest is same as src but the Port was not found \
@@ -2960,15 +3152,12 @@ fn xde_mc_tx_one<'a>(
             if ip6_dst.is_multicast() {
                 // This is a multicast packet, so we determine the inner
                 // source and destination from the packet contents or use a fallback
-                let inner_src = match inner_src_ip {
-                    Some(ip) => ip,
-                    None => {
-                        opte::engine::dbg!(
-                            "mcast Tx: no inner L3 for source filtering"
-                        );
-                        __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
-                        return;
-                    }
+                let Some(inner_src) = inner_src_ip else {
+                    opte::engine::dbg!(
+                        "mcast Tx: no inner L3 for source filtering"
+                    );
+                    __dtrace_probe_mcast__tx__no__inner__ip(mblk_addr);
+                    return;
                 };
                 let inner_dst = inner_dst_ip.unwrap_or_else(|| {
                     // Fallback: derive from outer IPv6 multicast address
@@ -3112,7 +3301,7 @@ fn xde_mc_tx_one<'a>(
             // packet chain containing both hairpin and local deliveries
             // (via `guest_loopback`), we defer hairpin delivery until after
             // local delivery completes to avoid potential re-entrancy issues.
-            hairpin_chain.append(hpkt);
+            postbox.post_local(src_dev.postbox_key, hpkt);
         }
 
         Err(_) => {}
@@ -3260,7 +3449,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 
 #[unsafe(no_mangle)]
 fn new_port(
-    name: String,
+    name: &str,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
     m2p: Arc<overlay::Mcast2Phys>,
@@ -3269,24 +3458,27 @@ fn new_port(
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
-    let name_cstr = match CString::new(name.as_str()) {
-        Ok(v) => v,
-        Err(_) => return Err(OpteError::BadName),
-    };
+    let name_cstr = CString::new(name).map_err(|_| OpteError::BadName)?;
 
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
 
-    let mut pb = PortBuilder::new(&name, name_cstr, cfg.guest_mac, ectx);
+    let mut pb = PortBuilder::new(
+        name,
+        name_cstr,
+        cfg.guest_mac,
+        ectx,
+        NonZeroU32::new(cfg.mtu),
+    );
     firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
     // of Layer: one with, one without?
-    gateway::setup(&pb, &cfg, vpc_map.clone(), FT_LIMIT_ONE)?;
+    gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, m2p, v2b, FT_LIMIT_ONE)?;
+    overlay::setup(&pb, &cfg, v2p, m2p, v2b.clone(), FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -3297,7 +3489,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg };
+    let net = VpcNetwork { cfg, v2b };
     let port = Arc::new(pb.create(net, limit, limit)?);
     Ok(port)
 }
@@ -3362,7 +3554,8 @@ unsafe extern "C" fn xde_rx(
 /// `DoMcastCheck(&DevMap)`, `DeliverDirect(&XdeDev, VniMac)`) but we'd be
 /// really reliant on rustc interpreting these as static choices and inlining
 /// accordingly.
-#[inline(always)]
+#[cfg_attr(feature = "profiling", inline(never), unsafe(no_mangle))]
+#[cfg_attr(not(feature = "profiling"), inline(always))]
 fn xde_rx_one(
     stream: &DlsStream,
     mut pkt: MsgBlk,
@@ -3374,7 +3567,7 @@ fn xde_rx_one(
     // We must first parse the packet in order to determine where it
     // is to be delivered.
     let parser = VpcParser {};
-    let parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
+    let mut parsed_pkt = match Packet::parse_inbound(pkt.iter_mut(), parser) {
         Ok(pkt) => pkt,
         Err(e) => {
             stat_parse_error(Direction::In, &e);
@@ -3493,22 +3686,42 @@ fn xde_rx_one(
     // this to correctly process frames which have been given split into
     // larger chunks.
     //
+    // Due to pseudo-GRO from OPTE or actual GRO provided by illumos, we need
+    // to inform mac/viona on how it can split up this packet, if the guest
+    // cannot receive it (e.g., no GRO/large frame support).
+    // HW_LSO will cause viona to treat this packet as though it were
+    // a locally delivered segment making use of LSO. OPTE will carry flags
+    // forward from dropped segments when applying the emit spec later.
+    //
     // This will be set to a nonzero value when TSO has been asked of the
-    // source packet.
-    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp {
-        let mut out = None;
+    // source packet. It is imperative that we set this on the packet *before*
+    // OPTE processes it, so that we do not treat the packet as oversized and
+    // erroneously hairpin it into an ICMP packet-too-big message.
+    if matches!(meta.inner_ulp, ValidUlp::Tcp(_)) {
+        let mut mss = None;
         for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
             if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
-                out = NonZeroU32::new(el.mss());
+                mss = NonZeroU32::new(el.mss());
                 break;
             }
         }
-        out
-    } else {
-        None
-    };
+        let pay_len = old_len
+            - usize::try_from(non_payl_bytes).expect("usize > 32b on x86_64")
+            - usize::from(meta.encap_len());
+
+        // This packet could be the last segment of a split frame at
+        // which point it could be smaller than the original MSS.
+        // Don't re-tag the MSS if so, as guests may be confused and
+        // MAC emulation will reject the packet if the guest does not
+        // support GRO.
+        if let Some(mss) = mss
+            && pay_len
+                > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+        {
+            parsed_pkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+        }
+    }
 
     let port = &dev.port;
 
@@ -3517,26 +3730,6 @@ fn xde_rx_one(
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
-            let len = npkt.byte_len();
-            let pay_len = len
-                - usize::try_from(non_payl_bytes)
-                    .expect("usize > 32b on x86_64");
-
-            // Due to possible pseudo-GRO, we need to inform mac/viona on how
-            // it can split up this packet, if the guest cannot receive it
-            // (e.g., no GRO/large frame support).
-            // HW_LSO will cause viona to treat this packet as though it were
-            // a locally delivered segment making use of LSO.
-            if let Some(mss) = recovered_mss
-                // This packet could be the last segment of a split frame at
-                // which point it could be smaller than the original MSS.
-                // Don't re-tag the MSS if so, as guests may be confused and
-                // MAC emulation will reject the packet if the guest does not
-                // support GRO.
-                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
-            {
-                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
-            }
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);
@@ -3544,7 +3737,51 @@ fn xde_rx_one(
 
             postbox.post(port_key, npkt);
         }
-        Ok(ProcessResult::Hairpin(hppkt)) => {
+        Ok(ProcessResult::Hairpin(mut hppkt)) => {
+            // In this case, we may unfortunately choose a new destination
+            // switch for generated ICMP traffic. In this case our source and
+            // destination MAC will be zeroed out. If this is the case, then
+            // we need to redetermine which underlay port to use.
+            let Ok((hp_eth, ..)) = ValidEthernet::parse(&mut hppkt[..]) else {
+                // We failed to return a packet with enough bytes to hold
+                // Ethernet in the first layer.
+                return None;
+            };
+
+            let stream = if hp_eth.destination() == MacAddr::ZERO
+                || hp_eth.source() == MacAddr::ZERO
+            {
+                let mut parsed_hppkt =
+                    match Packet::parse_inbound(hppkt.iter_mut(), parser) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // In this case OPTE has generated an encapsulated
+                            // packet that we, ourselves, could not parse.
+                            opte::engine::err!(
+                                "oxide-vpc generated illegal packet: {:?}",
+                                e
+                            );
+                            return None;
+                        }
+                    };
+
+                let dst = parsed_hppkt.meta().outer_v6.destination();
+                let my_key = RouteKey { dst, l4_hash: None };
+                let Route { src, dst, underlay_idx } =
+                    dev.routes.next_hop(my_key, dev);
+                let meta = parsed_hppkt.meta_mut();
+                meta.outer_eth.set_destination(dst.into());
+                meta.outer_eth.set_source(src.into());
+
+                match underlay_idx {
+                    UnderlayIndex::U1 => &dev.u1.stream.stream,
+                    UnderlayIndex::U2 => &dev.u2.stream.stream,
+                }
+            } else {
+                stream
+            };
+
+            // We don't have dedicated postbox chains as these are rare paths.
             stream.tx_drop_on_no_desc(
                 hppkt,
                 TxHint::NoneOrMixed,
@@ -3577,7 +3814,7 @@ fn xde_rx_one_direct(
     // to plumb that through `NetworkParser`. I can't say that I *like*
     // doing this reparse here post-replication.
     let parser = VpcParser {};
-    let parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
+    let mut parsed_pkt = Packet::parse_inbound(pkt.iter_mut(), parser)
         .expect("this is a reparse of a known-valid packet");
 
     let meta = parsed_pkt.meta();
@@ -3599,22 +3836,42 @@ fn xde_rx_one_direct(
     // this to correctly process frames which have been given split into
     // larger chunks.
     //
+    // Due to pseudo-GRO from OPTE or actual GRO provided by illumos, we need
+    // to inform mac/viona on how it can split up this packet, if the guest
+    // cannot receive it (e.g., no GRO/large frame support).
+    // HW_LSO will cause viona to treat this packet as though it were
+    // a locally delivered segment making use of LSO. OPTE will carry flags
+    // forward from dropped segments when applying the emit spec later.
+    //
     // This will be set to a nonzero value when TSO has been asked of the
-    // source packet.
-    let is_tcp = matches!(meta.inner_ulp, ValidUlp::Tcp(_));
-    let recovered_mss = if is_tcp {
-        let mut out = None;
+    // source packet. It is imperative that we set this on the packet *before*
+    // OPTE processes it, so that we do not treat the packet as oversized and
+    // erroneously hairpin it into an ICMP packet-too-big message.
+    if matches!(meta.inner_ulp, ValidUlp::Tcp(_)) {
+        let mut mss = None;
         for opt in WalkOptions::from_raw(&meta.outer_encap) {
             let Ok(opt) = opt else { break };
             if let Some(ValidOxideOption::Mss(el)) = opt.option.known() {
-                out = NonZeroU32::new(el.mss());
+                mss = NonZeroU32::new(el.mss());
                 break;
             }
         }
-        out
-    } else {
-        None
-    };
+        let pay_len = old_len
+            - usize::try_from(non_payl_bytes).expect("usize > 32b on x86_64")
+            - usize::from(meta.encap_len());
+
+        // This packet could be the last segment of a split frame at
+        // which point it could be smaller than the original MSS.
+        // Don't re-tag the MSS if so, as guests may be confused and
+        // MAC emulation will reject the packet if the guest does not
+        // support GRO.
+        if let Some(mss) = mss
+            && pay_len
+                > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
+        {
+            parsed_pkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
+        }
+    }
 
     let port = &dev.port;
 
@@ -3623,26 +3880,6 @@ fn xde_rx_one_direct(
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut npkt = emit_spec.apply(pkt);
-            let len = npkt.byte_len();
-            let pay_len = len
-                - usize::try_from(non_payl_bytes)
-                    .expect("usize > 32b on x86_64");
-
-            // Due to possible pseudo-GRO, we need to inform mac/viona on how
-            // it can split up this packet, if the guest cannot receive it
-            // (e.g., no GRO/large frame support).
-            // HW_LSO will cause viona to treat this packet as though it were
-            // a locally delivered segment making use of LSO.
-            if let Some(mss) = recovered_mss
-                // This packet could be the last segment of a split frame at
-                // which point it could be smaller than the original MSS.
-                // Don't re-tag the MSS if so, as guests may be confused and
-                // MAC emulation will reject the packet if the guest does not
-                // support GRO.
-                && pay_len > usize::try_from(mss.get()).expect("usize > 32b on x86_64")
-            {
-                npkt.request_offload(MblkOffloadFlags::HW_LSO, mss.get());
-            }
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);
@@ -3831,7 +4068,9 @@ fn set_mcast_forwarding_hdlr(
     // Validation of admin-local IPv6 (ff04::/16) happens at deserialization
     let underlay = req.underlay;
 
-    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication modes.
+    // Fleet-level multicast: enforce DEFAULT_MULTICAST_VNI for all replication
+    // modes.
+    //
     // NextHopV6.addr must be unicast (switch address for routing).
     // The packet will be sent to the multicast address (req.underlay).
     for entry in &req.next_hops {
@@ -3856,6 +4095,19 @@ fn set_mcast_forwarding_hdlr(
                 ),
             });
         }
+
+        // Reject `Reserved`. It serves no replication target, so the Tx-side
+        // selection never picks such a hop and an accepted one would silently
+        // drop the group's traffic with no telemetry.
+        if matches!(entry.replication, Replication::Reserved) {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "multicast next hop {} has Reserved replication, which serves no target",
+                    entry.next_hop.addr
+                ),
+            });
+        }
     }
 
     // Record next hop count before consuming the vector
@@ -3864,6 +4116,27 @@ fn set_mcast_forwarding_hdlr(
     let token = state.management_lock.lock();
     {
         let mut mcast_fwd = token.mcast_fwd.write();
+
+        // Reject (based on upper bound) before mutating the merged map, as it
+        // must stay within `MAX_MULTICAST_NEXT_HOPS` so that Tx-side selection
+        // can hold every candidate on the stack.
+        let merged = mcast_fwd
+            .get(&underlay)
+            .into_iter()
+            .flat_map(BTreeMap::keys)
+            .chain(req.next_hops.iter().map(|entry| &entry.next_hop))
+            .collect::<BTreeSet<_>>()
+            .len();
+
+        if merged > MAX_MULTICAST_NEXT_HOPS {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: format!(
+                    "multicast group {} would have {merged} next hops, max is {MAX_MULTICAST_NEXT_HOPS}",
+                    underlay.addr()
+                ),
+            });
+        }
 
         // Get or create the next hop map for this underlay address
         let next_hop_map = mcast_fwd.entry(underlay).or_default();

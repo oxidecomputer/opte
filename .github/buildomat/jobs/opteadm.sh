@@ -41,9 +41,16 @@ ptime -m cargo build --release
 
 popd
 
+# TGT_BASE allows one to run this more easily in their local
+# environment:
+#
+#   TGT_BASE=/var/tmp ./opteadm.sh
+#
+TGT_BASE=${TGT_BASE:=/work}
+
 for x in debug release
 do
-    mkdir -p /work/$x
-    cp target/$x/opteadm /work/$x/
-    sha256sum "target/$x/opteadm" > "/work/$x/opteadm.$x.sha256"
+    mkdir -p $TGT_BASE/$x
+    cp target/$x/opteadm $TGT_BASE/$x/
+    sha256sum "target/$x/opteadm" > "$TGT_BASE/$x/opteadm.$x.sha256"
 done

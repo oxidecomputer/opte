@@ -14,7 +14,7 @@ fn test_xde_loopback() -> Result<()> {
     _ = &topol.nodes[0]
         .zone
         .zone
-        .zexec(&format!("ping {}", &topol.nodes[1].port.ip()))?;
+        .zexec(&format!("ping {}", topol.nodes[1].port.ip()))?;
 
     Ok(())
 }

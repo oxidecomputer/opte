@@ -15,6 +15,7 @@ ingot.workspace = true
 
 bitflags.workspace = true
 crc32fast.workspace = true
+heapless.workspace = true
 postcard.workspace = true
 serde.workspace = true
 zerocopy.workspace = true
@@ -23,3 +24,6 @@ zerocopy.workspace = true
 crate-type = ["staticlib"]
 name = "xde"
 
+[features]
+default = []
+profiling = []

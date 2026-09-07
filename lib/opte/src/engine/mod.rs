@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! The engine in OPTE.
 //!
@@ -162,6 +162,27 @@ pub enum HdlPktAction {
 /// processing.
 pub struct HdlPktError(pub &'static str);
 
+/// The action to take on a packet which has raised one or more error
+/// conditions during processing.
+///
+/// OPTE can raise certain errors to the [`NetworkImpl`], so that it
+/// can decide how to respond to certain events such as traffic larger
+/// than the specified MTU.
+///
+/// This differs from [`HdlPktAction`] in that an allow action *does not
+/// short-circuit the remainder of normal packet processing*.
+pub enum HdlErrAction {
+    /// OPTE should continue processing this packet.
+    ContinueProcessing,
+
+    /// The packet raising this error must be dropped.
+    Deny,
+
+    /// The packet should not be processed, and a given reply packet
+    /// should be sent as a reply.
+    Hairpin(MsgBlk),
+}
+
 /// An implementation of a particular type of network.
 ///
 /// OPTE is a generalized engine for processing and transforming
@@ -231,6 +252,23 @@ pub trait NetworkImpl {
 
     /// Return the parser for this network implementation.
     fn parser(&self) -> Self::Parser;
+
+    /// Handle a packet which is larger than the underlying [`port::Port`]'s
+    /// MTU. Packets will be caught before applying any existing
+    /// UFT transform or applying rule-based processing.
+    ///
+    /// OPTE will raise this error for any packets larger than the MTU
+    /// which do not have appropriate large send/receive offload flags
+    /// set by the driver.
+    // NOTE: we can exchange this in future for a generic `handle_error`,
+    // if more use cases become apparent.
+    fn handle_oversize<'a, T: Read + Pullup + 'a>(
+        &self,
+        dir: Direction,
+        pkt: &mut Packet<FullParsed<T>>,
+    ) -> Result<HdlErrAction, HdlPktError>
+    where
+        T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
 }
 
 /// A packet parser for the network implementation.

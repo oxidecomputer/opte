@@ -40,7 +40,9 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -241,11 +243,11 @@ impl LayerFlowTable {
     fn expire_flows(&mut self, now: Moment) {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
-        let to_expire =
-            self.ft_out.expire_flows(now, LftOutEntry::extract_pair);
-        for flow in to_expire {
-            self.ft_in.expire(&flow);
-        }
+        self.ft_out.expire_flows_partner(
+            &mut self.ft_in,
+            LftOutEntry::extract_pair,
+            now,
+        );
         self.count = self.ft_out.num_flows();
     }
 
@@ -326,8 +328,18 @@ impl LayerFlowTable {
         Self {
             count: 0,
             limit,
-            ft_in: FlowTable::new(port, &format!("{layer}_in"), limit, None),
-            ft_out: FlowTable::new(port, &format!("{layer}_out"), limit, None),
+            ft_in: FlowTable::new(
+                port,
+                &format!("{layer}_in"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
+            ft_out: FlowTable::new(
+                port,
+                &format!("{layer}_out"),
+                limit,
+                Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
+            ),
         }
     }
 
@@ -488,6 +500,10 @@ struct LayerStats {
 
     /// The current number of flows (entries in LFT).
     flows: KStatU64,
+
+    /// The number of times that in in/out LFT pair has been evicted
+    /// to make space for a new entry.
+    evictions: KStatU64,
 
     /// The Time To Live for all flows, in seconds. When a flow is
     /// inactive for longer than the TTL, it is considered expired.
@@ -830,8 +846,14 @@ impl Layer {
 
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
-            self.ft.ft_out.expire(&out_key);
-            self.ft.ft_in.expire(&in_key);
+            self.stats.vals.evictions.incr(1);
+
+            // These two entries share the same `FlowLifetime`, so
+            // we can avoid wasting work by marking all children as
+            // `killed` only for the first entry.
+            self.ft.ft_out.expire(&out_key, true);
+            self.ft.ft_in.expire(&in_key, false);
+
             self.ft.count = self.ft.ft_out.num_flows();
         }
     }

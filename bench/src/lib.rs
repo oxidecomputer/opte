@@ -19,7 +19,7 @@ pub mod packet;
 
 /// Additional labelling information for [`Measurement`]s for
 /// pretty-printing and grouping.
-pub trait MeasurementInfo: Measurement {
+pub trait MeasurementInfo: Measurement + 'static {
     fn label() -> &'static str;
 }
 

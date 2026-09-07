@@ -17,6 +17,7 @@ use opte_bench::kbench::*;
 use std::collections::HashSet;
 use std::net::Ipv6Addr;
 use std::net::TcpListener;
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -229,6 +230,13 @@ struct OpteCreateParams {
     /// assigned random MAC addresses.
     #[arg(short = 'P', long, default_value_t = 0)]
     passive_ports: u32,
+
+    /// The MTU that should be assigned to the primary OPTE port.
+    ///
+    /// This will default to a value chosen by the `xde` driver (1500)
+    /// if left unspecified.
+    #[arg(short = 'm')]
+    mtu: Option<NonZeroU32>,
 }
 
 #[derive(Parser)]
@@ -443,13 +451,14 @@ fn over_nic(params: &OpteCreateParams, host: &str, pause: bool) -> Result<()> {
     let topol = xde_tests::single_node_over_real_nic(
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_B_PORT,
+        params.mtu,
         &[xde_tests::ZONE_A_PORT],
         params.passive_ports,
         params.brand.to_str(),
     )?;
     print_banner("Topology built!");
 
-    let target_ip = xde_tests::ZONE_A_PORT.ip;
+    let target_ip = xde_tests::ZONE_A_PORT.priv_ip4;
 
     // Ping for good luck / to verify reachability.
     let _ = &topol.nodes[0].zone.zone.zexec(&format!("ping {}", &target_ip))?;
@@ -561,6 +570,7 @@ fn host_iperf(params: &OpteCreateParams) -> Result<()> {
     let topol = xde_tests::single_node_over_real_nic(
         (&params.underlay_nics[..2]).try_into().unwrap(),
         xde_tests::ZONE_A_PORT,
+        params.mtu,
         &[xde_tests::ZONE_B_PORT],
         params.passive_ports,
         params.brand.to_str(),

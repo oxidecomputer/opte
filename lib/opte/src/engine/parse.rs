@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Constructs used in packet parsing, such as choices over protocol
 //! and complete packet definitions.
@@ -60,6 +60,7 @@ use ingot::tcp::TcpMut;
 use ingot::tcp::TcpRef;
 use ingot::tcp::ValidTcp;
 use ingot::types::ByteSlice;
+use ingot::types::Emit;
 use ingot::types::Header;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
@@ -100,6 +101,72 @@ impl<B: ByteSlice + SplitByteSlice> Ulp<B> {
             Ulp::Udp(t) => t.to_owned(None).unwrap().into(),
             Ulp::IcmpV4(t) => t.to_owned(None).unwrap().into(),
             Ulp::IcmpV6(t) => t.to_owned(None).unwrap().into(),
+        }
+    }
+}
+
+impl<B: ByteSliceMut> Ulp<B> {
+    /// Use the L3 pseudoheader checksum and body checksum to derive
+    /// and update the checksum in any upper protocol.
+    pub fn compute_checksum(
+        &mut self,
+        pseudo_csum: Checksum,
+        mut body_csum: Checksum,
+    ) {
+        let mut csum = body_csum + pseudo_csum;
+        match self {
+            // ICMP4 requires the body_csum *without*
+            // the pseudoheader added back in.
+            Ulp::IcmpV4(i4) => {
+                let mut bytes = [0u8; 8];
+                i4.set_checksum(0);
+                i4.emit_raw(&mut bytes[..]);
+                body_csum.add_bytes(&bytes[..]);
+                i4.set_checksum(body_csum.finalize_for_ingot());
+            }
+            Ulp::IcmpV6(i6) => {
+                let mut bytes = [0u8; 8];
+                i6.set_checksum(0);
+                i6.emit_raw(&mut bytes[..]);
+                csum.add_bytes(&bytes[..]);
+                i6.set_checksum(csum.finalize_for_ingot());
+            }
+            Ulp::Tcp(tcp) => {
+                tcp.set_checksum(0);
+                match tcp {
+                    Header::Repr(tcp) => {
+                        let mut bytes = [0u8; 56];
+                        tcp.emit_raw(&mut bytes[..]);
+                        csum.add_bytes(&bytes[..]);
+                    }
+                    Header::Raw(tcp) => {
+                        csum.add_bytes(tcp.0.as_bytes());
+                        match &tcp.1 {
+                            Header::Repr(opts) => {
+                                csum.add_bytes(opts);
+                            }
+                            Header::Raw(opts) => {
+                                csum.add_bytes(opts);
+                            }
+                        }
+                    }
+                }
+                tcp.set_checksum(csum.finalize_for_ingot());
+            }
+            Ulp::Udp(udp) => {
+                udp.set_checksum(0);
+                match udp {
+                    Header::Repr(udp) => {
+                        let mut bytes = [0u8; 8];
+                        udp.emit_raw(&mut bytes[..]);
+                        csum.add_bytes(&bytes[..]);
+                    }
+                    Header::Raw(udp) => {
+                        csum.add_bytes(udp.0.as_bytes());
+                    }
+                }
+                udp.set_checksum(csum.finalize_for_ingot());
+            }
         }
     }
 }

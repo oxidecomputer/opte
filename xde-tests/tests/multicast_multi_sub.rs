@@ -27,7 +27,6 @@ use anyhow::Result;
 use opte_ioctl::OpteHdl;
 use opte_test_utils::geneve_verify;
 use oxide_vpc::api::DEFAULT_MULTICAST_VNI;
-use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::McastForwardingNextHop;
@@ -37,7 +36,6 @@ use oxide_vpc::api::Replication;
 use oxide_vpc::api::SourceFilter;
 use oxide_vpc::api::Vni;
 use xde_tests::GENEVE_UNDERLAY_FILTER;
-use xde_tests::IPV4_MULTICAST_CIDR;
 use xde_tests::MCAST_TEST_PORT;
 use xde_tests::MulticastGroup;
 use xde_tests::SnoopGuard;
@@ -88,12 +86,6 @@ fn test_multicast_tx_forwarding_sender_only_subscribed() -> Result<()> {
         replication: Replication::External,
         source_filter: SourceFilter::default(),
     }])?;
-
-    // Allow IPv4 multicast traffic via Multicast target
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
 
     // Subscribe ONLY sender A (sender self-exclusion means A won't receive its own packet)
     // B and C are not subscribed, so no same-sled delivery and no Rx delivery.
@@ -206,10 +198,8 @@ fn test_multicast_tx_same_sled_only() -> Result<()> {
     // Tx same-sled delivery, not underlay forwarding
     // `mcast.set_forwarding(...)` is intentionally omitted
 
-    // Allow IPv4 multicast traffic and subscribe all nodes
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    // Subscribe all nodes
     for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
             .subscribe_multicast(mcast_group.into())
             .expect("subscribe should succeed");
@@ -321,15 +311,9 @@ fn test_multicast_underlay_replication_no_local_subscribers() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    // Allow IPv4 multicast traffic via Multicast target.
-    //
     // Note: We deliberately do not subscribe any nodes. This tests Tx forwarding
     // with zero local subscribers (Rx delivery is based on subscriptions, not
     // `Replication` mode).
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
 
     // Assert there are no local subscribers for this group
     let subs = hdl.dump_mcast_subs()?;
@@ -440,15 +424,9 @@ fn test_multicast_external_replication_no_local_subscribers() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    // Allow IPv4 multicast traffic via Multicast target
-    //
     // Note: We deliberately do not subscribe any nodes. This tests Tx forwarding
     // with zero local subscribers (Rx delivery is based on subscriptions, not
     // `Replication` mode).
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
-    for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
-    }
 
     // Assert there are no local subscribers for this group
     let subs = hdl.dump_mcast_subs()?;
@@ -544,10 +522,8 @@ fn test_multicast_both_replication() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    // Allow IPv4 multicast traffic via Multicast target and subscribe to the group
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    // Subscribe every node to the group
     for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
             .subscribe_multicast(mcast_group.into())
             .expect("subscribe should succeed");
@@ -634,10 +610,8 @@ fn test_multicast_sender_self_exclusion() -> Result<()> {
 
     let _mcast = MulticastGroup::new(mcast_group.into(), mcast_underlay)?;
 
-    // Allow IPv4 multicast traffic and subscribe ALL nodes (including sender A)
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
+    // Subscribe every node, including sender A
     for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
             .subscribe_multicast(mcast_group.into())
             .expect("subscribe should succeed");
@@ -724,9 +698,7 @@ fn test_partial_unsubscribe() -> Result<()> {
         source_filter: SourceFilter::default(),
     }])?;
 
-    let mcast_cidr = IpCidr::Ip4(IPV4_MULTICAST_CIDR.parse().unwrap());
     for node in &topol.nodes {
-        node.port.add_multicast_router_entry(mcast_cidr)?;
         node.port
             .subscribe_multicast(mcast_group.into())
             .expect("subscribe should succeed");

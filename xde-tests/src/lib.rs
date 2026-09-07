@@ -8,6 +8,16 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use opte_ioctl::OpteHdl;
+use opte_test_utils::Emit;
+use opte_test_utils::Ethernet;
+use opte_test_utils::Ethertype;
+use opte_test_utils::GENEVE_PORT;
+use opte_test_utils::Geneve;
+use opte_test_utils::HeaderLen;
+use opte_test_utils::IngotIpProto;
+use opte_test_utils::Ipv4;
+use opte_test_utils::Ipv6;
+use opte_test_utils::Udp;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::Address;
@@ -24,8 +34,12 @@ use oxide_vpc::api::IpCfg;
 use oxide_vpc::api::IpCidr;
 use oxide_vpc::api::Ipv4Addr;
 use oxide_vpc::api::Ipv4Cfg;
+use oxide_vpc::api::Ipv4Cidr;
+use oxide_vpc::api::Ipv4PrefixLen;
 use oxide_vpc::api::Ipv6Addr;
 use oxide_vpc::api::Ipv6Cfg;
+use oxide_vpc::api::Ipv6Cidr;
+use oxide_vpc::api::Ipv6PrefixLen;
 use oxide_vpc::api::MacAddr;
 use oxide_vpc::api::McastForwardingNextHop;
 use oxide_vpc::api::McastSubscribeReq;
@@ -47,6 +61,7 @@ use rand::RngExt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::num::NonZeroU32;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
@@ -130,6 +145,9 @@ pub const OVERLAY_GW_V6: &str = "fd00::254";
 pub const SNOOP_TIMEOUT_EXPECT_PACKET: Duration = Duration::from_secs(5);
 /// Snoop timeout when expecting no packets (2 seconds).
 pub const SNOOP_TIMEOUT_EXPECT_NONE: Duration = Duration::from_secs(2);
+/// Timeout for snoop to report that it has bound to the capture device
+/// (5 seconds).
+pub const SNOOP_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Standard UDP port used for multicast tests.
 pub const MCAST_TEST_PORT: u16 = 9999;
@@ -149,6 +167,20 @@ pub const GENEVE_UNDERLAY_FILTER: &str = "ip6 and udp port 6081";
 /// Underlay device name used in single-sled test topology.
 /// The simnet pair creates a loopback underlay for multicast tests.
 pub const UNDERLAY_TEST_DEVICE: &str = "xde_test_sim1";
+
+/// Underlay device used to inject raw frames into the receive path.
+///
+/// A frame written here (the simnet `end_a`) is received on its peer
+/// [`UNDERLAY_TEST_DEVICE`] (`end_b`), rises through `xde_test_vnic1`'s MAC
+/// client, and reaches XDE's `xde_rx` callback.
+pub const UNDERLAY_INJECT_DEVICE: &str = "xde_test_sim0";
+
+/// Service access point is bound on the raw injection stream purely to reach
+/// DLPI's `DL_IDLE` state, a precondition of `dlpi_send`. For ethernet the
+/// service access point is the ethertype. In `DLPI_RAW` it plays no role in
+/// building the frame, so this is an unused experimental ethertype chosen to
+/// avoid demuxing real inbound traffic back into the stream.
+const INJECT_SAP: u32 = 0x4000;
 
 /// This is a wrapper around the ztest::Zone object that encapsulates common
 /// logic needed for running the OPTE tests zones used in this test suite.
@@ -292,6 +324,7 @@ impl OptePort {
         private_ip: &str,
         guest_mac: &str,
         phys_ip: &str,
+        mtu: Option<NonZeroU32>,
     ) -> Result<Self> {
         let cfg = VpcCfg {
             ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
@@ -316,7 +349,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), None)?;
+        adm.create_xde(name, cfg.clone(), mtu.map(NonZeroU32::get))?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -331,6 +364,7 @@ impl OptePort {
         private_ip_v6: &str,
         guest_mac: &str,
         phys_ip: &str,
+        mtu: Option<NonZeroU32>,
     ) -> Result<Self> {
         let cfg = VpcCfg {
             ip_cfg: IpCfg::DualStack {
@@ -372,7 +406,7 @@ impl OptePort {
             dhcp: DhcpCfg::default(),
         };
         let adm = OpteHdl::open()?;
-        adm.create_xde(name, cfg.clone(), None)?;
+        adm.create_xde(name, cfg.clone(), mtu.map(NonZeroU32::get))?;
         Ok(OptePort {
             name: name.into(),
             cfg,
@@ -385,7 +419,14 @@ impl OptePort {
         let adm = OpteHdl::open()?;
         adm.add_router_entry(&AddRouterEntryReq {
             port_name: self.name.clone(),
-            dest: IpCidr::Ip4(format!("{dest}/32").parse().unwrap()),
+            dest: match dest.parse::<IpAddr>().unwrap() {
+                IpAddr::Ip4(ip) => {
+                    IpCidr::Ip4(Ipv4Cidr::new(ip, Ipv4PrefixLen::NETMASK_ALL))
+                }
+                IpAddr::Ip6(ip) => {
+                    IpCidr::Ip6(Ipv6Cidr::new(ip, Ipv6PrefixLen::NETMASK_ALL))
+                }
+            },
             target: RouterTarget::Ip(dest.parse().unwrap()),
             class: RouterClass::System,
         })?;
@@ -474,24 +515,6 @@ impl OptePort {
             group,
         })?;
         self.mcast_subscriptions.borrow_mut().retain(|g| *g != group);
-        Ok(())
-    }
-
-    /// Allow multicast CIDR traffic for this port.
-    ///
-    /// Multicast is handled automatically by the gateway layer, so we just
-    /// need to allow the CIDR through the firewall in both directions.
-    pub fn add_multicast_router_entry(&self, cidr: IpCidr) -> Result<()> {
-        // Allow multicast traffic in both directions
-        self.allow_cidr(cidr, Direction::In)?;
-        self.allow_cidr(cidr, Direction::Out)?;
-        Ok(())
-    }
-
-    /// Allow multicast CIDR through the overlay firewall for the given direction.
-    pub fn allow_cidr(&self, cidr: IpCidr, direction: Direction) -> Result<()> {
-        let adm = OpteHdl::open()?;
-        adm.allow_cidr(&self.name, cidr, direction)?;
         Ok(())
     }
 }
@@ -593,12 +616,21 @@ impl SnoopGuard {
 
     /// Start a `snoop` capture with a specific packet count.
     /// Useful for tests that need to capture multiple packets (e.g., multi-next-hop fanout).
+    ///
+    /// We block until snoop announces "Using device" on stderr, which it emits
+    /// once the capture stream is bound. Returning before that point races
+    /// the capture against the test's first send, dropping the packet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if snoop exits or fails to bind within
+    /// [`SNOOP_READY_TIMEOUT`].
     pub fn start_with_count(
         dev_name: &str,
         filter: &str,
         count: u32,
     ) -> anyhow::Result<Self> {
-        let child = Command::new("pfexec")
+        let mut child = Command::new("pfexec")
             .args([
                 "snoop",
                 "-r",
@@ -613,6 +645,39 @@ impl SnoopGuard {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+
+        // Forward stderr lines over a channel so the readiness wait is
+        // bounded. The thread keeps draining after readiness; dropping the
+        // pipe instead could kill snoop with SIGPIPE on a later write.
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stderr);
+            let mut line = String::new();
+            while let Ok(n) =
+                std::io::BufRead::read_line(&mut reader, &mut line)
+            {
+                if n == 0 {
+                    break;
+                }
+                let _ = tx.send(std::mem::take(&mut line));
+            }
+        });
+
+        let deadline = Instant::now() + SNOOP_READY_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(remaining) {
+                Ok(line) if line.contains("Using device") => break,
+                Ok(_) => continue,
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("snoop failed to bind to {dev_name}: {e}");
+                }
+            }
+        }
+
         Ok(Self { child: Some(child) })
     }
 
@@ -726,6 +791,128 @@ pub fn ensure_underlay_admin_scoped_route_v6(interface: &str) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+/// Inject a raw Geneve-over-IPv6 multicast frame onto the underlay receive path.
+///
+/// Builds the full wire frame for an IPv4 multicast datagram tunnelled in
+/// Geneve and writes it to [`UNDERLAY_INJECT_DEVICE`] in DLPI raw mode, so it
+/// arrives at XDE's `xde_rx` callback exactly as a frame from a remote sled
+/// would. This exercises `handle_mcast_rx` in isolation: no Tx processing and
+/// thus no `guest_loopback` same-sled delivery occurs, unlike a guest send via
+/// [`OpteZone::send_udp_v4`]/[`OpteZone::send_udp_v6`].
+///
+/// `underlay_group` is the outer IPv6 multicast destination (the subscribed
+/// [`MulticastUnderlay`] group). `inner_src`/`inner_dst` are the inner IPv4
+/// source (subject to source filtering) and multicast destination group. `vni` is the
+/// Geneve VNI. The Rx path keys delivery on the outer group rather than the VNI,
+/// but a well-formed value is required for the frame to parse.
+///
+/// # Errors
+///
+/// Returns an error if the DLPI link cannot be opened in raw mode or the frame
+/// cannot be transmitted.
+///
+/// # Examples
+///
+/// ```ignore
+/// inject_underlay_mcast_v4(
+///     &mcast_underlay,                  // underlay_group
+///     "10.0.0.1".parse().unwrap(),      // inner_src
+///     Ipv4Addr::from([224, 0, 0, 251]), // inner_dst
+///     Vni::new(DEFAULT_MULTICAST_VNI)?, // vni
+///     MCAST_TEST_PORT,                  // dst_port
+///     b"rx-only",                       // payload
+/// )?;
+/// ```
+pub fn inject_underlay_mcast_v4(
+    underlay_group: &MulticastUnderlay,
+    inner_src: Ipv4Addr,
+    inner_dst: Ipv4Addr,
+    vni: Vni,
+    dst_port: u16,
+    payload: &[u8],
+) -> Result<()> {
+    let outer_group = underlay_group.addr();
+    let outer_group_bytes = outer_group.bytes();
+
+    // Inner Ethernet header. The Rx path rewrites this destination MAC to the
+    // canonical multicast MAC derived from the inner IP, so the value set here
+    // is overwritten before delivery.
+    let inner_eth = Ethernet {
+        destination: MacAddr::from([0x01, 0x00, 0x5e, 0x00, 0x00, 0x01]),
+        source: MacAddr::from([0x00, 0x16, 0x3e, 0x00, 0x00, 0x01]),
+        ethertype: Ethertype::IPV4,
+    };
+    let inner_ip = Ipv4 {
+        source: inner_src,
+        destination: inner_dst,
+        protocol: IngotIpProto::UDP,
+        hop_limit: 64,
+        total_len: (Ipv4::MINIMUM_LENGTH + Udp::MINIMUM_LENGTH + payload.len())
+            as u16,
+        ..Default::default()
+    };
+    let inner_udp = Udp {
+        source: 0x1234,
+        destination: dst_port,
+        length: (Udp::MINIMUM_LENGTH + payload.len()) as u16,
+        ..Default::default()
+    };
+
+    let inner_pkt = (inner_eth, inner_ip, inner_udp, payload);
+    let inner_len = inner_pkt.packet_length();
+
+    // Geneve with no options. The default protocol type is Ethernet (0x6558).
+    let geneve = Geneve { vni, ..Default::default() };
+
+    let outer_udp = Udp {
+        source: 0x1e61,
+        destination: GENEVE_PORT,
+        length: (Udp::MINIMUM_LENGTH + geneve.packet_length() + inner_len)
+            as u16,
+        ..Default::default()
+    };
+    let outer_ip = Ipv6 {
+        source: "fd00::1".parse().unwrap(),
+        destination: outer_group,
+        next_header: IngotIpProto::UDP,
+        hop_limit: 64,
+        payload_len: outer_udp.length,
+        ..Default::default()
+    };
+    // Outer Ethernet: IPv6 multicast MAC per RFC 2464 (33:33 + low 32 bits).
+    let outer_eth = Ethernet {
+        destination: MacAddr::from([
+            0x33,
+            0x33,
+            outer_group_bytes[12],
+            outer_group_bytes[13],
+            outer_group_bytes[14],
+            outer_group_bytes[15],
+        ]),
+        source: MacAddr::from([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        ethertype: Ethertype::IPV6,
+    };
+
+    let bytes = (outer_eth, outer_ip, outer_udp, geneve, inner_pkt).emit_vec();
+
+    // Open the underlay link in raw mode and transmit the assembled frame.
+    // The handle is closed when `_h` drops, before this function returns.
+    let handle = dlpi::open(UNDERLAY_INJECT_DEVICE, dlpi::sys::DLPI_RAW)
+        .map_err(|e| {
+            anyhow!("dlpi::open({UNDERLAY_INJECT_DEVICE}) failed: {e}")
+        })?;
+    let _h = dlpi::DropHandle(handle);
+
+    // `dlpi_send` requires the stream in DL_IDLE, which `dlpi_bind` provides;
+    // an unbound send is rejected with DL_OUTSTATE. See [`INJECT_SAP`] for why
+    // the bound service access point is arbitrary in DLPI_RAW.
+    dlpi::bind(handle, INJECT_SAP)
+        .map_err(|e| anyhow!("dlpi::bind on {UNDERLAY_INJECT_DEVICE}: {e}"))?;
+    dlpi::send(handle, &[], &bytes, None)
+        .map_err(|e| anyhow!("dlpi::send on {UNDERLAY_INJECT_DEVICE}: {e}"))?;
     Ok(())
 }
 
@@ -888,8 +1075,13 @@ pub fn two_node_topology() -> Result<Topology> {
     Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
 
     // Create the first OPTE port with the provided overlay/underlay parameters.
-    let opte0 =
-        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    let opte0 = OptePort::new(
+        "opte0",
+        "10.0.0.1",
+        "a8:40:25:ff:00:01",
+        "fd44::1",
+        None,
+    )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.fw_allow_all()?;
 
@@ -909,8 +1101,13 @@ pub fn two_node_topology() -> Result<Topology> {
         RouteV6::new(opte0.underlay_ip(), 64, ll0.ip, Some(vn1.name.clone()))?;
 
     // Create the second OPTE port with the provided overlay/underlay parameters.
-    let opte1 =
-        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
+    let opte1 = OptePort::new(
+        "opte1",
+        "10.0.0.2",
+        "a8:40:25:ff:00:02",
+        "fd77::1",
+        None,
+    )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.fw_allow_all()?;
 
@@ -993,6 +1190,7 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
         "fd00::1",
         "a8:40:25:ff:00:01",
         "fd44::1",
+        None,
     )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.fw_allow_all()?;
@@ -1007,6 +1205,7 @@ pub fn two_node_topology_dualstack() -> Result<Topology> {
         "fd00::2",
         "a8:40:25:ff:00:02",
         "fd77::1",
+        None,
     )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.fw_allow_all()?;
@@ -1080,20 +1279,35 @@ pub fn three_node_topology() -> Result<Topology> {
     Xde::set_v2p("10.0.0.3", "a8:40:25:ff:00:03", "fd88::1")?;
 
     // Create three OPTE ports
-    let opte0 =
-        OptePort::new("opte0", "10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
+    let opte0 = OptePort::new(
+        "opte0",
+        "10.0.0.1",
+        "a8:40:25:ff:00:01",
+        "fd44::1",
+        None,
+    )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.add_router_entry("10.0.0.3")?;
     opte0.fw_allow_all()?;
 
-    let opte1 =
-        OptePort::new("opte1", "10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
+    let opte1 = OptePort::new(
+        "opte1",
+        "10.0.0.2",
+        "a8:40:25:ff:00:02",
+        "fd77::1",
+        None,
+    )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.add_router_entry("10.0.0.3")?;
     opte1.fw_allow_all()?;
 
-    let opte2 =
-        OptePort::new("opte2", "10.0.0.3", "a8:40:25:ff:00:03", "fd88::1")?;
+    let opte2 = OptePort::new(
+        "opte2",
+        "10.0.0.3",
+        "a8:40:25:ff:00:03",
+        "fd88::1",
+        None,
+    )?;
     opte2.add_router_entry("10.0.0.1")?;
     opte2.add_router_entry("10.0.0.2")?;
     opte2.fw_allow_all()?;
@@ -1189,6 +1403,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::1",
         "a8:40:25:ff:00:01",
         "fd44::1",
+        None,
     )?;
     opte0.add_router_entry("10.0.0.2")?;
     opte0.add_router_entry("10.0.0.3")?;
@@ -1200,6 +1415,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::2",
         "a8:40:25:ff:00:02",
         "fd77::1",
+        None,
     )?;
     opte1.add_router_entry("10.0.0.1")?;
     opte1.add_router_entry("10.0.0.3")?;
@@ -1211,6 +1427,7 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
         "fd00::3",
         "a8:40:25:ff:00:03",
         "fd88::1",
+        None,
     )?;
     opte2.add_router_entry("10.0.0.1")?;
     opte2.add_router_entry("10.0.0.2")?;
@@ -1284,13 +1501,15 @@ pub fn three_node_topology_dualstack() -> Result<Topology> {
 
 #[derive(Copy, Clone)]
 pub struct PortInfo {
-    pub ip: IpAddr,
+    pub priv_ip4: Ipv4Addr,
+    pub priv_ip6: Ipv6Addr,
     pub mac: MacAddr,
     pub underlay_addr: Ipv6Addr,
 }
 
 pub const ZONE_A_PORT: PortInfo = PortInfo {
-    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 1])),
+    priv_ip4: Ipv4Addr::from_const([10, 0, 0, 1]),
+    priv_ip6: Ipv6Addr::from_const([0xfd00, 0, 0, 0, 0, 0, 0, 1]),
     mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x01]),
     underlay_addr: Ipv6Addr::from_const([
         0xfd44, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -1298,7 +1517,8 @@ pub const ZONE_A_PORT: PortInfo = PortInfo {
 };
 
 pub const ZONE_B_PORT: PortInfo = PortInfo {
-    ip: IpAddr::Ip4(Ipv4Addr::from_const([10, 0, 0, 2])),
+    priv_ip4: Ipv4Addr::from_const([10, 0, 0, 2]),
+    priv_ip6: Ipv6Addr::from_const([0xfd00, 0, 0, 0, 0, 0, 0, 2]),
     mac: MacAddr::from_const([0xa8, 0x40, 0x25, 0xff, 0x00, 0x02]),
     underlay_addr: Ipv6Addr::from_const([
         0xfd77, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
@@ -1341,6 +1561,7 @@ pub fn get_linklocal_addr(link_name: &str) -> Result<std::net::Ipv6Addr> {
 pub fn single_node_over_real_nic(
     underlay: &[String; 2],
     my_info: PortInfo,
+    mtu: Option<NonZeroU32>,
     peers: &[PortInfo],
     null_port_count: u32,
     brand: &str,
@@ -1392,27 +1613,35 @@ pub fn single_node_over_real_nic(
             "172.20.0.1",
             &taken_mac,
             &underlay_addr,
+            None,
         )?);
     }
 
-    let ip = my_info.ip.to_string();
+    let ip4 = my_info.priv_ip4.to_string();
+    let ip6 = my_info.priv_ip6.to_string();
     let mac = my_info.mac.to_string();
-    Xde::set_v2p(&ip, &mac, &underlay_addr)?;
+    Xde::set_v2p(&ip4, &mac, &underlay_addr)?;
+    Xde::set_v2p(&ip6, &mac, &underlay_addr)?;
 
-    let opte = OptePort::new(
+    let opte = OptePort::new_dualstack(
         &format!("opte{}", null_ports.len()),
-        &ip,
+        &ip4,
+        &ip6,
         &mac,
         &underlay_addr,
+        mtu,
     )?;
 
     let v6_routes = vec![];
     for peer in peers {
-        let ip = peer.ip.to_string();
+        let ip4 = peer.priv_ip4.to_string();
+        let ip6 = peer.priv_ip6.to_string();
         let mac = peer.mac.to_string();
         let underlay_addr = peer.underlay_addr.to_string();
-        Xde::set_v2p(&ip, &mac, &underlay_addr)?;
-        opte.add_router_entry(&ip)?;
+        Xde::set_v2p(&ip4, &mac, &underlay_addr)?;
+        Xde::set_v2p(&ip6, &mac, &underlay_addr)?;
+        opte.add_router_entry(&ip4)?;
+        opte.add_router_entry(&ip6)?;
     }
 
     opte.fw_allow_all()?;
@@ -1424,7 +1653,7 @@ pub fn single_node_over_real_nic(
     let a = OpteZone::new("a", &zfs, &[&opte.name], brand)?;
 
     println!("setup zone");
-    a.setup(&opte.name, opte.ip())?;
+    a.setup_dualstack(&opte.name, opte.ip(), opte.ipv6().unwrap())?;
 
     Ok(Topology {
         nodes: vec![TestNode { zone: a, port: opte }],
