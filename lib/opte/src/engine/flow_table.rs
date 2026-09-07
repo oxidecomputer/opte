@@ -66,6 +66,12 @@ impl Ttl {
     }
 }
 
+/// An eviction policy table which makes TCP flow entries without live flowstate
+/// parents trivially evictable. When present, the TCP flow state will signal
+/// a value to be used in its place.
+#[derive(Clone, Copy, Debug)]
+pub struct TtlDelegateTcp(pub Ttl);
+
 /// A metric of how stale a flow entry is, used to determine whether
 /// any existing entry can be evicted to make room for a new one.
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Default)]
@@ -100,6 +106,20 @@ pub trait ExpiryPolicy<S: FlowState>: fmt::Debug + Send + Sync {
 impl<S: FlowState> ExpiryPolicy<S> for Ttl {
     fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
         self.is_expired(entry.last_hit(), now)
+    }
+
+    fn eviction_priority(
+        &self,
+        _entry: &FlowEntry<S>,
+        _now: Moment,
+    ) -> Option<EvictionPriority> {
+        None
+    }
+}
+
+impl<S: FlowState> ExpiryPolicy<S> for TtlDelegateTcp {
+    fn is_expired(&self, entry: &FlowEntry<S>, now: Moment) -> bool {
+        self.0.is_expired(entry.last_hit(), now)
     }
 
     fn eviction_priority(
