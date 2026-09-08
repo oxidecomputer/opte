@@ -495,6 +495,11 @@ pub const DEFAULT_ROUTER_PRIORITY: u16 = 1000;
 pub const MAX_ROUTER_LIST_ENTRIES: usize = 64;
 
 impl RouterList {
+    /// Build a list from `(priority, router)` entries. The list is sorted
+    /// by priority; duplicate priorities and duplicate routers (including
+    /// the default router `None` listed more than once) are rejected: a
+    /// router appearing at two priorities adds no expressiveness, since
+    /// only its best-priority entry could ever win a tie.
     pub fn new(
         mut entries: Vec<(u16, TunnelRouterId)>,
     ) -> Result<Self, String> {
@@ -507,6 +512,15 @@ impl RouterList {
         entries.sort_by_key(|(prio, _)| *prio);
         if entries.windows(2).any(|w| w[0].0 == w[1].0) {
             return Err("duplicate priority in router list".to_string());
+        }
+        let mut routers: Vec<TunnelRouterId> =
+            entries.iter().map(|(_, r)| *r).collect();
+        routers.sort();
+        if let Some(w) = routers.windows(2).find(|w| w[0] == w[1]) {
+            return Err(match w[0] {
+                Some(id) => format!("duplicate router {id} in router list"),
+                None => "duplicate default router in router list".to_string(),
+            });
         }
         Ok(Self(entries))
     }

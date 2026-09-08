@@ -1345,6 +1345,28 @@ mod tests {
     }
 
     #[test]
+    fn router_list_rejects_duplicate_routers() {
+        let r1 = Some(Uuid::from_u128(1));
+        let r2 = Some(Uuid::from_u128(2));
+        // The same router at two different priorities.
+        let err = RouterList::new(vec![(10, r1), (20, r1)]).unwrap_err();
+        assert!(err.contains("duplicate router"), "{err}");
+        // The default router listed twice.
+        let err = RouterList::new(vec![(10, None), (20, None)]).unwrap_err();
+        assert!(err.contains("duplicate default router"), "{err}");
+        // Duplicates hidden among valid entries, in any order.
+        assert!(RouterList::new(vec![(30, r2), (10, None), (20, r1), (5, r2)])
+            .is_err());
+        // Distinct routers, including one default entry, are fine.
+        let list =
+            RouterList::new(vec![(20, r2), (1000, None), (10, r1)]).unwrap();
+        assert_eq!(list.entries(), &[(10, r1), (20, r2), (1000, None)]);
+        // A duplicate priority is still reported as such (checked first).
+        let err = RouterList::new(vec![(10, r1), (10, None)]).unwrap_err();
+        assert!(err.contains("duplicate priority"), "{err}");
+    }
+
+    #[test]
     fn router_list_rejects_oversized_lists() {
         let entries: Vec<_> = (0..=crate::api::MAX_ROUTER_LIST_ENTRIES)
             .map(|i| (i as u16, Some(Uuid::from_u128(i as u128))))
