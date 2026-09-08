@@ -94,14 +94,22 @@ pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
 /// Default VNI for rack-wide multicast groups (no VPC association).
 /// Must match Omicron's DEFAULT_MULTICAST_VNI.
 ///
-/// This is the only VNI currently supported for multicast traffic.
-/// All multicast groups (M2P mappings and forwarding entries) must use this VNI.
-/// OPTE validates that multicast operations specify this VNI and rejects others.
+/// This is the only VNI currently supported for multicast. OPTE rejects
+/// multicast operations (M2P mappings and forwarding entries) that specify
+/// any other VNI.
 ///
-/// While M2P (Multicast-to-Physical) mappings are stored
-/// per-VNI in the code, the enforcement of DEFAULT_MULTICAST_VNI means all
-/// multicast traffic shares a single namespace across the rack, with no
-/// VPC-level isolation (as multicast groups are fleet-wide) *as of now*.
+/// M2P (Multicast-to-Physical) mappings are keyed by multicast group, not
+/// VNI. All multicast traffic currently shares one rack-wide namespace; no
+/// VPC isolation.
+///
+/// On the inbound path, the overlay layer's `MulticastVniValidator` (see
+/// [`overlay`]) accepts a multicast packet whose Geneve VNI is either this
+/// value or the receiving port's own VPC VNI, and denies otherwise.
+/// [`EncapAction`] stamps this VNI on every outbound multicast packet, so
+/// nothing today actually hits the per-VPC branch.
+///
+/// [`overlay`]: crate::engine::overlay
+/// [`EncapAction`]: crate::engine::overlay::EncapAction
 pub const DEFAULT_MULTICAST_VNI: u32 = 77u32;
 
 /// Description of Boundary Services, the endpoint used to route traffic
