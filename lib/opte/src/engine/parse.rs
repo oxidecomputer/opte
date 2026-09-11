@@ -54,11 +54,14 @@ use ingot::icmp::IcmpV6Ref;
 use ingot::icmp::ValidIcmpV4;
 use ingot::icmp::ValidIcmpV6;
 use ingot::ip::IpProtocol;
+use ingot::ip::Ipv4Flags;
+use ingot::ip::ValidLowRentV6Eh;
 use ingot::tcp::Tcp;
 use ingot::tcp::TcpFlags;
 use ingot::tcp::TcpMut;
 use ingot::tcp::TcpRef;
 use ingot::tcp::ValidTcp;
+use ingot::types::BoxedHeader;
 use ingot::types::ByteSlice;
 use ingot::types::Emit;
 use ingot::types::Header;
@@ -263,13 +266,14 @@ impl<B: ByteSlice> Ulp<B> {
 #[derive(Parse)]
 pub struct GeneveOverV6<Q: ByteSlice> {
     pub outer_eth: EthernetPacket<Q>,
-    #[ingot(from = "L3<Q>")]
+    #[ingot(from = "L3<Q>", control = no_fragments)]
     pub outer_v6: Ipv6Packet<Q>,
     #[ingot(from = "L4<Q>", control = geneve_dst_port)]
     pub outer_udp: UdpPacket<Q>,
     pub outer_encap: GenevePacket<Q>,
 
     pub inner_eth: EthernetPacket<Q>,
+    #[ingot(control = no_fragments)]
     pub inner_l3: L3<Q>,
     pub inner_ulp: Ulp<Q>,
 }
@@ -331,6 +335,34 @@ impl fmt::Display for MeoiError {
             }
         }
     }
+}
+
+#[inline]
+fn opt_no_fragments<V: ByteSlice>(l3: &Option<ValidL3<V>>) -> ParseControl {
+    l3.as_ref().map(no_fragments).unwrap_or(ParseControl::Continue)
+}
+
+#[inline]
+fn no_fragments<V: ByteSlice>(l3: &ValidL3<V>) -> ParseControl {
+    let fragmented = match l3 {
+        ValidL3::Ipv4(v4) => {
+            v4.flags().contains(Ipv4Flags::MORE_FRAGMENTS)
+                || v4.fragment_offset() != 0
+        }
+        ValidL3::Ipv6(v6) => {
+            let curr_ipp = v6.next_header();
+            match &v6.1 {
+                BoxedHeader::Raw(a) => a.iter(Some(curr_ipp)).any(|v| {
+                    matches!(v, Ok(ValidLowRentV6Eh::IpV6ExtFragment(_)))
+                }),
+                BoxedHeader::Repr(_) => {
+                    unreachable!("ingot must output `Raw` when parsing")
+                }
+            }
+        }
+    };
+
+    if !fragmented { ParseControl::Continue } else { ParseControl::Reject }
 }
 
 #[inline]
@@ -398,6 +430,7 @@ fn flow_id<V: ByteSlice>(
 pub struct NoEncap<Q: ByteSlice> {
     #[ingot(control = exit_on_arp)]
     pub inner_eth: EthernetPacket<Q>,
+    #[ingot(control = opt_no_fragments)]
     pub inner_l3: Option<L3<Q>>,
     pub inner_ulp: Option<Ulp<Q>>,
 }

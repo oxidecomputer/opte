@@ -808,14 +808,14 @@ pub fn http_get_ack2(
 
 pub fn http_301_reply2(
     eth_src: MacAddr,
-    ip_src: Ipv4Addr,
+    ip_src: impl Into<IpAddr>,
     eth_dst: MacAddr,
-    ip_dst: Ipv4Addr,
+    ip_dst: impl Into<IpAddr>,
     dst_port: u16,
 ) -> MsgBlk {
     // The details of the HTTP body are irrelevant to our testing. You
     // only need know it's 34 characters for the purposes of seq/ack.
-    let body = "HTTP/1.1 301 Moved Permanently\r\n\r\n".as_bytes();
+    let body = b"HTTP/1.1 301 Moved Permanently\r\n\r\n";
     let tcp = Tcp {
         source: 80,
         destination: dst_port,
@@ -824,20 +824,36 @@ pub fn http_301_reply2(
         flags: IngotTcpFlags::PSH | IngotTcpFlags::ACK,
         ..Default::default()
     };
-    let ip4 = Ipv4 {
-        total_len: (Ipv4::MINIMUM_LENGTH + tcp.packet_length() + body.len())
-            as u16,
-        protocol: IngotIpProto::TCP,
-        source: ip_src,
-        destination: ip_dst,
-        ..Default::default()
+    let (ethertype, ip) = match (ip_src.into(), ip_dst.into()) {
+        (IpAddr::Ip4(source), IpAddr::Ip4(destination)) => (
+            Ethertype::IPV4,
+            L3Repr::Ipv4(Ipv4 {
+                total_len: (Ipv4::MINIMUM_LENGTH
+                    + tcp.packet_length()
+                    + body.len()) as u16,
+                identification: 12345,
+                hop_limit: 64,
+                protocol: IngotIpProto::TCP,
+                source,
+                destination,
+                ..Default::default()
+            }),
+        ),
+        (IpAddr::Ip6(source), IpAddr::Ip6(destination)) => (
+            Ethertype::IPV6,
+            L3Repr::Ipv6(Ipv6 {
+                payload_len: (tcp.packet_length() + body.len()) as u16,
+                next_header: IngotIpProto::TCP,
+                hop_limit: 64,
+                source,
+                destination,
+                ..Default::default()
+            }),
+        ),
+        _ => panic!("source and destination must be the same IP version"),
     };
-    let eth = Ethernet {
-        destination: eth_dst,
-        source: eth_src,
-        ethertype: Ethertype::IPV4,
-    };
-    ulp_pkt(eth, ip4, tcp, body)
+    let eth = Ethernet { destination: eth_dst, source: eth_src, ethertype };
+    ulp_pkt(eth, ip, tcp, body)
 }
 
 pub fn http_301_ack2(
