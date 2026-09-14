@@ -23,6 +23,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU16;
 use core::num::NonZeroU32;
+use core::ops::ControlFlow;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering;
@@ -270,18 +271,35 @@ pub struct FlowTable<S: FlowState> {
 
     // When looking up an eviction candidate, we cannot perform a whole table
     // scan. Ideally we would have a secondary candidate list maintained by
-    // the periodic cleanup task.
+    // the periodic cleanup task. However, eviction priority policy is currently
+    // too free-form for us to keep flow hashes in any way that would allow the
+    // datapath to quickly find a global maximum. Sorting flows by timestamp
+    // would *not* suffice for helping us find a better entry or a point to exit
+    // early.
     //
     // For now, and in any future case where we have no valid entries in said
     // list, we want to examine a subset of `map` but don't want to keep
-    // rechecking the first `n` entries.
+    // rechecking the first `n` entries. Whenever an entry is not `Protected`
+    // but has a lower score than an element we end up evicting, we add it to
+    // a small cache if there is space. This increases the odds of finding *a*
+    // misbehaving flow.
+    //
+    // At present this is only extended during a partial scan from the datapath.
+    // In future it will be more helpful for the periodic cleanup task to
+    // provide better estimates here, but this would make its own full table scan
+    // too expensive.
     eviction_cursor: Option<InnerFlowId>,
+    evictable_cache: BTreeSet<InnerFlowId>,
 }
 
 impl<S: FlowState> FlowTable<S> {
     /// The maximum number of distinct entries that a single call to
     /// [`Self::find_evictable_entry`] will consider.
     const SCAN_BUDGET: usize = 2048;
+
+    /// The maximum number of distinct entries that a single call to
+    /// [`Self::find_evictable_entry`] will consider.
+    const EVICTION_CACHE_MAX: usize = 512;
 
     /// Add a new entry to the flow table, returning a shared refrence to
     /// the entry.
@@ -398,6 +416,8 @@ impl<S: FlowState> FlowTable<S> {
 
             !entry.is_killed()
         });
+
+        self.cleanup_eviction_cache(now);
     }
 
     /// Remove all flows from `self` which are past their expiry time,
@@ -465,6 +485,20 @@ impl<S: FlowState> FlowTable<S> {
 
             !entry.is_killed()
         });
+
+        self.cleanup_eviction_cache(now);
+    }
+
+    /// Remove any elements from `self.eviction_cache` which have become
+    /// `Protected` or stale.
+    fn cleanup_eviction_cache(&mut self, now: Moment) {
+        self.evictable_cache.retain(|id| match self.map.get(id) {
+            Some(v) => match v.eviction_priority(now) {
+                None | Some(EvictionPriority::Protected) => false,
+                Some(_) => true,
+            },
+            None => false,
+        });
     }
 
     /// Determine whether there is currently space for a new entry to be
@@ -494,19 +528,48 @@ impl<S: FlowState> FlowTable<S> {
     ) -> Option<(InnerFlowId, &FlowEntry<S>)> {
         let now = Moment::now();
 
-        // TODO: some form of datastructure to accelerate this?
-        // Who would be responsible for keeping that up to date?
-        // If that cache is wrong, we're just hitting the limited scan anyhow.
-        let len = self.map.len();
-        let to_scan = len.min(Self::SCAN_BUDGET);
+        // The datastructures here help find at least one evictable entry, from
+        // which we select the best we know of. We cache the keys of any flows
+        // which were misbehaving in some way, expecting that these are liable
+        // to *keep* misbehaving for subsequent packets and to become worse over
+        // time.
+        //
+        // Finding the best (table-wide) in a limited number of operations is
+        // currently infeasible with how eviction scoring is designed.
+        let to_scan = self.map.len().min(Self::SCAN_BUDGET);
 
         let mut to_evict = None;
-
         let mut visited = 0;
-        while visited < to_scan {
-            let map = if let Some(from) = self.eviction_cursor.take()
-                && to_scan < len
-            {
+
+        // First, check our cache of entries which had *an* eviction score, and
+        // store a reference to the most eligible. While doing so, clean out any
+        // entries which are unevictable, or are dead references.
+        self.evictable_cache.retain(|id| match self.map.get(id) {
+            Some(entry) => {
+                visited += 1;
+                match update_eviction_incumbent(
+                    id,
+                    entry,
+                    None,
+                    &mut to_evict,
+                    now,
+                ) {
+                    // Sadly, there's no retain_until method, so we can't leave
+                    // the cache scan early if we encounter `Break`. If there are
+                    // several such entries, then leaving them in place *will*
+                    // help subsequent packets.
+                    ControlFlow::Continue(EvictionPriority::Protected) => false,
+                    _ => true,
+                }
+            }
+            None => false,
+        });
+
+        let done =
+            matches!(to_evict, Some(Candidate { key: EvictionKey::Dead, .. }));
+
+        while !done && visited < to_scan {
+            let map = if let Some(from) = self.eviction_cursor.take() {
                 Either::Left(self.map.range(from..))
             } else {
                 Either::Right(self.map.iter())
@@ -521,47 +584,24 @@ impl<S: FlowState> FlowTable<S> {
                 }
                 visited += 1;
 
-                if entry.is_killed() {
-                    to_evict = Some((EvictionKey::Dead, *key, entry));
+                if let ControlFlow::Break(_) = update_eviction_incumbent(
+                    key,
+                    entry,
+                    Some(&mut self.evictable_cache),
+                    &mut to_evict,
+                    now,
+                ) {
                     break;
-                }
-
-                // If we have no information, then default to preserving the flow.
-                let prio = entry.eviction_priority(now).unwrap_or_default();
-                if let EvictionPriority::Protected = prio {
-                    continue;
-                }
-
-                let last_hit = entry.last_hit();
-
-                match to_evict {
-                    None => {
-                        to_evict = Some((
-                            EvictionKey::Evictable(prio, last_hit),
-                            *key,
-                            entry,
-                        ))
-                    }
-                    Some((
-                        EvictionKey::Evictable(curr_prio, curr_time),
-                        ..,
-                    )) if prio > curr_prio
-                        || (prio == curr_prio && last_hit < curr_time) =>
-                    {
-                        to_evict = Some((
-                            EvictionKey::Evictable(prio, last_hit),
-                            *key,
-                            entry,
-                        ));
-                    }
-                    Some(_) => {}
                 }
             }
         }
 
-        to_evict.map(|(_, k, v)| {
-            self.eviction_cursor = Some(k);
-            (k, v.as_ref())
+        to_evict.map(|Candidate { id, entry, source, .. }| {
+            match source {
+                EvictionSource::Table => self.eviction_cursor = Some(id),
+                EvictionSource::Cache => _ = self.evictable_cache.remove(&id),
+            }
+            (id, entry.as_ref())
         })
     }
 
@@ -603,6 +643,7 @@ impl<S: FlowState> FlowTable<S> {
             policy,
             map: BTreeMap::new(),
             eviction_cursor: None,
+            evictable_cache: BTreeSet::new(),
         }
     }
 
@@ -866,9 +907,84 @@ unsafe extern "C" {
 }
 
 /// A score of how likely we are to evict a given flow.
+#[derive(Copy, Clone)]
 enum EvictionKey {
     Dead,
     Evictable(EvictionPriority, Moment),
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum EvictionSource {
+    Table,
+    Cache,
+}
+
+struct Candidate<'a, S: FlowState> {
+    key: EvictionKey,
+    source: EvictionSource,
+    id: InnerFlowId,
+    entry: &'a Arc<FlowEntry<S>>,
+}
+
+fn update_eviction_incumbent<'a, S: FlowState>(
+    id: &InnerFlowId,
+    entry: &'a Arc<FlowEntry<S>>,
+    cache: Option<&mut BTreeSet<InnerFlowId>>,
+    versus: &mut Option<Candidate<'a, S>>,
+    now: Moment,
+) -> ControlFlow<(), EvictionPriority> {
+    let source = if cache.is_some() {
+        EvictionSource::Table
+    } else {
+        EvictionSource::Cache
+    };
+
+    if entry.is_killed() {
+        *versus =
+            Some(Candidate { key: EvictionKey::Dead, id: *id, entry, source });
+        ControlFlow::Break(())?;
+    }
+
+    // If we have no information, then default to preserving the flow.
+    let prio = entry.eviction_priority(now).unwrap_or_default();
+    if let EvictionPriority::Protected = prio {
+        return ControlFlow::Continue(prio);
+    }
+
+    let last_hit = entry.last_hit();
+
+    match versus {
+        None => {
+            *versus = Some(Candidate {
+                key: EvictionKey::Evictable(prio, last_hit),
+                id: *id,
+                entry,
+                source,
+            });
+        }
+        Some(Candidate {
+            key: EvictionKey::Evictable(curr_prio, curr_time),
+            ..
+        }) if prio > *curr_prio
+            || (prio == *curr_prio && last_hit < *curr_time) =>
+        {
+            *versus = Some(Candidate {
+                key: EvictionKey::Evictable(prio, last_hit),
+                id: *id,
+                entry,
+                source,
+            });
+        }
+        Some(_) => {
+            if let Some(cache) = cache
+                && cache.len() < FlowTable::<S>::EVICTION_CACHE_MAX
+            {
+                _ = cache.insert(*id);
+            }
+        }
+    }
+
+    ControlFlow::Continue(prio)
 }
 
 pub mod util {
@@ -1348,6 +1464,15 @@ mod test {
                 .into(),
         };
 
+        let not_quite_sacrificial_flow = InnerFlowId {
+            proto_info: PortInfo {
+                src_port: (perturb_at + 1) as u16,
+                dst_port: 443,
+            }
+            .into(),
+            ..sacrificial_flow
+        };
+
         let mut evict_ft = FlowTable::new(
             "port",
             "prio-table",
@@ -1355,10 +1480,16 @@ mod test {
             Some(Arc::new(FixedPolicy {
                 time: Duration::from_secs(FLOW_DEF_EXPIRE_SECS),
                 default: Some(EvictionPriority::Protected),
-                manual: vec![(
-                    sacrificial_flow,
-                    EvictionPriority::Evictable(16.try_into().unwrap()),
-                )]
+                manual: vec![
+                    (
+                        sacrificial_flow,
+                        EvictionPriority::Evictable(16.try_into().unwrap()),
+                    ),
+                    (
+                        not_quite_sacrificial_flow,
+                        EvictionPriority::Evictable(15.try_into().unwrap()),
+                    ),
+                ]
                 .into_iter()
                 .collect(),
             })),
@@ -1388,20 +1519,29 @@ mod test {
         // case. Each scan, successful or otherwise, will advance the cursor.
         assert!(evict_ft.find_evictable_entry().is_none());
         let c1 = evict_ft.eviction_cursor.unwrap();
+        assert!(evict_ft.evictable_cache.is_empty());
+
         assert!(evict_ft.find_evictable_entry().is_none());
         let c2 = evict_ft.eviction_cursor.unwrap();
         assert!(c1 < c2);
+        assert!(evict_ft.evictable_cache.is_empty());
+
+        // At this point, we will scan past two evictable flows. We need to
+        // select the most evictable flow here, and keep a record of the one
+        // we _didn't_ select. The next search will choose this element.
         assert!(evict_ft.find_evictable_entry().is_some());
         let c3 = evict_ft.eviction_cursor.unwrap();
         assert!(c2 < c3);
+        assert!(evict_ft.evictable_cache.contains(&not_quite_sacrificial_flow));
 
         evict_ft.expire(&c3, true);
 
         // A scan should wrap around at the end of the map, if we hit the end
-        // with some remaining budget. Accordingly exepct that the flow ID
+        // with some remaining budget. Accordingly expect that the flow ID
         // checkpoint is *lower* this time.
-        assert!(evict_ft.find_evictable_entry().is_none());
+        assert!(evict_ft.find_evictable_entry().is_some());
         let c4 = evict_ft.eviction_cursor.unwrap();
+        assert!(evict_ft.evictable_cache.is_empty());
         assert!(c4 < c3);
     }
 
