@@ -26,6 +26,7 @@ pub mod packet;
 pub mod parse;
 pub mod port;
 pub mod predicate;
+pub mod props;
 pub mod rule;
 pub mod snat;
 #[macro_use]

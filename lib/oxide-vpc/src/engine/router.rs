@@ -466,6 +466,20 @@ impl fmt::Display for RouterAction {
     }
 }
 
+impl opte::engine::props::ActionProperties for RouterAction {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["target", "class"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "target" => Some(self.target.to_string()),
+            "class" => Some(self.target.class().to_string()),
+            _ => None,
+        }
+    }
+}
+
 impl MetaAction for RouterAction {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         (vec![], vec![])

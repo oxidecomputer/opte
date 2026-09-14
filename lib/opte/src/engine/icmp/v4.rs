@@ -26,6 +26,22 @@ use opte::engine::Checksum as OpteCsum;
 pub use opte_api::ip::IcmpEchoReply;
 use smoltcp::wire;
 
+impl crate::engine::props::ActionProperties for IcmpEchoReply {
+    fn property_names(&self) -> &'static [&'static str] {
+        &["echo_src_mac", "echo_src_ip", "echo_dst_mac", "echo_dst_ip"]
+    }
+    fn get_property(&self, name: &str) -> Option<alloc::string::String> {
+        use alloc::string::ToString;
+        match name {
+            "echo_src_mac" => Some(self.echo_src_mac.to_string()),
+            "echo_src_ip" => Some(self.echo_src_ip.to_string()),
+            "echo_dst_mac" => Some(self.echo_dst_mac.to_string()),
+            "echo_dst_ip" => Some(self.echo_dst_ip.to_string()),
+            _ => None,
+        }
+    }
+}
+
 impl HairpinAction for IcmpEchoReply {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         let hdr_preds = vec![

@@ -487,4 +487,19 @@ pub struct RuleDump {
     pub predicates: Vec<String>,
     pub data_predicates: Vec<String>,
     pub action: String,
+    /// Read-only diagnostic properties exposed by the rule's [`Action`],
+    /// modeled after `dladm show-linkprop`. Populated by implementations
+    /// of the `ActionProperties` trait.
+    pub action_properties: Vec<ActionProperty>,
+}
+
+/// A single key/value diagnostic property of an [`Action`] (or another
+/// `NetworkImpl`-defined object).
+///
+/// Properties are immutable once the owning object is constructed and
+/// are intended for human and machine readers (e.g. `opteadm show-prop`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActionProperty {
+    pub name: String,
+    pub value: String,
 }
