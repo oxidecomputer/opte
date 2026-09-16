@@ -8,9 +8,23 @@
 
 use super::Ipv6Addr;
 use super::MacAddr;
+use alloc::vec::Vec;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Display;
+use ingot::ethernet::Ethernet;
+use ingot::ethernet::Ethertype;
+use ingot::ip::IpProtocol as IngotIpProto;
+use ingot::ip::Ipv6;
+use smoltcp::phy::Checksum;
+use smoltcp::phy::ChecksumCapabilities as Csum;
+use smoltcp::time::Duration;
+use smoltcp::wire::Icmpv6Packet;
+use smoltcp::wire::Icmpv6Repr;
+use smoltcp::wire::IpAddress;
+use smoltcp::wire::NdiscRepr;
+use smoltcp::wire::NdiscRouterFlags;
+use smoltcp::wire::RawHardwareAddress;
 
 /// A Neighbor Discovery Protocol Router Advertisement, generated in response to
 /// a Router Solicitation.
@@ -63,6 +77,71 @@ impl RouterAdvertisement {
     /// Return the IPv6 address the router sends advertisements from.
     pub fn ip(&self) -> &Ipv6Addr {
         &self.ip
+    }
+
+    /// Build an NDP Router Advertisement destined for the provided address.
+    pub fn build_router_advert_for(
+        &self,
+        dst_mac: MacAddr,
+        dst_ip: Ipv6Addr,
+    ) -> (Ethernet, Ipv6, Vec<u8>) {
+        let flags = if self.managed_cfg {
+            NdiscRouterFlags::MANAGED
+        } else {
+            NdiscRouterFlags::empty()
+        };
+        const MAX_ROUTER_ADV_LIFETIME: Duration = Duration::from_secs(9_000);
+        const ZERO_DURATION: Duration = Duration::from_millis(0);
+        let advert = NdiscRepr::RouterAdvert {
+            hop_limit: u8::MAX,
+            flags,
+            // Use the maximum advertised lifetime as a default router.
+            router_lifetime: MAX_ROUTER_ADV_LIFETIME,
+            // Do not specify the reachable or retrans time. Clients will decide
+            // that for themselves at this point.
+            reachable_time: ZERO_DURATION,
+            retrans_time: ZERO_DURATION,
+            lladdr: Some(RawHardwareAddress::from_bytes(&self.mac)),
+            mtu: self.mtu,
+            // Indicate that there are no addresses considered on-link, other
+            // than the router's advertised link-local address. This will
+            // require all traffic from the client to go through OPTE.
+            prefix_info: None,
+        };
+        let reply = Icmpv6Repr::Ndisc(advert);
+
+        let reply_len = reply.buffer_len();
+        let mut ulp_body = vec![0u8; reply_len];
+        let mut advert_reply = Icmpv6Packet::new_unchecked(&mut ulp_body);
+        let mut csum = Csum::ignored();
+        csum.icmpv6 = Checksum::Tx;
+        reply.emit(
+            &IpAddress::Ipv6((*self.ip()).into()),
+            &IpAddress::Ipv6(dst_ip.into()),
+            &mut advert_reply,
+            &csum,
+        );
+
+        let source = self.ip().bytes().into();
+        let destination = dst_ip.bytes().into();
+        let ip6 = Ipv6 {
+            source,
+            destination,
+            next_header: IngotIpProto::ICMP_V6,
+            payload_len: reply_len as u16,
+
+            // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
+            hop_limit: 255,
+            ..Default::default()
+        };
+
+        let eth = Ethernet {
+            destination: dst_mac.bytes().into(),
+            source: self.mac.bytes().into(),
+            ethertype: Ethertype::IPV6,
+        };
+
+        (eth, ip6, ulp_body)
     }
 }
 

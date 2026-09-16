@@ -1326,6 +1326,7 @@ dependencies = [
  "opte-test-utils",
  "pcap-parser",
  "poptrie",
+ "rand",
  "ron",
  "serde",
  "smoltcp",

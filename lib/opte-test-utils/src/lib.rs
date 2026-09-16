@@ -368,7 +368,7 @@ pub fn oxide_net_setup2(
     let m2p = Arc::new(Mcast2Phys::new());
 
     let converted_cfg = oxide_vpc::cfg::VpcCfg::with_mtu(cfg.clone(), 1500);
-    let vpc_net = VpcNetwork { cfg: converted_cfg.clone(), v2b: v2b.clone() };
+    let vpc_net = VpcNetwork::new(converted_cfg.clone(), v2b.clone());
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
 
