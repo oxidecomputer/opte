@@ -1346,6 +1346,18 @@ impl From<Ipv4Cidr> for ipnetwork::Ipv4Network {
     }
 }
 
+impl poptrie::Prefix for Ipv4Cidr {
+    type ADDRESS = u32;
+
+    fn address(&self) -> Self::ADDRESS {
+        u32::from_be_bytes(self.ip.inner)
+    }
+
+    fn prefix_length(&self) -> u8 {
+        self.prefix_len.val()
+    }
+}
+
 /// An IPv6 CIDR.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Ipv6Cidr {
@@ -1530,6 +1542,18 @@ impl NetworkRepr<[u8; 16]> for Ipv6Addr {
 
     fn from_network(val: [u8; 16]) -> Self {
         Self { inner: val }
+    }
+}
+
+impl poptrie::Prefix for Ipv6Cidr {
+    type ADDRESS = u128;
+
+    fn address(&self) -> Self::ADDRESS {
+        u128::from_be_bytes(self.ip.bytes())
+    }
+
+    fn prefix_length(&self) -> u8 {
+        self.prefix_len.val()
     }
 }
 

@@ -472,6 +472,91 @@ impl PartialEq for TunnelEndpoint {
 
 impl Eq for TunnelEndpoint {}
 
+/// Identifies a router whose boundary table (V2B) may be consulted for
+/// TEP selection. `None` is the default router, i.e. tunnel routes
+/// advertised without a router id.
+pub type RouterId = Option<Uuid>;
+
+/// The prioritized list of routers consulted for boundary TEP selection.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(try_from = "Vec<(u16, RouterId)>", into = "Vec<(u16, RouterId)>")]
+pub struct RouterList(BTreeMap<u16, RouterId>);
+
+/// The priority given to the default router when a port has no
+/// explicit router list.
+pub const DEFAULT_ROUTER_PRIORITY: u16 = 1000;
+
+/// The maximum number of routers that can be associated with a single port.
+pub const MAX_ROUTER_LIST_ENTRIES: usize = 64;
+
+impl RouterList {
+    /// Build a list from `(priority, router)` entries, in any order.
+    /// Duplicate priorities and duplicate routers are rejected.
+    pub fn new(
+        entries: impl IntoIterator<Item = (u16, RouterId)>,
+    ) -> Result<Self, String> {
+        let mut list = BTreeMap::new();
+        for (prio, router) in entries {
+            if list.len() >= MAX_ROUTER_LIST_ENTRIES {
+                return Err(format!(
+                    "router list has more than {MAX_ROUTER_LIST_ENTRIES} entries"
+                ));
+            }
+            if list.contains_key(&prio) {
+                return Err(format!(
+                    "duplicate priority {prio} in router list"
+                ));
+            }
+            if list.values().any(|r| *r == router) {
+                return Err(match router {
+                    Some(id) => format!("duplicate router {id} in router list"),
+                    None => {
+                        "duplicate default router in router list".to_string()
+                    }
+                });
+            }
+            list.insert(prio, router);
+        }
+        Ok(Self(list))
+    }
+
+    /// The list used when nothing has been configured: just the
+    /// default router.
+    pub fn default_only() -> Self {
+        Self(BTreeMap::from([(DEFAULT_ROUTER_PRIORITY, None)]))
+    }
+
+    /// Iterate over routers in priority order.
+    pub fn iter(&self) -> impl Iterator<Item = &RouterId> {
+        self.0.values()
+    }
+
+    /// Iterate over `(priority, router)` entries in priority order.
+    pub fn entries(&self) -> impl Iterator<Item = (u16, RouterId)> + '_ {
+        self.0.iter().map(|(p, r)| (*p, *r))
+    }
+}
+
+impl Default for RouterList {
+    fn default() -> Self {
+        Self::default_only()
+    }
+}
+
+impl TryFrom<Vec<(u16, RouterId)>> for RouterList {
+    type Error = String;
+
+    fn try_from(entries: Vec<(u16, RouterId)>) -> Result<Self, String> {
+        Self::new(entries)
+    }
+}
+
+impl From<RouterList> for Vec<(u16, RouterId)> {
+    fn from(list: RouterList) -> Self {
+        list.0.into_iter().collect()
+    }
+}
+
 /// The physical address for a guest, minus the VNI.
 ///
 /// We save space in the VPC mappings by grouping guest
@@ -684,7 +769,8 @@ pub struct V2bMapResp {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DumpVirt2BoundaryResp {
-    pub mappings: V2bMapResp,
+    /// Per-router mappings; `None` is the default router.
+    pub routers: Vec<(RouterId, V2bMapResp)>,
 }
 
 impl CmdOk for DumpVirt2BoundaryResp {}
@@ -744,19 +830,43 @@ pub struct ClearMcast2PhysReq {
     pub underlay: MulticastUnderlay,
 }
 
-/// Set a mapping from a VPC IP to boundary tunnel endpoint destination.
+/// Set a mapping from a VPC IP to boundary tunnel endpoint destination
+/// in the given router's table (`None` = default router).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SetVirt2BoundaryReq {
+    pub router_id: RouterId,
     pub vip: IpCidr,
     pub tep: Vec<TunnelEndpoint>,
 }
 
-/// Clear a mapping from VPC IP to a boundary tunnel endpoint destination.
+/// Clear a mapping from VPC IP to a boundary tunnel endpoint destination
+/// in the given router's table (`None` = default router).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearVirt2BoundaryReq {
+    pub router_id: RouterId,
     pub vip: IpCidr,
     pub tep: Vec<TunnelEndpoint>,
 }
+
+/// Replace a port's prioritized router list for boundary TEP selection.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SetRouterListReq {
+    pub port_name: String,
+    pub list: RouterList,
+}
+
+/// Read a port's prioritized router list.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpRouterListReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DumpRouterListResp {
+    pub list: RouterList,
+}
+
+impl CmdOk for DumpRouterListResp {}
 
 /// Add an entry to the router. Addresses may be either IPv4 or IPv6, though the
 /// destination and target must match in protocol version.

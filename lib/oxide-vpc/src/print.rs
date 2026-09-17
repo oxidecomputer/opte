@@ -22,6 +22,7 @@ use opte::api::IpCidr;
 use opte::api::Vni;
 use opte::print::*;
 use std::io::Write;
+use std::string::ToString;
 use tabwriter::TabWriter;
 
 /// Print the header for the [`print_v2p()`] output.
@@ -91,25 +92,34 @@ pub fn print_v2b_into(
     let mut t = TabWriter::new(writer);
     writeln!(t, "Virtual to Boundary Mappings")?;
     write_hrb(&mut t)?;
-    writeln!(t, "\nIPv4 mappings")?;
-    write_hr(&mut t)?;
-    print_v2b_header(&mut t)?;
-    for x in &resp.mappings.ip4 {
-        for tep in &x.1 {
-            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
-        }
-    }
-    t.flush()?;
 
-    writeln!(t, "\nIPv6 mappings")?;
-    write_hr(&mut t)?;
-    print_v2b_header(&mut t)?;
-    for x in &resp.mappings.ip6 {
-        for tep in &x.1 {
-            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+    for (router, mappings) in &resp.routers {
+        let router = match router {
+            None => "default".to_string(),
+            Some(id) => id.to_string(),
+        };
+        writeln!(t, "\nRouter: {router}")?;
+
+        writeln!(t, "\nIPv4 mappings")?;
+        write_hr(&mut t)?;
+        print_v2b_header(&mut t)?;
+        for x in &mappings.ip4 {
+            for tep in &x.1 {
+                print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+            }
         }
+        t.flush()?;
+
+        writeln!(t, "\nIPv6 mappings")?;
+        write_hr(&mut t)?;
+        print_v2b_header(&mut t)?;
+        for x in &mappings.ip6 {
+            for tep in &x.1 {
+                print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+            }
+        }
+        writeln!(t)?;
     }
-    writeln!(t)?;
 
     t.flush()
 }
