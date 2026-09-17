@@ -235,9 +235,6 @@ impl HairpinAction for RouterAdvertisement {
     }
 
     fn gen_packet(&self, meta: &MblkPacketData) -> GenPacketResult {
-        use smoltcp::time::Duration;
-        use smoltcp::wire::NdiscRouterFlags;
-
         let Some(icmp6) = meta.inner_icmp6() else {
             // Getting here implies the predicate matched, but that the
             // extracted metadata indicates this isn't an ICMPv6 packet. That
@@ -256,7 +253,8 @@ impl HairpinAction for RouterAdvertisement {
                 "Expected IPv6 packet metadata, but found: {meta:?}",
             )));
         };
-        let src_ip = IpAddress::Ipv6(Ipv6Address(ip6.source().bytes()));
+        let src_ipv6 = ip6.source();
+        let src_ip = IpAddress::Ipv6(Ipv6Address(src_ipv6.bytes()));
         let dst_ip = IpAddress::Ipv6(Ipv6Address(ip6.destination().bytes()));
 
         // `Icmpv6Packet` requires the ICMPv6 header and not just the message payload.
@@ -307,60 +305,8 @@ impl HairpinAction for RouterAdvertisement {
             )));
         }
 
-        let flags = if self.managed_cfg {
-            NdiscRouterFlags::MANAGED
-        } else {
-            NdiscRouterFlags::empty()
-        };
-        const MAX_ROUTER_ADV_LIFETIME: Duration = Duration::from_secs(9_000);
-        const ZERO_DURATION: Duration = Duration::from_millis(0);
-        let advert = NdiscRepr::RouterAdvert {
-            hop_limit: u8::MAX,
-            flags,
-            // Use the maximum advertised lifetime as a default router.
-            router_lifetime: MAX_ROUTER_ADV_LIFETIME,
-            // Do not specify the reachable or retrans time. Clients will decide
-            // that for themselves at this point.
-            reachable_time: ZERO_DURATION,
-            retrans_time: ZERO_DURATION,
-            lladdr: Some(RawHardwareAddress::from_bytes(&self.mac)),
-            mtu: self.mtu,
-            // Indicate that there are no addresses considered on-link, other
-            // than the router's advertised link-local address. This will
-            // require all traffic from the client to go through OPTE.
-            prefix_info: None,
-        };
-        let reply = Icmpv6Repr::Ndisc(advert);
-
-        let reply_len = reply.buffer_len();
-        let mut ulp_body = vec![0u8; reply_len];
-        let mut advert_reply = Icmpv6Packet::new_unchecked(&mut ulp_body);
-        let mut csum = Csum::ignored();
-        csum.icmpv6 = Checksum::Tx;
-        reply.emit(
-            &IpAddress::Ipv6((*self.ip()).into()),
-            &src_ip,
-            &mut advert_reply,
-            &csum,
-        );
-
-        let ip6 = Ipv6 {
-            source: *self.ip(),
-            // Safety: We match on this being Some(_) above, so unwrap is safe.
-            destination: meta.inner_ip6().unwrap().source(),
-            next_header: IngotIpProto::ICMP_V6,
-            payload_len: reply_len as u16,
-
-            // RFC 4861 6.1.2 requires that the hop limit be 255 in an RA.
-            hop_limit: 255,
-            ..Default::default()
-        };
-
-        let eth = Ethernet {
-            destination: self.src_mac,
-            source: self.mac,
-            ethertype: Ethertype::IPV6,
-        };
+        let (eth, ip6, ulp_body) =
+            self.build_router_advert_for(self.src_mac, src_ipv6);
 
         Ok(AllowOrDeny::Allow(MsgBlk::new_ethernet_pkt((
             &eth, &ip6, &ulp_body,

@@ -19,8 +19,11 @@ use crate::engine::geneve::ValidOxideOption;
 use crate::engine::overlay::TUNNEL_ENDPOINT_MAC;
 use crate::engine::overlay::Virt2Boundary;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::ops::Deref;
 use core::ops::DerefMut;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 use ingot::icmp::IcmpV4;
 use ingot::icmp::IcmpV4Mut;
 use ingot::icmp::IcmpV4Type;
@@ -28,10 +31,15 @@ use ingot::icmp::IcmpV6;
 use ingot::icmp::IcmpV6Ref;
 use ingot::icmp::IcmpV6Type;
 use ingot::ip::IpProtocol;
+use ingot::types::Emit as _;
 use ingot::types::HeaderLen;
 use opte::api::IpAddr;
+use opte::api::Ipv6Addr;
+use opte::api::RouterAdvertisement;
 use opte::api::Vni;
 use opte::ddi::mblk::MsgBlk;
+use opte::ddi::time::Moment;
+use opte::ddi::time::NANOS;
 use opte::engine::Direction;
 use opte::engine::HdlErrAction;
 use opte::engine::HdlPktAction;
@@ -111,10 +119,11 @@ impl VpcParser {
     }
 }
 
-#[derive(Clone)]
+/// The Oxide VPC network implementation.
 pub struct VpcNetwork {
     pub cfg: VpcCfg,
     pub v2b: Arc<Virt2Boundary>,
+    last_unsolicited_ra: Option<UnsolicitedRa>,
 }
 
 impl core::fmt::Debug for VpcNetwork {
@@ -122,7 +131,145 @@ impl core::fmt::Debug for VpcNetwork {
         f.debug_struct("VpcNetwork")
             .field("cfg", &self.cfg)
             .field("v2b", &"<opaque>")
+            .field("last_unsolicited_ra", &"<opaque>")
             .finish()
+    }
+}
+
+/// Helper to track when we last sent unsolicited RAs.
+///
+/// NOTE: RFC 4861 describes the limits around the intervals for unsolicited RAs.
+/// There are both max and min values, as well as a recommended set of "initial"
+/// RAs that are sent more frequently.
+///
+/// In all these cases, routers are also encouraged to jitter RAs within the
+/// min/max to avoid overloading peers. We don't do any of this here, for a few
+/// reasons.
+///
+/// First, we're the only thing on the link, so there's no chance of overload.
+/// Also, the RFC allows for the min and max intervals to be the same, in which
+/// case a random value between them is just equal to the value itself. So we
+/// should be conforming here, but we may need to do some more complicated logic
+/// to detect when we want to send RAs if we find some clients are unhappy with
+/// our behavior.
+struct UnsolicitedRa {
+    /// Timestamp at which we last sent an unsolicited RA.
+    ///
+    /// This is stored in nanos, derived from a `Moment`, so that we can use it
+    /// in an atomic.
+    next_time_to_send: AtomicU64,
+    /// The raw packet to send.
+    ///
+    /// We know this upfront, because the unsolicited RA is always from the same
+    /// address and sent to a multicast address, so no logic needed.
+    packet: Vec<u8>,
+}
+
+// Compile-time checks that the RA intervals are valid.
+#[cfg(not(test))]
+const _: () = assert!(
+    (UnsolicitedRa::MIN_RTR_ADV_INTERVAL >= 3)
+        && (UnsolicitedRa::MAX_RTR_ADV_INTERVAL >= 4)
+        && (UnsolicitedRa::MAX_RTR_ADV_INTERVAL <= 1800)
+        && (UnsolicitedRa::MIN_RTR_ADV_INTERVAL as u128) * 4
+            <= (UnsolicitedRa::MAX_RTR_ADV_INTERVAL as u128) * 3,
+    "Max RA interval must be in [4, 1800], and min interval \
+    must be in [3, 0.75 * max]"
+);
+
+impl UnsolicitedRa {
+    // The minimum and maximum unsolicited RA intervals.
+    //
+    // From RFC 4861 section 6.2.1, these are constrained to be in [4, 1800] for
+    // the maximum and [3, 0.75 * max] for the minimum interval. Section 6.2.4
+    // also clearly says that we have to reset the timer to a uniformly
+    // distributed random value between our min and max after every unsolicited
+    // RA. The given reason is to avoid overloading nodes if there are other
+    // routers, which isn't a problem as we're the only router on-link. Still,
+    // we'll randomize the interval to make sure we conform.
+    cfg_select! {
+        test => {
+            const MAX_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 1_000;
+            const MIN_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 10_000;
+        }
+        not(test) => {
+            const MIN_RTR_ADV_INTERVAL: u64 = 450;
+            const MIN_RTR_ADV_INTERVAL_NANOS: u64 = Self::MIN_RTR_ADV_INTERVAL * NANOS;
+            const MAX_RTR_ADV_INTERVAL: u64 = 600;
+            const MAX_RTR_ADV_INTERVAL_NANOS: u64 = Self::MAX_RTR_ADV_INTERVAL * NANOS;
+        }
+    }
+
+    fn new(cfg: &VpcCfg) -> Self {
+        let pkt_layers = RouterAdvertisement::new(
+            cfg.guest_mac,
+            cfg.gateway_mac,
+            true,
+            Some(cfg.mtu),
+        )
+        .build_router_advert_for(
+            Ipv6Addr::ALL_NODES
+                .multicast_mac()
+                .expect("All-Nodes is an MC address"),
+            Ipv6Addr::ALL_NODES,
+        );
+        UnsolicitedRa {
+            next_time_to_send: AtomicU64::new(
+                Moment::now().raw() + Self::random_interval(),
+            ),
+            packet: pkt_layers.emit_vec(),
+        }
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    fn random() -> u64 {
+        use rand::TryRng as _;
+        use rand::rngs::SysRng;
+        SysRng.try_next_u64().unwrap_or(0)
+    }
+
+    #[cfg(not(any(test, feature = "std")))]
+    fn random() -> u64 {
+        let mut val: u64 = 0;
+        unsafe {
+            illumos_sys_hdrs::random_get_pseudo_bytes(
+                (&raw mut val).cast(),
+                core::mem::size_of::<u64>(),
+            );
+        }
+        val
+    }
+
+    /// Return a random RA interval within our min / max.
+    fn random_interval() -> u64 {
+        // NOTE: This isn't a very high-quality RNG, but it's also not that
+        // important. We don't care about modulo bias or the fact that this is
+        // fallible and defaults to 0, and we're using a 1s resolution in the
+        // Periodic that XDE uses to actually check for packets anyway.
+        let val = Self::random();
+        // Maximum used to mod a random offset.
+        const MAX_INTERVAL: u64 = UnsolicitedRa::MAX_RTR_ADV_INTERVAL_NANOS
+            - UnsolicitedRa::MIN_RTR_ADV_INTERVAL_NANOS;
+        (val % MAX_INTERVAL) + UnsolicitedRa::MIN_RTR_ADV_INTERVAL_NANOS
+    }
+
+    /// Check if it's time to send an unsolicited RA.
+    ///
+    /// If it is, update the internal time we last sent the packet to now, and
+    /// return true.
+    ///
+    /// If it is not yet time, the internal timestamp is not changed, and false
+    /// is returned instead.
+    fn is_time_to_send(&self) -> bool {
+        let now = Moment::now().raw();
+        let interval = Self::random_interval();
+        self.next_time_to_send
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |timeout_at| {
+                // Returns Some(now) if we've reached our timeout, or None
+                // otherwise. The value is only updated in that former case.
+                (now > timeout_at).then_some(now + interval)
+            })
+            .is_ok()
     }
 }
 
@@ -137,6 +284,15 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 }
 
 impl VpcNetwork {
+    pub fn new(cfg: VpcCfg, v2b: Arc<Virt2Boundary>) -> Self {
+        let last_unsolicited_ra = if cfg.has_ipv6_cfg() {
+            Some(UnsolicitedRa::new(&cfg))
+        } else {
+            None
+        };
+        Self { cfg, v2b, last_unsolicited_ra }
+    }
+
     fn handle_arp_out<'a, T: Read + Pullup + 'a>(
         &self,
         pkt: &mut Packet<FullParsed<T>>,
@@ -602,6 +758,14 @@ impl NetworkImpl for VpcNetwork {
 
         Ok(HdlErrAction::Hairpin(out))
     }
+
+    fn autonomous_packets(&self) -> impl Iterator<Item = (Direction, MsgBlk)> {
+        self.last_unsolicited_ra
+            .as_ref()
+            .filter(|ra| ra.is_time_to_send())
+            .map(|ra| (Direction::In, MsgBlk::new_ethernet_pkt(&ra.packet)))
+            .into_iter()
+    }
 }
 
 impl NetworkParser for VpcParser {
@@ -697,5 +861,194 @@ impl<T: ByteSlice> From<OxideGeneve<T>> for OpteMeta<T> {
     #[inline]
     fn from(value: OxideGeneve<T>) -> Self {
         value.0.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use core::sync::atomic::Ordering;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use super::VpcCfg;
+    use super::VpcNetwork;
+    use crate::api::ExternalIpCfg;
+    use crate::cfg::IpCfg;
+    use crate::cfg::Ipv4Cfg;
+    use crate::cfg::Ipv6Cfg;
+    use crate::engine::UnsolicitedRa;
+    use crate::engine::overlay::Virt2Boundary;
+    use ingot::ethernet::EthernetRef as _;
+    use ingot::ethernet::Ethertype;
+    use ingot::ethernet::ValidEthernet;
+    use ingot::icmp::IcmpV6Ref as _;
+    use ingot::icmp::IcmpV6Type;
+    use ingot::icmp::ValidIcmpV6;
+    use ingot::ip::Ipv6Ref as _;
+    use ingot::ip::ValidIpv6;
+    use ingot::types::HeaderParse as _;
+    use opte::api::DhcpCfg;
+    use opte::api::Direction;
+    use opte::api::Ipv4Addr;
+    use opte::api::Ipv4Cidr;
+    use opte::api::Ipv4PrefixLen;
+    use opte::api::Ipv6Addr;
+    use opte::api::Ipv6Cidr;
+    use opte::api::Ipv6PrefixLen;
+    use opte::api::MacAddr;
+    use opte::api::Vni;
+    use opte::ddi::time::Moment;
+    use opte::dynamic::Dynamic;
+    use opte::engine::NetworkImpl as _;
+
+    #[test]
+    fn ipv4_only_network_should_not_generate_autonomous_packets() {
+        let cfg = VpcCfg {
+            ip_cfg: IpCfg::Ipv4(Ipv4Cfg {
+                vpc_subnet: Ipv4Cidr::new(
+                    Ipv4Addr::from_const([10, 0, 0, 0]),
+                    Ipv4PrefixLen::new(24).unwrap(),
+                ),
+                private_ip: Ipv4Addr::from_const([10, 0, 0, 5]),
+                gateway_ip: Ipv4Addr::from_const([10, 0, 0, 1]),
+                external_ips: ExternalIpCfg {
+                    snat: None,
+                    ephemeral_ip: None,
+                    floating_ips: vec![],
+                }
+                .into(),
+                attached_subnets: Dynamic::from(BTreeMap::new()),
+                transit_ips: Dynamic::from(BTreeMap::new()),
+            }),
+            guest_mac: MacAddr::from([0xa8, 0x25, 0x40, 0x05, 0x05, 0x05]),
+            gateway_mac: MacAddr::from([0xa8, 0x25, 0x40, 0x00, 0x00, 0x00]),
+            vni: Vni::new(7_u32).unwrap(),
+            phys_ip: Ipv6Addr::from_const([
+                0xfd00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+            ]),
+            dhcp: DhcpCfg::default(),
+            mtu: 9_000,
+        };
+        let net = VpcNetwork::new(cfg, Arc::new(Virt2Boundary::new()));
+
+        // Even after we've reached the max timeout, we should not generate a
+        // packet.
+        let sleep_for = core::time::Duration::from_nanos(
+            UnsolicitedRa::MAX_RTR_ADV_INTERVAL_NANOS,
+        ) * 2;
+        std::thread::sleep(sleep_for);
+        let it = net.autonomous_packets();
+        assert_eq!(it.count(), 0);
+    }
+
+    #[test]
+    fn generate_autonomous_packets() {
+        let cfg = VpcCfg {
+            ip_cfg: IpCfg::Ipv6(Ipv6Cfg {
+                vpc_subnet: Ipv6Cidr::new(
+                    Ipv6Addr::from_const([
+                        0xfd00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                        0x0000,
+                    ]),
+                    Ipv6PrefixLen::new(64).unwrap(),
+                ),
+                private_ip: Ipv6Addr::from_const([
+                    0xfd00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                    0x0005,
+                ]),
+                gateway_ip: Ipv6Addr::from_const([
+                    0xfd00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                    0x0001,
+                ]),
+                external_ips: ExternalIpCfg {
+                    snat: None,
+                    ephemeral_ip: None,
+                    floating_ips: vec![],
+                }
+                .into(),
+                attached_subnets: Dynamic::from(BTreeMap::new()),
+                transit_ips: Dynamic::from(BTreeMap::new()),
+            }),
+            guest_mac: MacAddr::from([0xa8, 0x25, 0x40, 0x05, 0x05, 0x05]),
+            gateway_mac: MacAddr::from([0xa8, 0x25, 0x40, 0x00, 0x00, 0x00]),
+            vni: Vni::new(7_u32).unwrap(),
+            phys_ip: Ipv6Addr::from_const([
+                0xfd00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+            ]),
+            dhcp: DhcpCfg::default(),
+            mtu: 9_000,
+        };
+        let net = VpcNetwork::new(cfg.clone(), Arc::new(Virt2Boundary::new()));
+
+        let timeout_at = net
+            .last_unsolicited_ra
+            .as_ref()
+            .unwrap()
+            .next_time_to_send
+            .load(Ordering::Relaxed);
+        let sleep_for = core::time::Duration::from_nanos(
+            timeout_at.saturating_sub(Moment::now().raw()),
+        ) * 2;
+        std::thread::sleep(sleep_for);
+        let mut it = net.autonomous_packets();
+        let (dir, pkt) =
+            it.next().expect("Should have generated at least one packet");
+        assert_eq!(dir, Direction::In);
+
+        // Confirm the packet details, tediously.
+        let bytes = pkt.as_ref();
+
+        // Is this a valid Ethernet frame?
+        let (reparsed, _, rest) = ValidEthernet::parse(bytes).unwrap();
+        assert_eq!(
+            reparsed.source(),
+            cfg.gateway_mac.bytes().into(),
+            "Expected the unsolicited RA to be from OPTE's gateway MAC",
+        );
+        assert_eq!(
+            reparsed.destination().as_bytes(),
+            [0x33, 0x33, 0x00, 0x00, 0x00, 0x01],
+            "Expected the unsolicited RA to be for the all-nodes multicast MAC",
+        );
+        assert_eq!(reparsed.ethertype(), Ethertype::IPV6);
+
+        // Is this a valid Ipv6 packet?
+        let (reparsed, _, rest) = ValidIpv6::parse(rest).unwrap();
+        assert_eq!(
+            reparsed.source().octets(),
+            Ipv6Addr::from_eui64(&cfg.gateway_mac).bytes(),
+            "Expected the unsolicited RA to be from OPTE's gateway IP",
+        );
+        assert_eq!(
+            reparsed.destination().octets(),
+            Ipv6Addr::ALL_NODES.bytes(),
+            "Expected the unsolicited RA to be destined for the \
+            All-Nodes multicast address",
+        );
+
+        // And a valid ICMPv6 NDP packet?
+        let (reparsed, ..) = ValidIcmpV6::parse(rest).unwrap();
+        assert_eq!(reparsed.ty(), IcmpV6Type::ROUTER_ADVERTISEMENT);
+        assert_eq!(reparsed.code(), 0);
+        let rest = reparsed.rest_of_hdr();
+        assert_eq!(rest[0], u8::MAX, "incorrect hop limit in unsolicited RA",);
+        assert_eq!(
+            rest[1] & 0b1000_0000,
+            0b1000_0000,
+            "Managed configuration bit should be set",
+        );
+        assert_eq!(
+            rest[1] & 0b0100_0000,
+            0,
+            "Other configuration bit should be clear"
+        );
+        let lifetime = u16::from_be_bytes([rest[2], rest[3]]);
+        assert_eq!(
+            lifetime, 9_000,
+            "Incorrect router lifetime in unsolicited RA",
+        );
+
+        assert!(it.next().is_none(), "Should have generated exactly 1 packet");
     }
 }
