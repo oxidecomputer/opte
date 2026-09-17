@@ -340,15 +340,15 @@ impl PortBuilder {
             state: PortState::Ready,
             // At this point the layer pipeline is immutable, thus we
             // move the layers out of the mutex.
-            layers: self.layers.into_inner(),
-            uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None),
-            uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None),
+            layers: self.layers.into_inner().into_iter().map(Into::into).collect(),
+            uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None).into(),
+            uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None).into(),
             tcp_flows: FlowTable::new(
                 &self.name,
                 "tcp_flows",
                 tcp_limit,
                 Some(Arc::<TcpExpiry>::default()),
-            ),
+            ).into(),
         };
 
         let stats = PortStats::new();
@@ -364,7 +364,7 @@ impl PortBuilder {
             epoch: AtomicU64::new(1),
             stats: KStatNamed::new("xde", &self.name, stats)?,
             net,
-            data: KRwLock::new(data),
+            data: data,
             mtu: self.mtu,
         })
     }
@@ -747,17 +747,6 @@ struct PortStats {
     tcp_evictions: KStatU64,
 }
 
-struct PortData {
-    state: PortState,
-    layers: Vec<Layer>,
-    uft_in: FlowTable<UftEntry<InnerFlowId>>,
-    uft_out: FlowTable<UftEntry<InnerFlowId>>,
-    // We keep a record of the inbound UFID in the TCP flow table so
-    // that we know which inbound UFT/FT entries to retire upon
-    // connection termination.
-    tcp_flows: FlowTable<TcpFlowEntryState>,
-}
-
 /// A virtual switch port.
 ///
 /// The method by which links are created and traffic is processed. It
@@ -822,8 +811,16 @@ pub struct Port<N: NetworkImpl> {
     mac: MacAddr,
     stats: KStatNamed<PortStats>,
     net: N,
-    data: KRwLock<PortData>,
     mtu: Option<NonZeroU32>,
+
+    state: PortState,
+    layers: Vec<KRwLock<Layer>>,
+    uft_in: KRwLock<FlowTable<UftEntry<InnerFlowId>>>,
+    uft_out: KRwLock<FlowTable<UftEntry<InnerFlowId>>>,
+    // We keep a record of the inbound UFID in the TCP flow table so
+    // that we know which inbound UFT/FT entries to retire upon
+    // connection termination.
+    tcp_flows: KRwLock<FlowTable<TcpFlowEntryState>>,
 }
 
 // Convert:
@@ -879,10 +876,9 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states:
     ///
     /// * [`PortState::Running`]
-    pub fn pause(&self) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
-        data.state = PortState::Paused;
+    pub fn pause(&mut self) -> Result<()> {
+        check_state!(self.state, [PortState::Running])?;
+        self.state = PortState::Paused;
         Ok(())
     }
 
@@ -894,8 +890,8 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for all states. If the port is already
     /// in the running state, this is a no op.
-    pub fn start(&self) {
-        self.data.write().state = PortState::Running;
+    pub fn start(&mut self) {
+        self.state = PortState::Running; 
     }
 
     /// Reset the port.
@@ -907,21 +903,21 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid for all states.
-    pub fn reset(&self) {
-        // It's imperative to hold the lock for the entire function so
-        // that its side effects are atomic from the point of view of
+    pub fn reset(&mut self) {
+        // By holding &mut self here, we know that have exclusive access
+        // to all inner state. It's imperative to do so, such that this
+        // function's its side effects are atomic from the point of view of
         // other threads.
-        let mut data = self.data.write();
-        data.state = PortState::Ready;
+        self.data.state = PortState::Ready;
 
         // Clear all dynamic state related to the creation of flows.
-        for layer in &mut data.layers {
-            layer.clear_flows();
+        for layer in &self.layers {
+            layer.write().clear_flows();
         }
 
-        data.uft_in.clear();
-        data.uft_out.clear();
-        data.tcp_flows.clear();
+        self.uft_in.write().clear();
+        self.uft_out.write().clear();
+        self.tcp_flows.write().clear();
 
         self.stats.vals.out_uft_flows.set(0);
         self.stats.vals.in_uft_flows.set(0);
@@ -930,7 +926,7 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Get the current [`PortState`].
     pub fn state(&self) -> PortState {
-        self.data.read().state
+        self.state
     }
 
     /// Add a new `Rule` to the layer named by `layer`.
@@ -950,15 +946,15 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn add_rule(
-        &self,
+        &mut self,
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+        check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        for layer in self.layers {
+            let mut layer = layer.write();
             if layer.name() == layer_name {
                 self.epoch.fetch_add(1, SeqCst);
                 layer.add_rule(dir, rule);
@@ -1041,9 +1037,8 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp> {
-        let data = self.data.read();
-
-        for l in &data.layers {
+        for l in &self.layers {
+            let l = l.read();
             if l.name() == name {
                 return Ok(l.dump());
             }
@@ -1097,13 +1092,12 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn clear_lft(&self, layer: &str) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
-        data.layers
-            .iter_mut()
-            .find(|l| l.name() == layer)
-            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?
-            .clear_flows();
+        check_state!(self.state, [PortState::Running])?;
+        let layer = self.layers
+            .iter()
+            .find(|l| {let l = l.read(); l.name() == layer})
+            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?;
+        layer.write().clear_flows();
         Ok(())
     }
 
@@ -1117,20 +1111,20 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_uft(&self) -> Result<DumpUftResp> {
-        let data = self.data.read();
-
         check_state!(
-            data.state,
+            self.state,
             [PortState::Running, PortState::Paused, PortState::Restored],
         )?;
 
-        let in_limit = data.uft_in.get_limit().get();
-        let in_num_flows = data.uft_in.num_flows();
-        let in_flows = data.uft_in.dump();
+        let (in_limit, in_num_flows, in_flows) = {
+            let uft_in = self.uft_in.read();
+            (uft_in.get_limit().get(), uft_in.num_flows(), uft_in.dump())
+        };
 
-        let out_limit = data.uft_out.get_limit().get();
-        let out_num_flows = data.uft_out.num_flows();
-        let out_flows = data.uft_out.dump();
+        let (out_limit, out_num_flows, out_flows) = {
+            let uft_out = self.uft_out.read();
+            (uft_out.get_limit().get(), uft_out.num_flows(), uft_out.dump())
+        };
 
         Ok(DumpUftResp {
             in_limit,
@@ -1168,9 +1162,8 @@ impl<N: NetworkImpl> Port<N> {
 
     #[inline(always)]
     fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
-        let mut data = self.data.write();
         let now = now.unwrap_or_else(Moment::now);
-        check_state!(data.state, [PortState::Running])?;
+        check_state!(self.state, [PortState::Running])?;
 
         // Run expiry in reverse order of dependencies here.
         //
@@ -1181,16 +1174,26 @@ impl<N: NetworkImpl> Port<N> {
         // A TCP state entry or UFT may in turn reference any number of LFT
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
-        data.tcp_flows.expire_flows(now);
-        self.stats.vals.tcp_flows.set(u64::from(data.tcp_flows.num_flows()));
+        {
+            let tcp = self.tcp_flows.write();
+            tcp.expire_flows(now);
+            self.stats.vals.tcp_flows.set(u64::from(tcp.num_flows()));
+        }
 
-        data.uft_in.expire_flows(now);
-        self.stats.vals.in_uft_flows.set(u64::from(data.uft_in.num_flows()));
+        {
+            let uft = self.uft_in.write();
+            uft.expire_flows(now);
+            self.stats.vals.in_uft_flows.set(u64::from(uft.num_flows()));
+        }
 
-        data.uft_out.expire_flows(now);
-        self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
+        {
+            let uft = self.uft_out.write();
+            uft.expire_flows(now);
+            self.stats.vals.out_uft_flows.set(u64::from(uft.num_flows()));
+        }
 
-        for l in &mut data.layers {
+        for layer in &data.layers {
+            let l = layer.write();
             l.expire_flows(now);
         }
 
@@ -1208,13 +1211,13 @@ impl<N: NetworkImpl> Port<N> {
         let before = now - Duration::from_secs(61);
         let further_still = before - Duration::from_secs(61);
 
-        let data = self.data.write();
         for dir in [Direction::In, Direction::Out] {
             let map = match dir {
-                Direction::In => data.uft_in.iter(),
-                Direction::Out => data.uft_out.iter(),
+                Direction::In => &self.uft_in,
+                Direction::Out => &self.uft_out,
             };
-            for (_, entry) in map {
+            let map = map.read();
+            for (_, entry) in map.iter() {
                 let tcp =
                     entry.state().tcp_flow.as_ref().and_then(|v| v.upgrade());
                 if !f() {
