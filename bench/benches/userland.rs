@@ -50,7 +50,7 @@ pub fn block<M: MeasurementInfo>(c: &mut Criterion<M>, do_parse: bool) {
                 .into_iter()
                 .filter_map(NonZeroU32::new)
                 .collect(),
-            p_expires: vec![0.0],
+            p_expires: vec![0.0, 0.1],
         }),
     ];
 
