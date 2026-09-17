@@ -14,9 +14,9 @@ repository.workspace = true
 [features]
 default = ["api", "std"]
 api = ["opte/api"]
-engine = ["api", "opte/engine", "dep:ingot", "dep:poptrie", "dep:smoltcp", "dep:rand"]
+engine = ["api", "opte/engine", "dep:ingot", "dep:poptrie", "dep:smoltcp"]
 kernel = ["opte/kernel"]
-std = ["dep:tabwriter","opte/std"]
+std = ["dep:tabwriter", "opte/std", "dep:rand", "rand/sys_rng"]
 #
 # XXX: This is a hack in order for integration tests to make use of
 # test-only methods.
@@ -36,7 +36,7 @@ opte.workspace = true
 cfg-if.workspace = true
 ingot = { workspace = true, optional = true }
 poptrie = { workspace = true, optional = true }
-rand = { workspace = true, optional = true, default-features = false, features = [ "sys_rng" ]}
+rand = { workspace = true, optional = true, default-features = false }
 serde.workspace = true
 smoltcp = { workspace = true, optional = true }
 tabwriter = { workspace = true, optional = true }

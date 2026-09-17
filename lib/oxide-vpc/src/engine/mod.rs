@@ -31,10 +31,10 @@ use ingot::icmp::IcmpV6;
 use ingot::icmp::IcmpV6Ref;
 use ingot::icmp::IcmpV6Type;
 use ingot::ip::IpProtocol;
+use ingot::types::Emit as _;
 use ingot::types::HeaderLen;
 use opte::api::IpAddr;
 use opte::api::Ipv6Addr;
-use opte::api::MacAddr;
 use opte::api::RouterAdvertisement;
 use opte::api::Vni;
 use opte::ddi::mblk::MsgBlk;
@@ -136,32 +136,32 @@ impl core::fmt::Debug for VpcNetwork {
     }
 }
 
-// Helper to track when we last sent unsolicited RAs.
-//
-// NOTE: RFC 4861 describes the limits around the intervals for unsolicited RAs.
-// There are both max and min values, as well as a recommended set of "initial"
-// RAs that are sent more frequently.
-//
-// In all these cases, routers are also encouraged to jitter RAs within the
-// min/max to avoid overloading peers. We don't do any of this here, for a few
-// reasons.
-//
-// First, we're the only thing on the link, so there's no chance of overload.
-// Also, the RFC allows for the min and max intervals to be the same, in which
-// case a random value between them is just equal to the value itself. So we
-// should be conforming here, but we may need to do some more complicated logic
-// to detect when we want to send RAs if we find some clients are unhappy with
-// our behavior.
+/// Helper to track when we last sent unsolicited RAs.
+///
+/// NOTE: RFC 4861 describes the limits around the intervals for unsolicited RAs.
+/// There are both max and min values, as well as a recommended set of "initial"
+/// RAs that are sent more frequently.
+///
+/// In all these cases, routers are also encouraged to jitter RAs within the
+/// min/max to avoid overloading peers. We don't do any of this here, for a few
+/// reasons.
+///
+/// First, we're the only thing on the link, so there's no chance of overload.
+/// Also, the RFC allows for the min and max intervals to be the same, in which
+/// case a random value between them is just equal to the value itself. So we
+/// should be conforming here, but we may need to do some more complicated logic
+/// to detect when we want to send RAs if we find some clients are unhappy with
+/// our behavior.
 struct UnsolicitedRa {
-    // Timestamp at which we last sent an unsolicited RA.
-    //
-    // This is stored in nanos, derived from a `Moment`, so that we can use it
-    // in an atomic.
+    /// Timestamp at which we last sent an unsolicited RA.
+    ///
+    /// This is stored in nanos, derived from a `Moment`, so that we can use it
+    /// in an atomic.
     next_time_to_send: AtomicU64,
-    // The raw packet to send.
-    //
-    // We know this upfront, because the unsolicited RA is always from the same
-    // address and sent to a multicast address, so no logic needed.
+    /// The raw packet to send.
+    ///
+    /// We know this upfront, because the unsolicited RA is always from the same
+    /// address and sent to a multicast address, so no logic needed.
     packet: Vec<u8>,
 }
 
@@ -201,25 +201,43 @@ impl UnsolicitedRa {
     }
 
     fn new(cfg: &VpcCfg) -> Self {
-        let (eth, ip6, ulp_body) = RouterAdvertisement::new(
+        let pkt_layers = RouterAdvertisement::new(
             cfg.guest_mac,
             cfg.gateway_mac,
             true,
             Some(cfg.mtu),
         )
         .build_router_advert_for(
-            // Multicast MAC derived from the All-Nodes MC IPv6 address.
-            MacAddr::from([0x33, 0x33, 0x00, 0x00, 0x00, 0x01]),
+            Ipv6Addr::ALL_NODES
+                .multicast_mac()
+                .expect("All-Nodes is an MC address"),
             Ipv6Addr::ALL_NODES,
         );
         UnsolicitedRa {
             next_time_to_send: AtomicU64::new(
                 Moment::now().raw() + Self::random_interval(),
             ),
-            packet: MsgBlk::new_ethernet_pkt((eth, ip6, ulp_body))
-                .as_ref()
-                .to_vec(),
+            packet: pkt_layers.emit_vec(),
         }
+    }
+
+    #[cfg(any(test, feature = "std"))]
+    fn random() -> u64 {
+        use rand::TryRng as _;
+        use rand::rngs::SysRng;
+        SysRng.try_next_u64().unwrap_or(0)
+    }
+
+    #[cfg(not(any(test, feature = "std")))]
+    fn random() -> u64 {
+        let mut val: u64 = 0;
+        unsafe {
+            illumos_sys_hdrs::random_get_pseudo_bytes(
+                (&raw mut val).cast(),
+                core::mem::size_of::<u64>(),
+            );
+        }
+        val
     }
 
     /// Return a random RA interval within our min / max.
@@ -228,26 +246,7 @@ impl UnsolicitedRa {
         // important. We don't care about modulo bias or the fact that this is
         // fallible and defaults to 0, and we're using a 1s resolution in the
         // Periodic that XDE uses to actually check for packets anyway.
-        let val = if cfg!(any(test, feature = "std")) {
-            use rand::TryRng as _;
-            use rand::rngs::SysRng;
-            SysRng.try_next_u64().unwrap_or(0)
-        } else {
-            unsafe extern "C" {
-                pub fn random_get_pseudo_bytes(
-                    ptr: *mut u8,
-                    size: usize,
-                ) -> illumos_sys_hdrs::c_int;
-            }
-            let mut x: u64 = 0;
-            unsafe {
-                random_get_pseudo_bytes(
-                    (&mut x as *mut u64).cast(),
-                    core::mem::size_of::<u64>(),
-                );
-            }
-            x
-        };
+        let val = Self::random();
         // Maximum used to mod a random offset.
         const MAX_INTERVAL: u64 = UnsolicitedRa::MAX_RTR_ADV_INTERVAL_NANOS
             - UnsolicitedRa::MIN_RTR_ADV_INTERVAL_NANOS;
@@ -263,11 +262,12 @@ impl UnsolicitedRa {
     /// is returned instead.
     fn is_time_to_send(&self) -> bool {
         let now = Moment::now().raw();
+        let interval = Self::random_interval();
         self.next_time_to_send
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |timeout_at| {
                 // Returns Some(now) if we've reached our timeout, or None
                 // otherwise. The value is only updated in that former case.
-                (now > timeout_at).then_some(now + Self::random_interval())
+                (now > timeout_at).then_some(now + interval)
             })
             .is_ok()
     }
@@ -760,13 +760,11 @@ impl NetworkImpl for VpcNetwork {
     }
 
     fn autonomous_packets(&self) -> impl Iterator<Item = (Direction, MsgBlk)> {
-        if let Some(last_ra) = &self.last_unsolicited_ra
-            && last_ra.is_time_to_send()
-        {
-            return vec![(Direction::In, MsgBlk::copy(&last_ra.packet))]
-                .into_iter();
-        }
-        vec![].into_iter()
+        self.last_unsolicited_ra
+            .as_ref()
+            .filter(|ra| ra.is_time_to_send())
+            .map(|ra| (Direction::In, MsgBlk::new_ethernet_pkt(&ra.packet)))
+            .into_iter()
     }
 }
 

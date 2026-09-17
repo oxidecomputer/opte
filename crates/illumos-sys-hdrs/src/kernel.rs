@@ -632,4 +632,6 @@ unsafe extern "C" {
 
     // External static symbols
     pub static mod_driverops: mod_ops;
+
+    pub fn random_get_pseudo_bytes(arg1: *mut u8, arg2: usize) -> c_int;
 }

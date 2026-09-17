@@ -110,7 +110,7 @@ pub fn router_advert(cfg: &VpcCfg) -> RouterAdvertisement {
         // "Managed Configuration", indicating the guest needs to use DHCPv6 to
         // acquire an IPv6 address.
         true,
-        // Out current disposition is to always include an MTU announcement in
+        // Our current disposition is to always include an MTU announcement in
         // the NDP RA.
         Some(cfg.mtu),
     )
