@@ -17,7 +17,7 @@ use opte::api::OpteError;
 use opte::engine::port::Port;
 
 pub fn attach_subnet(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     inet_gw_map: Option<&InternetGatewayMap>,
     vpc_mappings: &Arc<VpcMappings>,
     req: AttachSubnetReq,
@@ -67,7 +67,7 @@ pub fn attach_subnet(
 }
 
 pub fn detach_subnet(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     inet_gw_map: Option<&InternetGatewayMap>,
     vpc_mappings: &Arc<VpcMappings>,
     req: DetachSubnetReq,
