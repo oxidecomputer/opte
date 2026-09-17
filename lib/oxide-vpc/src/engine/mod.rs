@@ -87,8 +87,6 @@ use opte::ingot::types::HeaderParse;
 use opte::ingot::types::IntoBufPointer;
 use opte::ingot::types::Parsed as IngotParsed;
 use opte::ingot::types::Read;
-use rand::TryRng as _;
-use rand::rngs::SysRng;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
@@ -167,6 +165,18 @@ struct UnsolicitedRa {
     packet: Vec<u8>,
 }
 
+// Compile-time checks that the RA intervals are valid.
+#[cfg(not(test))]
+const _: () = assert!(
+    (UnsolicitedRa::MIN_RTR_ADV_INTERVAL >= 3)
+        && (UnsolicitedRa::MAX_RTR_ADV_INTERVAL >= 4)
+        && (UnsolicitedRa::MAX_RTR_ADV_INTERVAL <= 1800)
+        && (UnsolicitedRa::MIN_RTR_ADV_INTERVAL as u128) * 4
+            <= (UnsolicitedRa::MAX_RTR_ADV_INTERVAL as u128) * 3,
+    "Max RA interval must be in [4, 1800], and min interval \
+    must be in [3, 0.75 * max]"
+);
+
 impl UnsolicitedRa {
     // The minimum and maximum unsolicited RA intervals.
     //
@@ -177,14 +187,18 @@ impl UnsolicitedRa {
     // RA. The given reason is to avoid overloading nodes if there are other
     // routers, which isn't a problem as we're the only router on-link. Still,
     // we'll randomize the interval to make sure we conform.
-    #[cfg(test)]
-    const MAX_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 1_000;
-    #[cfg(not(test))]
-    const MAX_RTR_ADV_INTERVAL_NANOS: u64 = 600 * NANOS;
-    #[cfg(test)]
-    const MIN_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 10_000;
-    #[cfg(not(test))]
-    const MIN_RTR_ADV_INTERVAL_NANOS: u64 = 450 * NANOS;
+    cfg_select! {
+        test => {
+            const MAX_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 1_000;
+            const MIN_RTR_ADV_INTERVAL_NANOS: u64 = NANOS / 10_000;
+        }
+        not(test) => {
+            const MIN_RTR_ADV_INTERVAL: u64 = 450;
+            const MIN_RTR_ADV_INTERVAL_NANOS: u64 = Self::MIN_RTR_ADV_INTERVAL * NANOS;
+            const MAX_RTR_ADV_INTERVAL: u64 = 600;
+            const MAX_RTR_ADV_INTERVAL_NANOS: u64 = Self::MAX_RTR_ADV_INTERVAL * NANOS;
+        }
+    }
 
     fn new(cfg: &VpcCfg) -> Self {
         let (eth, ip6, ulp_body) = RouterAdvertisement::new(
@@ -214,10 +228,30 @@ impl UnsolicitedRa {
         // important. We don't care about modulo bias or the fact that this is
         // fallible and defaults to 0, and we're using a 1s resolution in the
         // Periodic that XDE uses to actually check for packets anyway.
-        let val = SysRng.try_next_u64().unwrap_or(0);
-        let offset = (val.saturating_sub(Self::MIN_RTR_ADV_INTERVAL_NANOS))
-            % Self::MAX_RTR_ADV_INTERVAL_NANOS;
-        Self::MIN_RTR_ADV_INTERVAL_NANOS + offset
+        let val = if cfg!(any(test, feature = "std")) {
+            use rand::TryRng as _;
+            use rand::rngs::SysRng;
+            SysRng.try_next_u64().unwrap_or(0)
+        } else {
+            unsafe extern "C" {
+                pub fn random_get_pseudo_bytes(
+                    ptr: *mut u8,
+                    size: usize,
+                ) -> illumos_sys_hdrs::c_int;
+            }
+            let mut x: u64 = 0;
+            unsafe {
+                random_get_pseudo_bytes(
+                    (&mut x as *mut u64).cast(),
+                    core::mem::size_of::<u64>(),
+                );
+            }
+            x
+        };
+        // Maximum used to mod a random offset.
+        const MAX_INTERVAL: u64 = UnsolicitedRa::MAX_RTR_ADV_INTERVAL_NANOS
+            - UnsolicitedRa::MIN_RTR_ADV_INTERVAL_NANOS;
+        (val % MAX_INTERVAL) + UnsolicitedRa::MIN_RTR_ADV_INTERVAL_NANOS
     }
 
     /// Check if it's time to send an unsolicited RA.

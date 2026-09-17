@@ -1179,6 +1179,9 @@ fn check_for_autonomous_packets(_: &mut ()) {
             for (dir, pkt) in dev.port.network().autonomous_packets() {
                 match dir {
                     Direction::In => {
+                        // TODO-correctness: We're delivering these packets
+                        // directly to the guest. It might be more prudent to
+                        // pass it through the normal `port.process()` pipeline.
                         postbox.post(dev.postbox_key, pkt);
                     }
                     Direction::Out => {
