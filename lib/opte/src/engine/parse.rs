@@ -362,7 +362,7 @@ fn no_fragments<V: ByteSlice>(l3: &ValidL3<V>) -> ParseControl {
         }
     };
 
-    if !fragmented { ParseControl::Continue } else { ParseControl::Reject }
+    if fragmented { ParseControl::Reject } else { ParseControl::Continue }
 }
 
 #[inline]
