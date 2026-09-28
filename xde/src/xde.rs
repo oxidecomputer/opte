@@ -4157,8 +4157,11 @@ fn set_mcast_forwarding_hdlr(
 
         // The aggregated source filter is operator-supplied, so it is held to
         // the same rules as a subscriber's filter.
-        if let Err(msg) = entry.source_filter.validate_sources() {
-            return Err(OpteError::System { errno: EINVAL, msg });
+        if let Err(e) = entry.source_filter.validate_sources() {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: e.to_string(),
+            });
         }
 
         // Reject `Reserved`. It serves no replication target, so the Tx-side
@@ -4341,7 +4344,9 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         }
 
         // Validate source filter: sources must contain valid unicast addresses
-        req.filter.validate_sources().map_err(OpteError::BadState)?;
+        req.filter
+            .validate_sources_for_group(req.group)
+            .map_err(|e| OpteError::BadState(e.to_string()))?;
 
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
