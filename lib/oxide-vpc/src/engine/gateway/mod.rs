@@ -139,7 +139,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAME, Arc::clone(pb.name()), actions, ft_limit);
 
     let mut ctx = BuildCtx {
         in_rules: vec![],

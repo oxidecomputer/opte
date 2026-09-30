@@ -9,6 +9,7 @@ use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use opte::api::MacAddr;
@@ -93,7 +94,7 @@ impl DevMap {
     /// Returns an existing port, if one exists.
     pub fn insert(&mut self, val: Dev) -> Option<Dev> {
         let key = val.postbox_key;
-        _ = self.names.insert(val.devname.clone(), val.clone());
+        _ = self.names.insert(val.devname.to_string(), val.clone());
         self.devs.insert(key, val)
     }
 
@@ -244,7 +245,7 @@ impl DevMap {
                 .filter_map(|(vm, filter)| {
                     self.devs
                         .get(vm)
-                        .map(|d| (d.devname.clone(), filter.clone()))
+                        .map(|d| (d.devname.to_string(), filter.clone()))
                 })
                 .collect();
             out.push((*group, subscribers));

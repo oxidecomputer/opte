@@ -48,6 +48,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use c8str::C8Str;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
@@ -324,12 +325,12 @@ impl LayerFlowTable {
         self.ft_out.mark_dirty();
     }
 
-    fn new(port: &str, layer: &str, limit: NonZeroU32) -> Self {
+    fn new(port: Arc<C8Str>, layer: &str, limit: NonZeroU32) -> Self {
         Self {
             count: 0,
             limit,
             ft_in: FlowTable::new(
-                port,
+                Arc::clone(&port),
                 &format!("{layer}_in"),
                 limit,
                 Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
@@ -555,7 +556,8 @@ enum SpaceCreated {
 }
 
 pub struct Layer {
-    port_c: CString,
+    port: Arc<C8Str>,
+    // TODO(ky): make below a static C8Str?
     name: &'static str,
     name_c: CString,
     actions: Vec<Action>,
@@ -636,14 +638,14 @@ impl Layer {
                 let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__desc__fail(
-                    self.port_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
                     self.name_c.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let name_s = self.name_c.to_str().unwrap();
                 let flow_s = flow.to_string();
                 let msg_s = format!("{err:?}");
@@ -652,7 +654,7 @@ impl Layer {
                     || (port_s, name_s, dir, flow_s, msg_s)
                 );
             } else {
-                let (..) = (&self.port_c, &self.name_c, dir, flow, err);
+                let (..) = (&self.port, &self.name_c, dir, flow, err);
             }
         }
     }
@@ -669,14 +671,14 @@ impl Layer {
                 let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__ht__fail(
-                    self.port_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
                     self.name_c.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_s = flow.to_string();
                 let err_s = format!("{err:?}");
 
@@ -705,12 +707,12 @@ impl Layer {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_layer__process__entry(
                     dir as uintptr_t,
-                    self.port_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
                     self.name_c.as_ptr() as uintptr_t,
                     ifid,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let ifid_s = ifid.to_string();
 
                 crate::opte_provider::layer__process__entry!(
@@ -762,7 +764,7 @@ impl Layer {
                 }
                 __dtrace_probe_layer__process__return(
                     dir as uintptr_t,
-                    self.port_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
                     self.name_c.as_ptr() as uintptr_t,
                     flow_before,
                     flow_after,
@@ -770,7 +772,7 @@ impl Layer {
                 );
                 drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
                 // XXX This would probably be better as separate probes;
@@ -795,11 +797,10 @@ impl Layer {
 
     pub fn new(
         name: &'static str,
-        port: &str,
+        port: Arc<C8Str>,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
-        let port_c = CString::new(port).unwrap();
         let name_c = CString::new(name).unwrap();
 
         // Unwrap: We know this is fine because the stat names are
@@ -821,13 +822,13 @@ impl Layer {
             default_out_hits: 0,
             name,
             name_c,
-            port_c,
-            ft: LayerFlowTable::new(port, name, ft_limit),
+            ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
             ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
-            rules_in: RuleTable::new(port, name, Direction::In),
-            rules_out: RuleTable::new(port, name, Direction::Out),
+            rules_in: RuleTable::new(Arc::clone(&port), name, Direction::In),
+            rules_out: RuleTable::new(Arc::clone(&port), name, Direction::Out),
             rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
+            port,
         }
     }
 
@@ -929,7 +930,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.ft_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
@@ -1046,7 +1047,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     In,
                     &flow_before,
@@ -1114,7 +1115,7 @@ impl Layer {
                 pkt.hdr_transform(&ht_in)?;
                 xforms.hdr.push(ht_in);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
@@ -1217,7 +1218,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.ft_cstr.as_c_str(),
                     Direction::Out,
                     &flow_before,
@@ -1340,7 +1341,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
@@ -1408,7 +1409,7 @@ impl Layer {
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
@@ -1526,13 +1527,13 @@ impl Layer {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_rule__deny(
-                    self.port_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
                     self.name_c.as_ptr() as uintptr_t,
                     dir as uintptr_t,
                     flow_id,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_s = flow_id.to_string();
 
                 crate::opte_provider::rule__deny!(
@@ -1622,7 +1623,7 @@ impl From<&RuleTableEntry> for RuleTableEntryDump {
 
 #[derive(Debug)]
 pub struct RuleTable {
-    port_c: CString,
+    port: Arc<C8Str>,
     layer_c: CString,
     dir: Direction,
     rules: Vec<RuleTableEntry>,
@@ -1676,7 +1677,7 @@ impl RuleTable {
             if rte.rule.is_match(pmeta, ameta) {
                 rte.hits.fetch_add(1, Ordering::Relaxed);
                 Self::rule_match_probe(
-                    self.port_c.as_c_str(),
+                    self.port.as_c_str(),
                     self.layer_c.as_c_str(),
                     self.dir,
                     ifid,
@@ -1687,7 +1688,7 @@ impl RuleTable {
         }
 
         Self::rule_no_match_probe(
-            self.port_c.as_c_str(),
+            self.port.as_c_str(),
             self.layer_c.as_c_str(),
             self.dir,
             ifid,
@@ -1726,9 +1727,9 @@ impl RuleTable {
         self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
     }
 
-    fn new(port: &str, layer: &str, dir: Direction) -> Self {
+    fn new(port: Arc<C8Str>, layer: &str, dir: Direction) -> Self {
         Self {
-            port_c: CString::new(port).unwrap(),
+            port,
             layer_c: CString::new(layer).unwrap(),
             dir,
             rules: vec![],
@@ -1906,8 +1907,15 @@ mod test {
         use crate::engine::predicate::Ipv4AddrMatch;
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
+        use c8str::C8String;
 
-        let mut rule_table = RuleTable::new("port", "test", Direction::Out);
+        let mut rule_table = RuleTable::new(
+            Arc::from(
+                C8String::from_string("port").unwrap().into_boxed_c8_str(),
+            ),
+            "test",
+            Direction::Out,
+        );
         let mut rule = Rule::new(
             1,
             Action::Static(Arc::new(rule::Identity::new("find_rule"))),

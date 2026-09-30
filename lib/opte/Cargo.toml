@@ -11,6 +11,7 @@ default = ["api", "std"]
 api = ["dep:zerocopy"]
 engine = [
 	"api",
+	"dep:c8str",
 	"dep:cfg-if",
 	"dep:crc32fast",
 	"dep:derror-macro",
@@ -39,6 +40,7 @@ opte-api.workspace = true
 ingot.workspace = true
 
 bitflags = { workspace = true , features = ["serde"] }
+c8str = { workspace = true, optional = true }
 cfg-if = { workspace = true, optional = true }
 crc32fast = { workspace = true, optional = true }
 dyn-clone.workspace = true

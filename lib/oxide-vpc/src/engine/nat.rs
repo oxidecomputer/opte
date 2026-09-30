@@ -109,7 +109,8 @@ pub fn setup(
         default_out: DefaultAction::Allow,
     };
 
-    let mut layer = Layer::new(NAT_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer =
+        Layer::new(NAT_LAYER_NAME, Arc::clone(pb.name()), actions, ft_limit);
     let (in_rules, out_rules) = create_nat_rules(cfg, None)?;
     layer.set_rules(in_rules, out_rules);
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))

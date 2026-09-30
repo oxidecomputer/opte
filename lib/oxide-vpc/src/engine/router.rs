@@ -256,7 +256,8 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = Layer::new(ROUTER_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer =
+        Layer::new(ROUTER_LAYER_NAME, Arc::clone(pb.name()), actions, ft_limit);
 
     // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
     // Multicast operates fleet-wide via M2P mappings, not through VPC routing.

@@ -20,6 +20,7 @@ use crate::api::RemFwRuleReq;
 use crate::api::SetFwRulesReq;
 use crate::engine::overlay::VniTag;
 use alloc::collections::BTreeSet;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 use opte::api::Direction;
@@ -49,7 +50,24 @@ pub fn setup(
     pb: &mut PortBuilder,
     ft_limit: NonZeroU32,
 ) -> Result<(), OpteError> {
-    let fw_layer = Firewall::create_layer(pb.name(), ft_limit);
+    // The inbound side of the firewall is a filtering layer, only
+    // traffic explicitly allowed should pass. By setting the
+    // default inbound action to deny we effectively implement the
+    // implied "implied deny inbound" rule as speficied in RFD 63
+    // §2.8.1.
+    //
+    // RFD 63 §2.8.1 also states that all outbond traffic should
+    // be allowed by default, aka the "implied allow outbound"
+    // rule. Therefore, we set the default outbound action to
+    // allow.
+    let actions = LayerActions {
+        actions: vec![],
+        default_in: DefaultAction::Deny,
+        default_out: DefaultAction::StatefulAllow,
+    };
+
+    let fw_layer =
+        Layer::new(FW_LAYER_NAME, Arc::clone(pb.name()), actions, ft_limit);
     pb.add_layer(fw_layer, Pos::First)
 }
 
@@ -97,8 +115,6 @@ pub fn set_fw_rules(
     port.set_rules(FW_LAYER_NAME, in_rules, out_rules)
 }
 
-pub struct Firewall {}
-
 pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     let addr_pred = fw_rule.filters.hosts().into_predicate(fw_rule.direction);
     let proto_preds = fw_rule.filters.protocol().into_predicates();
@@ -121,28 +137,6 @@ pub fn from_fw_rule(fw_rule: FirewallRule, action: Action) -> Rule<Finalized> {
     }
 
     rule.finalize()
-}
-
-impl Firewall {
-    pub fn create_layer(port_name: &str, ft_limit: NonZeroU32) -> Layer {
-        // The inbound side of the firewall is a filtering layer, only
-        // traffic explicitly allowed should pass. By setting the
-        // default inbound action to deny we effectively implement the
-        // implied "implied deny inbound" rule as speficied in RFD 63
-        // §2.8.1.
-        //
-        // RFD 63 §2.8.1 also states that all outbond traffic should
-        // be allowed by default, aka the "implied allow outbound"
-        // rule. Therefore, we set the default outbound action to
-        // allow.
-        let actions = LayerActions {
-            actions: vec![],
-            default_in: DefaultAction::Deny,
-            default_out: DefaultAction::StatefulAllow,
-        };
-
-        Layer::new(FW_LAYER_NAME, port_name, actions, ft_limit)
-    }
 }
 
 impl ProtoFilter {

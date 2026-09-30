@@ -116,8 +116,12 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(
+        OVERLAY_LAYER_NAME,
+        Arc::clone(pb.name()),
+        actions,
+        ft_limit,
+    );
 
     // Outbound: encapsulation (priority 1)
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
