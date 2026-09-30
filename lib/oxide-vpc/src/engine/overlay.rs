@@ -84,7 +84,7 @@ use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
 use poptrie::Poptrie;
 
-pub const OVERLAY_LAYER_NAME: &str = "overlay";
+pub const OVERLAY_LAYER_NAME: &c8str::C8Str = c8str::c8!("overlay");
 
 pub fn setup(
     pb: &PortBuilder,

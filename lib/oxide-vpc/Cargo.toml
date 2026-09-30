@@ -34,6 +34,7 @@ illumos-sys-hdrs.workspace = true
 opte.workspace = true
 
 cfg-if.workspace = true
+c8str.workspace = true
 ingot = { workspace = true, optional = true }
 poptrie = { workspace = true, optional = true }
 rand = { workspace = true, optional = true, default-features = false }

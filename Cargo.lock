@@ -1326,6 +1326,7 @@ dependencies = [
 name = "oxide-vpc"
 version = "0.1.0"
 dependencies = [
+ "c8str",
  "cfg-if",
  "ctor",
  "illumos-sys-hdrs",

@@ -44,7 +44,7 @@ use opte::engine::rule::Action;
 use opte::engine::rule::Finalized;
 use opte::engine::rule::Rule;
 
-pub const FW_LAYER_NAME: &str = "firewall";
+pub const FW_LAYER_NAME: &c8str::C8Str = c8str::c8!("firewall");
 
 pub fn setup(
     pb: &mut PortBuilder,

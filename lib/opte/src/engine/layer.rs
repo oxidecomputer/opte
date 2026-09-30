@@ -557,9 +557,7 @@ enum SpaceCreated {
 
 pub struct Layer {
     port: Arc<C8Str>,
-    // TODO(ky): make below a static C8Str?
-    name: &'static str,
-    name_c: CString,
+    name: &'static C8Str,
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
@@ -639,14 +637,14 @@ impl Layer {
 
                 __dtrace_probe_gen__desc__fail(
                     self.port.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
                 let port_s = self.port.to_str();
-                let name_s = self.name_c.to_str().unwrap();
+                let name_s = self.name.to_str();
                 let flow_s = flow.to_string();
                 let msg_s = format!("{err:?}");
 
@@ -654,7 +652,7 @@ impl Layer {
                     || (port_s, name_s, dir, flow_s, msg_s)
                 );
             } else {
-                let (..) = (&self.port, &self.name_c, dir, flow, err);
+                let (..) = (&self.port, self.name, dir, flow, err);
             }
         }
     }
@@ -672,7 +670,7 @@ impl Layer {
 
                 __dtrace_probe_gen__ht__fail(
                     self.port.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
@@ -708,7 +706,7 @@ impl Layer {
                 __dtrace_probe_layer__process__entry(
                     dir as uintptr_t,
                     self.port.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     ifid,
                 );
             } else if #[cfg(feature = "usdt")] {
@@ -765,7 +763,7 @@ impl Layer {
                 __dtrace_probe_layer__process__return(
                     dir as uintptr_t,
                     self.port.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     flow_before,
                     flow_after,
                     eb.as_ptr(),
@@ -796,13 +794,11 @@ impl Layer {
     }
 
     pub fn new(
-        name: &'static str,
+        name: &'static C8Str,
         port: Arc<C8Str>,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
-        let name_c = CString::new(name).unwrap();
-
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
         let stats = KStatNamed::new(
@@ -821,7 +817,6 @@ impl Layer {
             default_out: actions.default_out,
             default_out_hits: 0,
             name,
-            name_c,
             ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
             ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
             rules_in: RuleTable::new(Arc::clone(&port), name, Direction::In),
@@ -1528,7 +1523,7 @@ impl Layer {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_rule__deny(
                     self.port.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir as uintptr_t,
                     flow_id,
                 );

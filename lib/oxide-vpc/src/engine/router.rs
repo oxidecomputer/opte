@@ -50,7 +50,7 @@ use opte::engine::rule::ModMetaResult;
 use opte::engine::rule::Rule;
 use uuid::Uuid;
 
-pub const ROUTER_LAYER_NAME: &str = "router";
+pub const ROUTER_LAYER_NAME: &c8str::C8Str = c8str::c8!("router");
 
 // The control plane wants to define "no destination" as a router
 // target. This routing layer implementation converts said target to a

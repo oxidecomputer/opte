@@ -110,7 +110,7 @@ pub use transit::*;
 
 use super::VpcNetwork;
 
-pub const NAME: &str = "gateway";
+pub const NAME: &c8str::C8Str = c8str::c8!("gateway");
 
 struct BuildCtx<'a> {
     in_rules: Vec<Rule<Finalized>>,

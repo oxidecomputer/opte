@@ -50,7 +50,7 @@ use opte::engine::snat::ConcreteIpAddr;
 use opte::engine::snat::SNat;
 use uuid::Uuid;
 
-pub const NAT_LAYER_NAME: &str = "nat";
+pub const NAT_LAYER_NAME: &c8str::C8Str = c8str::c8!("nat");
 const EXTERNAL_ATTACHED_SUBNET_PRIORITY: u16 = 4;
 const FLOATING_ONE_TO_ONE_NAT_PRIORITY: u16 = 5;
 const EPHEMERAL_ONE_TO_ONE_NAT_PRIORITY: u16 = 10;
