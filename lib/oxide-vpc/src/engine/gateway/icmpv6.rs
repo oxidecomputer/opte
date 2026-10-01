@@ -8,6 +8,7 @@
 
 use super::BuildCtx;
 use crate::cfg::Ipv6Cfg;
+use crate::cfg::VpcCfg;
 use alloc::sync::Arc;
 use opte::api::Ipv6Addr;
 use opte::api::OpteError;
@@ -27,7 +28,8 @@ use smoltcp::wire::Icmpv6Message;
 // must be the link-local address we derive for OPTE, from the EUI-64 transform
 // on its MAC address.
 //
-// - Respond to NDP Router Solicitations from the guest to the gateway.
+// - Respond to NDP Router Solicitations from the guest to the gateway. Also
+// send unsolicited Router Advertisements periodically.
 //
 // - Respond to NDP Neighbor Solicitations from the guest to the gateway. This
 // includes solicitations unicast to the gateway, and also delivered to the
@@ -54,18 +56,7 @@ pub(super) fn setup(
         })),
         // Map an NDP Router Solicitation from the guest to a Router Advertisement
         // from the OPTE virtual gateway's link-local IPv6 address.
-        Action::Hairpin(Arc::new(RouterAdvertisement::new(
-            // From the guest's VPC MAC.
-            ctx.cfg.guest_mac,
-            // The MAC from which we respond, i.e., OPTE's MAC.
-            ctx.cfg.gateway_mac,
-            // "Managed Configuration", indicating the guest needs to use DHCPv6 to
-            // acquire an IPv6 address.
-            true,
-            // Out current disposition is to always include an MTU announcement in
-            // the NDP RA.
-            Some(ctx.cfg.mtu),
-        ))),
+        Action::Hairpin(Arc::new(router_advert(ctx.cfg))),
         // Map an NDP Neighbor Solicitation from the guest to a neighbor
         // advertisement from the OPTE virtual gateway. Note that this is required
         // per RFC 4861 so that the guest does not mark the neighbor failed.
@@ -107,4 +98,20 @@ pub(super) fn setup(
     ctx.in_rules.push(ndp_filter.finalize());
 
     Ok(())
+}
+
+/// Return the `RouterAdvertisement` OPTE sends to the client.
+pub fn router_advert(cfg: &VpcCfg) -> RouterAdvertisement {
+    RouterAdvertisement::new(
+        // From the guest's VPC MAC.
+        cfg.guest_mac,
+        // The MAC from which we respond, i.e., OPTE's MAC.
+        cfg.gateway_mac,
+        // "Managed Configuration", indicating the guest needs to use DHCPv6 to
+        // acquire an IPv6 address.
+        true,
+        // Our current disposition is to always include an MTU announcement in
+        // the NDP RA.
+        Some(cfg.mtu),
+    )
 }

@@ -162,6 +162,11 @@ impl VpcCfg {
         }
     }
 
+    /// Return true if this has an IPv6 configuration.
+    pub fn has_ipv6_cfg(&self) -> bool {
+        matches!(self.ip_cfg, IpCfg::Ipv6(_) | IpCfg::DualStack { .. })
+    }
+
     /// Return an exclusive reference to the IPv6 configuration, if it exists,
     /// or None.
     pub fn ipv6_cfg_mut(&mut self) -> Option<&mut Ipv6Cfg> {
