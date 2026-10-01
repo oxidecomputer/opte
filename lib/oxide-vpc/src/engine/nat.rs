@@ -29,8 +29,8 @@ use opte::dynamic::Dynamic;
 use opte::engine::ether::ETHER_TYPE_IPV4;
 use opte::engine::ether::ETHER_TYPE_IPV6;
 use opte::engine::layer::DefaultAction;
-use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerSpec;
 use opte::engine::nat::ExternalIpTagger;
 use opte::engine::nat::InboundNat;
 use opte::engine::nat::OutboundNat;
@@ -109,8 +109,7 @@ pub fn setup(
         default_out: DefaultAction::Allow,
     };
 
-    let mut layer =
-        Layer::new(NAT_LAYER_NAME, Arc::clone(pb.name()), actions, ft_limit);
+    let mut layer = LayerSpec::new(NAT_LAYER_NAME, actions, ft_limit);
     let (in_rules, out_rules) = create_nat_rules(cfg, None)?;
     layer.set_rules(in_rules, out_rules);
     pb.add_layer(layer, Pos::After(ROUTER_LAYER_NAME))
