@@ -1781,6 +1781,7 @@ mod test {
     use ingot::tcp::TcpFlags;
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
+    use ingot::types::ParseError as IngotError;
     use ingot::udp::Udp;
     use opte_api::Ipv4Addr;
     use opte_api::Ipv6Addr;
@@ -1970,11 +1971,30 @@ mod test {
                     ethertype: Ethertype::IPV6,
                 };
 
+                let fragmented = extensions.contains(&IpProtocol::Ipv6Frag);
+
                 let mut pkt =
                     MsgBlk::new_ethernet_pkt((eth, ip6, ext_hdrs, tcp));
-                let pkt = Packet::parse_outbound(pkt.iter_mut(), GenericUlp {})
-                    .unwrap()
-                    .to_full_meta();
+                let pkt = match Packet::parse_outbound(
+                    pkt.iter_mut(),
+                    GenericUlp {},
+                ) {
+                    // We explicitly reject fragmented frames for now. OPTE does
+                    // not track fragment IDs on a 5-tuple, and will not skip L4
+                    // parsing when we have a nonzero fragment offset.
+                    Err(ParseError::IngotError(e))
+                        if fragmented && *e.error() == IngotError::Reject =>
+                    {
+                        continue;
+                    }
+                    Ok(_) if fragmented => panic!(
+                        "fragmented IPv6 frames should be explicitly rejected"
+                    ),
+
+                    Ok(v) => v,
+                    Err(e) => panic!("unexpected packet parsing error: {e:?}"),
+                }
+                .to_full_meta();
 
                 // Assert that the packet parses back out, and we can reach
                 // the TCP meta no matter which permutation of EHs we have.

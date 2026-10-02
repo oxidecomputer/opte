@@ -561,6 +561,8 @@ struct XdeState {
     stats: KStatNamed<XdeStats>,
     #[allow(unused)]
     cleanup: Periodic<()>,
+    #[allow(unused)]
+    autonomous_packets: Periodic<()>,
 }
 
 /// Resource sets which require ioctl-level mutual exclusion to modify. Not all
@@ -619,6 +621,12 @@ impl XdeState {
             cleanup: Periodic::new(
                 c"XDE flow/cache expiry".to_owned(),
                 shared_periodic_expire,
+                Box::new(()),
+                ONE_SECOND,
+            ),
+            autonomous_packets: Periodic::new(
+                c"XDE periodic packet check".to_owned(),
+                check_for_autonomous_packets,
                 Box::new(()),
                 ONE_SECOND,
             ),
@@ -1167,6 +1175,40 @@ fn shared_periodic_expire(_: &mut ()) {
         let _ = dev.port.expire_flows();
         dev.routes.remove_routes();
     }
+}
+
+/// Function run under a `Periodic` that checks for autonomously-generated
+/// packets to deliver to each port.
+#[unsafe(no_mangle)]
+fn check_for_autonomous_packets(_: &mut ()) {
+    let state = get_xde_state();
+
+    // Collect all the autonomous packets from every device, then drop the lock
+    // and deliver them all at once.
+    let mut postbox = Postbox::new();
+    let devmap = {
+        let devs = state.devs.read();
+        for dev in devs.iter() {
+            for (dir, pkt) in dev.port.network().autonomous_packets() {
+                match dir {
+                    Direction::In => {
+                        // TODO-correctness: We're delivering these packets
+                        // directly to the guest. It might be more prudent to
+                        // pass it through the normal `port.process()` pipeline.
+                        postbox.post(dev.postbox_key, pkt);
+                    }
+                    Direction::Out => {
+                        // TODO-completeness: Handle outbound autonomous packets.
+                    }
+                }
+            }
+        }
+        if postbox.is_empty() {
+            return;
+        }
+        Arc::new(devs.clone())
+    };
+    devmap.deliver_all(postbox);
 }
 
 #[unsafe(no_mangle)]
@@ -3497,7 +3539,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork { cfg, v2b };
+    let net = VpcNetwork::new(cfg, v2b);
     let port = Arc::new(pb.create(net, limit, limit)?);
     Ok(port)
 }
@@ -4146,8 +4188,11 @@ fn set_mcast_forwarding_hdlr(
 
         // The aggregated source filter is operator-supplied, so it is held to
         // the same rules as a subscriber's filter.
-        if let Err(msg) = entry.source_filter.validate_sources() {
-            return Err(OpteError::System { errno: EINVAL, msg });
+        if let Err(e) = entry.source_filter.validate_sources() {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: e.to_string(),
+            });
         }
 
         // Reject `Reserved`. It serves no replication target, so the Tx-side
@@ -4330,7 +4375,9 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         }
 
         // Validate source filter: sources must contain valid unicast addresses
-        req.filter.validate_sources().map_err(OpteError::BadState)?;
+        req.filter
+            .validate_sources_for_group(req.group)
+            .map_err(|e| OpteError::BadState(e.to_string()))?;
 
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {

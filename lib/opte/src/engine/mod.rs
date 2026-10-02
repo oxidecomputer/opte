@@ -269,6 +269,18 @@ pub trait NetworkImpl {
     ) -> Result<HdlErrAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
+
+    /// Return an iterator over autonomously-generated packets.
+    ///
+    /// Networks may choose to generate autonomous packets, e.g., sending
+    /// advertisements or heartbeats periodically. The network is responsible
+    /// for scheduling these, and this method should return all packets to be
+    /// delivered at the time it's called.
+    ///
+    /// The default implementation generates no packets.
+    fn autonomous_packets(&self) -> impl Iterator<Item = (Direction, MsgBlk)> {
+        core::iter::empty()
+    }
 }
 
 /// A packet parser for the network implementation.

@@ -715,6 +715,38 @@ impl PartialOrd for Ipv6Addr {
     }
 }
 
+/// The IPv6 representation of an embedded IPv4 address.
+///
+/// Both variants carry the IPv4 address within the low 32 bits and differ only
+/// in the 96-bit prefix ahead of those bits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedIpv4 {
+    /// The `::ffff:0:0/96` form, which represents an IPv4 node's address
+    /// to an IPv6 application ([RFC 4291 §2.5.5.2]).
+    ///
+    /// [RFC 4291 §2.5.5.2]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2
+    Mapped,
+
+    /// The `::/96` form, which [RFC 4291 §2.5.5.1] deprecates because the
+    /// transition mechanisms that used it are obsolete.
+    ///
+    /// [RFC 4291 §2.5.5.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.1
+    Compatible,
+}
+
+impl Display for EmbeddedIpv4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Mapped => {
+                write!(f, "IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
+            }
+            Self::Compatible => {
+                write!(f, "IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
+            }
+        }
+    }
+}
+
 impl Ipv6Addr {
     /// The unspecified IPv6 address, i.e., `::` or all zeros.
     pub const ANY_ADDR: Self = Self { inner: [0; 16] };
@@ -815,21 +847,21 @@ impl Ipv6Addr {
         self.inner[0] == 0xfe && (self.inner[1] & 0xc0) == 0x80
     }
 
-    /// Returns a description of the converting embedded-IPv4 form this
-    /// address takes or `None` otherwise.
+    /// Return the [`EmbeddedIpv4`] form this address takes or `None` if
+    /// it does not embed an IPv4 address.
     ///
     /// The IPv4-mapped ([RFC 4291 §2.5.5.2]) and IPv4-compatible
     /// ([RFC 4291 §2.5.5.1]) forms convert to an IPv4 address.
     ///
     /// [RFC 4291 §2.5.5.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.1
     /// [RFC 4291 §2.5.5.2]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2
-    pub const fn embedded_ipv4_form(&self) -> Option<&'static str> {
+    pub const fn embedded_ipv4_form(&self) -> Option<EmbeddedIpv4> {
         match self.inner {
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ..] => {
-                Some("IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
+                Some(EmbeddedIpv4::Mapped)
             }
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..] => {
-                Some("IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
+                Some(EmbeddedIpv4::Compatible)
             }
             _ => None,
         }
