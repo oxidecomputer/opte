@@ -313,7 +313,7 @@ impl BenchPacketInstance for UlpProcessInstance {
         set!(g1, "port_state=running");
 
         router::add_entry(
-            &g1.port,
+            &mut g1.port,
             IpCidr::Ip4("0.0.0.0/0".parse().unwrap()),
             RouterTarget::InternetGateway(None),
             RouterClass::System,
@@ -322,7 +322,7 @@ impl BenchPacketInstance for UlpProcessInstance {
         incr!(g1, ["epoch", "router.rules.out"]);
 
         router::add_entry(
-            &g1.port,
+            &mut g1.port,
             IpCidr::Ip6("::/0".parse().unwrap()),
             RouterTarget::InternetGateway(None),
             RouterClass::System,
@@ -332,14 +332,11 @@ impl BenchPacketInstance for UlpProcessInstance {
 
         if !self.fast_path {
             let any_in = "dir=in action=allow priority=1000 protocol=any";
-            firewall::set_fw_rules(
-                &g1.port,
-                &SetFwRulesReq {
-                    port_name: g1.port.name().to_string(),
-                    rules: vec![any_in.parse().unwrap()],
-                },
-            )
-            .unwrap();
+            let req = SetFwRulesReq {
+                port_name: g1.port.name().to_string(),
+                rules: vec![any_in.parse().unwrap()],
+            };
+            firewall::set_fw_rules(&mut g1.port, &req).unwrap();
             update!(
                 g1,
                 [

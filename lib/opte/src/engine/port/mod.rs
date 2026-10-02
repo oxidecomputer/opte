@@ -72,6 +72,7 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::FlowTableError;
 use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
@@ -91,8 +92,6 @@ use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::result;
 use core::str::FromStr;
-use core::sync::atomic::AtomicU64;
-use core::sync::atomic::Ordering::SeqCst;
 #[cfg(any(feature = "std", test))]
 use core::time::Duration;
 use illumos_sys_hdrs::uintptr_t;
@@ -132,6 +131,7 @@ pub enum ProcessError {
     BadEmitSpec,
     FlowTableFull { kind: &'static str, limit: u64 },
     LftChildrenFull,
+    FlowRace { kind: &'static str },
 }
 
 impl From<super::HdlPktError> for ProcessError {
@@ -333,35 +333,21 @@ impl PortBuilder {
         uft_limit: NonZeroU32,
         tcp_limit: NonZeroU32,
     ) -> result::Result<Port<N>, PortCreateError> {
-        let data = PortData {
-            state: PortState::Ready,
-            // At this point the layer pipeline is immutable, thus we
-            // move the layers out of the mutex.
-            layers: self.layers.into_inner(),
-            uft_in: FlowTable::new(
-                Arc::clone(&self.name),
-                "uft_in",
-                uft_limit,
-                None,
-            ),
-            uft_out: FlowTable::new(
-                Arc::clone(&self.name),
-                "uft_out",
-                uft_limit,
-                None,
-            ),
-            tcp_flows: FlowTable::new(
-                Arc::clone(&self.name),
-                "tcp_flows",
-                tcp_limit,
-                Some(Arc::<TcpExpiry>::default()),
-            ),
-        };
+        let uft_in =
+            FlowTable::new(Arc::clone(&self.name), "uft_in", uft_limit, None);
+        let uft_out =
+            FlowTable::new(Arc::clone(&self.name), "uft_out", uft_limit, None);
+        let tcp_flows = FlowTable::new(
+            Arc::clone(&self.name),
+            "tcp_flows",
+            tcp_limit,
+            Some(Arc::<TcpExpiry>::default()),
+        );
 
         let stats = PortStats::new();
-        stats.in_uft_capacity.set(u64::from(data.uft_in.get_limit().get()));
-        stats.out_uft_capacity.set(u64::from(data.uft_out.get_limit().get()));
-        stats.tcp_capacity.set(u64::from(data.tcp_flows.get_limit().get()));
+        stats.in_uft_capacity.set(u64::from(uft_in.get_limit().get()));
+        stats.out_uft_capacity.set(u64::from(uft_out.get_limit().get()));
+        stats.tcp_capacity.set(u64::from(tcp_flows.get_limit().get()));
 
         let stats = KStatNamed::new("xde", self.name.as_str(), stats)?;
 
@@ -369,11 +355,23 @@ impl PortBuilder {
             name: self.name,
             mac: self.mac,
             ectx: self.ectx,
-            epoch: AtomicU64::new(1),
+            epoch: 1,
             stats,
             net,
-            data: KRwLock::new(data),
             mtu: self.mtu,
+
+            state: PortState::Ready,
+            // At this point the layer pipeline is immutable, thus we
+            // move the layers out of the mutex.
+            layers: self
+                .layers
+                .into_inner()
+                .into_iter()
+                .map(KRwLock::new)
+                .collect(),
+            uft_in: KRwLock::new(uft_in),
+            uft_out: KRwLock::new(uft_out),
+            tcp_flows: KRwLock::new(tcp_flows),
         })
     }
 
@@ -547,16 +545,21 @@ pub enum DumpLayerError {
 // API version change until this is something that *can* actually be specified
 // on a per-port basis.
 pub trait FlowId:
-    fmt::Debug + Send + Sync + Copy + Eq + Ord + core::hash::Hash + 'static
+    fmt::Display
+    + fmt::Debug
+    + Send
+    + Sync
+    + Copy
+    + Eq
+    + Ord
+    + core::hash::Hash
+    + 'static
 {
 }
 impl FlowId for InnerFlowId {}
 
 /// An entry in the Unified Flow Table.
-pub struct UftEntry<Id: FlowId> {
-    /// The flow ID for the other side.
-    pair: KMutex<Option<Id>>,
-
+pub struct UftEntry {
     /// The transformations to perform.
     xforms: Arc<Transforms>,
 
@@ -575,7 +578,7 @@ pub struct UftEntry<Id: FlowId> {
     parents: Vec<Arc<dyn FlowEntryInfo>>,
 }
 
-impl<Id: FlowId> Dump for UftEntry<Id> {
+impl Dump for UftEntry {
     type DumpVal = UftEntryDump;
 
     fn dump(&self, hits: u64) -> Self::DumpVal {
@@ -583,7 +586,7 @@ impl<Id: FlowId> Dump for UftEntry<Id> {
     }
 }
 
-impl<Id: FlowId> Display for UftEntry<Id> {
+impl Display for UftEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let hdr = self
             .xforms
@@ -603,13 +606,11 @@ impl<Id: FlowId> Display for UftEntry<Id> {
     }
 }
 
-impl<Id: FlowId> fmt::Debug for UftEntry<Id> {
+impl fmt::Debug for UftEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let UftEntry { pair: _pair, xforms, l4_hash, epoch, tcp_flow, parents } =
-            self;
+        let UftEntry { xforms, l4_hash, epoch, tcp_flow, parents } = self;
 
         f.debug_struct("UftEntry")
-            .field("pair", &"<lock>")
             .field("xforms", xforms)
             .field("l4_hash", l4_hash)
             .field("epoch", epoch)
@@ -619,7 +620,7 @@ impl<Id: FlowId> fmt::Debug for UftEntry<Id> {
     }
 }
 
-impl<Id: FlowId> FlowState for UftEntry<Id> {
+impl FlowState for UftEntry {
     fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>> {
         self.parents.iter().map(Arc::clone)
     }
@@ -747,17 +748,6 @@ struct PortStats {
     tcp_evictions: KStatU64,
 }
 
-struct PortData {
-    state: PortState,
-    layers: Vec<Layer>,
-    uft_in: FlowTable<UftEntry<InnerFlowId>>,
-    uft_out: FlowTable<UftEntry<InnerFlowId>>,
-    // We keep a record of the inbound UFID in the TCP flow table so
-    // that we know which inbound UFT/FT entries to retire upon
-    // connection termination.
-    tcp_flows: FlowTable<TcpFlowEntryState>,
-}
-
 /// A virtual switch port.
 ///
 /// The method by which links are created and traffic is processed. It
@@ -813,14 +803,22 @@ struct PortData {
 /// The `ExecCtx` provides implementations of specific features that
 /// are valid for the given context the port is running in.
 pub struct Port<N: NetworkImpl> {
-    epoch: AtomicU64,
+    epoch: u64,
     ectx: Arc<ExecCtx>,
     name: Arc<C8Str>,
     mac: MacAddr,
     stats: KStatNamed<PortStats>,
     net: N,
-    data: KRwLock<PortData>,
     mtu: Option<NonZeroU32>,
+
+    state: PortState,
+    layers: Vec<KRwLock<Layer>>,
+    uft_in: KRwLock<FlowTable<UftEntry>>,
+    uft_out: KRwLock<FlowTable<UftEntry>>,
+    // We keep a record of the inbound UFID in the TCP flow table so
+    // that we know which inbound UFT/FT entries to retire upon
+    // connection termination.
+    tcp_flows: KRwLock<FlowTable<TcpFlowEntryState>>,
 }
 
 // Convert:
@@ -876,10 +874,9 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states:
     ///
     /// * [`PortState::Running`]
-    pub fn pause(&self) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
-        data.state = PortState::Paused;
+    pub fn pause(&mut self) -> Result<()> {
+        check_state!(self.state, [PortState::Running])?;
+        self.state = PortState::Paused;
         Ok(())
     }
 
@@ -891,8 +888,8 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for all states. If the port is already
     /// in the running state, this is a no op.
-    pub fn start(&self) {
-        self.data.write().state = PortState::Running;
+    pub fn start(&mut self) {
+        self.state = PortState::Running;
     }
 
     /// Reset the port.
@@ -904,21 +901,21 @@ impl<N: NetworkImpl> Port<N> {
     /// # States
     ///
     /// This command is valid for all states.
-    pub fn reset(&self) {
-        // It's imperative to hold the lock for the entire function so
-        // that its side effects are atomic from the point of view of
+    pub fn reset(&mut self) {
+        // By holding &mut self here, we know that have exclusive access
+        // to all inner state. It's imperative to do so, such that this
+        // function's its side effects are atomic from the point of view of
         // other threads.
-        let mut data = self.data.write();
-        data.state = PortState::Ready;
+        self.state = PortState::Ready;
 
         // Clear all dynamic state related to the creation of flows.
-        for layer in &mut data.layers {
-            layer.clear_flows();
+        for layer in &self.layers {
+            layer.write().clear_flows();
         }
 
-        data.uft_in.clear();
-        data.uft_out.clear();
-        data.tcp_flows.clear();
+        self.uft_in.write().clear();
+        self.uft_out.write().clear();
+        self.tcp_flows.write().clear();
 
         self.stats.vals.out_uft_flows.set(0);
         self.stats.vals.in_uft_flows.set(0);
@@ -927,7 +924,7 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Get the current [`PortState`].
     pub fn state(&self) -> PortState {
-        self.data.read().state
+        self.state
     }
 
     /// Add a new `Rule` to the layer named by `layer`.
@@ -947,58 +944,23 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn add_rule(
-        &self,
+        &mut self,
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+        check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        for layer in &self.layers {
+            let mut layer = layer.write();
             if layer.name() == layer_name {
-                self.epoch.fetch_add(1, SeqCst);
+                self.epoch += 1;
                 layer.add_rule(dir, rule);
                 return Ok(());
             }
         }
 
         Err(OpteError::LayerNotFound(layer_name.to_string()))
-    }
-
-    // XXX While it's been helpful to panic on a bad packet for the
-    // purposes of developement, this needs to go away before v1.
-    // While an error here is probably an indication of a bug or some
-    // very odd input (which is probably still a bug because we should
-    // gracefully deal with whatever the network throws at us), we
-    // need to NOT panic in this case. Instead, we'll want to perform
-    // several steps:
-    //
-    // 1. Collect all the useful data that one might need to
-    // understand why this event occured.
-    //
-    // 2. Fire a DTrace probe with pointers to this data.
-    //
-    // 3. Increment a kstat to indicate this even has occurred.
-    //
-    // 4. Send an event to FMA that includes all the data in step (1).
-    //
-    fn tcp_err(
-        &self,
-        data: &FlowTable<TcpFlowEntryState>,
-        dir: Direction,
-        msg: String,
-        pkt: &mut Packet<MblkFullParsed>,
-    ) {
-        if unsafe { super::opte_panic_debug != 0 } {
-            super::err!("mblk: {}", pkt.mblk_addr());
-            super::err!("flow: {}", pkt.flow());
-            super::err!("meta: {:?}", pkt.meta());
-            super::err!("flows: {:?}", data);
-            todo!("bad packet: {}", msg);
-        } else {
-            self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
-        }
     }
 
     fn tcp_err_probe(
@@ -1038,9 +1000,8 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp> {
-        let data = self.data.read();
-
-        for l in &data.layers {
+        for l in &self.layers {
+            let l = l.read();
             if l.name() == name {
                 return Ok(l.dump());
             }
@@ -1059,13 +1020,12 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_tcp_flows(&self) -> Result<DumpTcpFlowsResp> {
-        let data = self.data.read();
         check_state!(
-            data.state,
+            self.state,
             [PortState::Running, PortState::Paused, PortState::Restored]
         )?;
 
-        Ok(DumpTcpFlowsResp { flows: data.tcp_flows.dump() })
+        Ok(DumpTcpFlowsResp { flows: self.tcp_flows.read().dump() })
     }
 
     /// Clear all entries from the Unified Flow Table (UFT).
@@ -1076,12 +1036,17 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn clear_uft(&self) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
-        data.uft_in.clear();
-        data.uft_out.clear();
-        self.stats.vals.out_uft_flows.set(0);
-        self.stats.vals.in_uft_flows.set(0);
+        check_state!(self.state, [PortState::Running])?;
+        {
+            let mut uft = self.uft_in.write();
+            uft.clear();
+            self.stats.vals.in_uft_flows.set(0);
+        }
+        {
+            let mut uft = self.uft_out.write();
+            uft.clear();
+            self.stats.vals.out_uft_flows.set(0);
+        }
         Ok(())
     }
 
@@ -1094,13 +1059,16 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// * [`PortState::Running`]
     pub fn clear_lft(&self, layer: &str) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
-        data.layers
-            .iter_mut()
-            .find(|l| l.name() == layer)
-            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?
-            .clear_flows();
+        check_state!(self.state, [PortState::Running])?;
+        let layer = self
+            .layers
+            .iter()
+            .find(|l| {
+                let l = l.read();
+                l.name() == layer
+            })
+            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?;
+        layer.write().clear_flows();
         Ok(())
     }
 
@@ -1114,20 +1082,20 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Paused`]
     /// * [`PortState::Restored`]
     pub fn dump_uft(&self) -> Result<DumpUftResp> {
-        let data = self.data.read();
-
         check_state!(
-            data.state,
+            self.state,
             [PortState::Running, PortState::Paused, PortState::Restored],
         )?;
 
-        let in_limit = data.uft_in.get_limit().get();
-        let in_num_flows = data.uft_in.num_flows();
-        let in_flows = data.uft_in.dump();
+        let (in_limit, in_num_flows, in_flows) = {
+            let uft_in = self.uft_in.read();
+            (uft_in.get_limit().get(), uft_in.num_flows(), uft_in.dump())
+        };
 
-        let out_limit = data.uft_out.get_limit().get();
-        let out_num_flows = data.uft_out.num_flows();
-        let out_flows = data.uft_out.dump();
+        let (out_limit, out_num_flows, out_flows) = {
+            let uft_out = self.uft_out.read();
+            (uft_out.get_limit().get(), uft_out.num_flows(), uft_out.dump())
+        };
 
         Ok(DumpUftResp {
             in_limit,
@@ -1137,6 +1105,11 @@ impl<N: NetworkImpl> Port<N> {
             out_num_flows,
             out_flows,
         })
+    }
+
+    /// Return the current epoch.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Expire all flows whose TTL is overdue.
@@ -1165,9 +1138,8 @@ impl<N: NetworkImpl> Port<N> {
 
     #[inline(always)]
     fn expire_flows_inner(&self, now: Option<Moment>) -> Result<()> {
-        let mut data = self.data.write();
         let now = now.unwrap_or_else(Moment::now);
-        check_state!(data.state, [PortState::Running])?;
+        check_state!(self.state, [PortState::Running])?;
 
         // Run expiry in reverse order of dependencies here.
         //
@@ -1178,16 +1150,26 @@ impl<N: NetworkImpl> Port<N> {
         // A TCP state entry or UFT may in turn reference any number of LFT
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
-        data.tcp_flows.expire_flows(now);
-        self.stats.vals.tcp_flows.set(u64::from(data.tcp_flows.num_flows()));
+        {
+            let mut tcp = self.tcp_flows.write();
+            tcp.expire_flows(now);
+            self.stats.vals.tcp_flows.set(u64::from(tcp.num_flows()));
+        }
 
-        data.uft_in.expire_flows(now);
-        self.stats.vals.in_uft_flows.set(u64::from(data.uft_in.num_flows()));
+        {
+            let mut uft = self.uft_in.write();
+            uft.expire_flows(now);
+            self.stats.vals.in_uft_flows.set(u64::from(uft.num_flows()));
+        }
 
-        data.uft_out.expire_flows(now);
-        self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
+        {
+            let mut uft = self.uft_out.write();
+            uft.expire_flows(now);
+            self.stats.vals.out_uft_flows.set(u64::from(uft.num_flows()));
+        }
 
-        for l in &mut data.layers {
+        for layer in &self.layers {
+            let mut l = layer.write();
             l.expire_flows(now);
         }
 
@@ -1205,13 +1187,13 @@ impl<N: NetworkImpl> Port<N> {
         let before = now - Duration::from_secs(61);
         let further_still = before - Duration::from_secs(61);
 
-        let data = self.data.write();
         for dir in [Direction::In, Direction::Out] {
             let map = match dir {
-                Direction::In => data.uft_in.iter(),
-                Direction::Out => data.uft_out.iter(),
+                Direction::In => &self.uft_in,
+                Direction::Out => &self.uft_out,
             };
-            for (_, entry) in map {
+            let map = map.read();
+            for (_, entry) in map.iter() {
                 let tcp =
                     entry.state().tcp_flow.as_ref().and_then(|v| v.upgrade());
                 if !f() {
@@ -1251,9 +1233,8 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         rule: &Rule<Finalized>,
     ) -> Result<Option<RuleId>> {
-        let data = self.data.read();
-
-        for layer in &data.layers {
+        for layer in &self.layers {
+            let layer = layer.read();
             if layer.name() == layer_name {
                 return Ok(layer.find_rule(dir, rule));
             }
@@ -1270,8 +1251,8 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
-        let data = self.data.read();
-        for l in &data.layers {
+        for l in &self.layers {
+            let l = l.read();
             if l.name() == layer {
                 return l.action(idx);
             }
@@ -1280,15 +1261,19 @@ impl<N: NetworkImpl> Port<N> {
         None
     }
 
+    /// Return the list of layer names.
+    pub fn layers(&self) -> Vec<String> {
+        self.layers.iter().map(|l| l.read().name().to_string()).collect()
+    }
+
     /// Return a snapshot of the layer-level statistics.
     ///
     /// # States
     ///
     /// This command is valid for any [`PortState`].
     pub fn layer_stats_snap(&self, layer: &str) -> Option<LayerStatsSnap> {
-        let data = self.data.read();
-
-        for l in &data.layers {
+        for l in &self.layers {
+            let l = l.read();
             if l.name() == layer {
                 return Some(l.stats_snap());
             }
@@ -1303,10 +1288,10 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn list_layers(&self) -> ListLayersResp {
-        let data = self.data.read();
-        let mut tmp = vec![];
+        let mut tmp = Vec::with_capacity(self.layers.len());
 
-        for layer in &data.layers {
+        for layer in &self.layers {
+            let layer = layer.read();
             tmp.push(LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
@@ -1333,6 +1318,40 @@ impl<N: NetworkImpl> Port<N> {
     /// Return the name of the port as a CString.
     pub fn name_cstr(&self) -> &CStr {
         self.name.as_c_str()
+    }
+
+    /// Get the number of flows currently in the layer and direction
+    /// specified. The value `"uft"` can be used to get the number of
+    /// UFT flows.
+    #[cfg(any(feature = "std", test))]
+    pub fn num_flows(&self, layer: &str, dir: Direction) -> u32 {
+        match (layer, dir) {
+            ("uft", Direction::In) => self.uft_in.read().num_flows(),
+            ("uft", Direction::Out) => self.uft_out.read().num_flows(),
+            (name, _dir) => {
+                for l in &self.layers {
+                    let l = l.read();
+                    if l.name() == name {
+                        return l.num_flows();
+                    }
+                }
+
+                panic!("layer not found: {name}");
+            }
+        }
+    }
+
+    /// Return the number of rules registered for the given layer in
+    /// the given direction.
+    #[cfg(any(feature = "std", test))]
+    pub fn num_rules(&self, layer_name: &str, dir: Direction) -> usize {
+        self.layers
+            .iter()
+            .find_map(|l| {
+                let layer = l.read();
+                (layer.name() == layer_name).then(|| layer.num_rules(dir))
+            })
+            .unwrap_or_else(|| panic!("layer not found: {layer_name}"))
     }
 
     /// Process the packet.
@@ -1396,22 +1415,20 @@ impl<N: NetworkImpl> Port<N> {
         //     (Both of these cases are infrequent.)
         //  - Finalise processing holding no lock (fastpath) or writer
         //    (slowpath).
-        let data = self.data.read();
 
         // (1) Check for UFT and precompiled.
-        let mut epoch = self.epoch();
-        check_state!(data.state, [PortState::Running])
-            .map_err(|_| ProcessError::BadState(data.state))?;
+        let epoch = self.epoch();
+        check_state!(self.state, [PortState::Running])
+            .map_err(|_| ProcessError::BadState(self.state))?;
 
         self.port_process_entry_probe(dir, &flow_before, epoch, mblk_addr);
 
-        let uft: Option<Arc<FlowEntry<UftEntry<InnerFlowId>>>> = (match dir {
-            Direction::Out => data.uft_out.get(&flow_before),
-            Direction::In => data.uft_in.get(&flow_before),
-        })
-        .map(Arc::clone);
+        let uft = match dir {
+            Direction::Out => &self.uft_out,
+            Direction::In => &self.uft_in,
+        };
 
-        drop(data);
+        let uft_entry = uft.read().get(&flow_before).map(Arc::clone);
 
         // Packets which are larger than the guest is able to receive may
         // require bespoke handling by the `NetworkImpl`. If this is the case
@@ -1443,27 +1460,23 @@ impl<N: NetworkImpl> Port<N> {
             })
             .unwrap_or(false);
 
+        // TODO(ky) REWRITE COMMENTS
+
         // If we have a UFT miss or invalid entry, upgrade to a write lock and
         // fetch again. This lets us use an optimistic lookup more often.
-        let (uft, mut lock) = match uft {
-            Some(ref entry) if entry.state().epoch == epoch => (uft, None),
-            Some(_) | None => {
-                let data = self.data.write();
-                epoch = self.epoch();
-                (
-                    (match dir {
-                        Direction::Out => data.uft_out.get(&flow_before),
-                        Direction::In => data.uft_in.get(&flow_before),
-                    })
-                    .map(Arc::clone),
-                    Some(data),
-                )
+        let uft_entry = match uft_entry {
+            Some(ref entry) if entry.state().epoch == epoch => uft_entry,
+            Some(ref entry) => {
+                entry.mark_dead();
+                self.uft_invalidate_probe(dir, &flow_before, epoch);
+                None
             }
+            None => None,
         };
 
         enum FastPathDecision {
-            CompiledUft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
-            Uft(Arc<FlowEntry<UftEntry<InnerFlowId>>>),
+            CompiledUft(Arc<FlowEntry<UftEntry>>),
+            Uft(Arc<FlowEntry<UftEntry>>),
             Slow,
         }
 
@@ -1480,13 +1493,12 @@ impl<N: NetworkImpl> Port<N> {
         // We have either committed to our (suspected valid) UFT, or refetched
         // it (may have been removed) under the write lock.
         // Revalidate the entry in the latter case.
-        let mut decision = match uft {
+        let mut decision = match uft_entry {
             // We have a valid UFT entry of some kind -- clone out the saved
             // transforms so that we can drop the lock ASAP (if reacquired).
             // Recheck epoch in case we took a write lock and re-read the UFT.
-            Some(entry) if lock.is_none() || entry.state().epoch == epoch => {
+            Some(entry) => {
                 // The Fast Path.
-                drop(lock.take());
                 let xforms = &entry.state().xforms;
                 let out = if !oversize && xforms.compiled.is_some() {
                     FastPathDecision::CompiledUft(entry)
@@ -1502,23 +1514,6 @@ impl<N: NetworkImpl> Port<N> {
                 out
             }
 
-            // The entry is *definitely* from a previous epoch; invalidate its UFT
-            // entries and proceed to rule processing.
-            // We will have been upgraded to a write lock if this was possible.
-            Some(entry) => {
-                let data = lock
-                    .as_mut()
-                    .expect("lock should be held on this codepath");
-                let epoch = entry.state().epoch;
-                let owned_pair = *entry.state().pair.lock();
-                let (ufid_in, ufid_out) = match dir {
-                    Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
-                    Direction::In => (Some(&flow_before), owned_pair.as_ref()),
-                };
-                self.uft_invalidate(data, ufid_out, ufid_in, epoch);
-
-                FastPathDecision::Slow
-            }
             None => FastPathDecision::Slow,
         };
 
@@ -1550,18 +1545,22 @@ impl<N: NetworkImpl> Port<N> {
                             Direction::Out => None,
                         };
 
-                        let invalidated_tcp = match tcp_flow.state().update(
+                        let invalidated_tcp = match update_tcp_state(
+                            tcp_flow.as_ref(),
                             self.name_cstr(),
                             tcp,
                             dir,
                             pkt.len() as u64,
                             ufid_in,
                         ) {
-                            Ok(TcpState::Closed) => Some(tcp_flow),
+                            Ok(TcpState::Closed) => {
+                                entry.mark_dead();
+                                Some(tcp_flow)
+                            }
                             Err(TcpFlowStateError::NewFlow { .. }) => {
-                                let out = Some(tcp_flow);
+                                entry.mark_dead();
                                 decision = FastPathDecision::Slow;
-                                out
+                                Some(tcp_flow)
                             }
                             _ => None,
                         };
@@ -1569,13 +1568,11 @@ impl<N: NetworkImpl> Port<N> {
                         // Reacquire the writer to remove the flow if needed.
                         // Elevate lock to full scope, if we are reprocessing
                         // as well.
-                        if let Some(entry) = invalidated_tcp {
-                            let mut local_lock = self.data.write();
+                        if let Some(tcp_entry) = invalidated_tcp {
+                            let mut tcp_lock = self.tcp_flows.write();
 
-                            let flow_lock = entry.state().inner.lock();
+                            let flow_lock = tcp_entry.state().inner.lock();
                             let ufid_out = &flow_lock.outbound_ufid;
-
-                            let ufid_in = flow_lock.inbound_ufid.as_ref();
 
                             // Because we've dropped the port lock, another
                             // packet could have also invalidated this flow and
@@ -1585,26 +1582,15 @@ impl<N: NetworkImpl> Port<N> {
                             //
                             // Verify that the state we want to remove still
                             // exists, and is `Arc`-identical.
-                            if let Some(found_entry) =
-                                local_lock.tcp_flows.get(ufid_out)
-                                && Arc::ptr_eq(found_entry, &entry)
+                            if let Some(found_entry) = tcp_lock.get(ufid_out)
+                                && Arc::ptr_eq(found_entry, &tcp_entry)
                             {
-                                self.uft_tcp_closed(
-                                    &mut local_lock,
-                                    ufid_out,
-                                    ufid_in,
-                                );
-                                _ = local_lock.tcp_flows.remove(ufid_out);
-                                self.stats.vals.tcp_flows.set(u64::from(
-                                    local_lock.tcp_flows.num_flows(),
-                                ));
-                            }
-
-                            // We've determined we're actually starting a new
-                            // TCP flow (e.g., SYN on any other state) from an
-                            // existing UFT entry.
-                            if matches!(decision, FastPathDecision::Slow) {
-                                lock = Some(local_lock);
+                                self.uft_tcp_closed_probe(dir, &flow_before);
+                                _ = tcp_lock.remove(ufid_out);
+                                self.stats
+                                    .vals
+                                    .tcp_flows
+                                    .set(u64::from(tcp_lock.num_flows()));
                             }
                         }
                     }
@@ -1612,8 +1598,8 @@ impl<N: NetworkImpl> Port<N> {
                     // Fallback to the slowpath and regenerate it or acquire a
                     // new entry if one is present.
                     Some(None) => {
+                        entry.mark_dead();
                         decision = FastPathDecision::Slow;
-                        lock = Some(self.data.write());
                     }
                     // There is no TCP flow.
                     None => {}
@@ -1749,32 +1735,18 @@ impl<N: NetworkImpl> Port<N> {
             // Cksum updates are left undone, so we perform those manually
             // outside the port lock.
             (FastPathDecision::Slow, Direction::In) => {
-                let data = lock
-                    .as_mut()
-                    .expect("lock should be held on this codepath");
-
                 let res = self.process_in_miss(
-                    data,
                     epoch,
                     &mut pkt,
                     &flow_before,
                     &mut ameta,
                 );
 
-                drop(lock);
-
                 pkt.update_checksums();
                 res
             }
             (FastPathDecision::Slow, Direction::Out) => {
-                let data = lock
-                    .as_mut()
-                    .expect("lock should be held on this codepath");
-
-                let res =
-                    self.process_out_miss(data, epoch, &mut pkt, &mut ameta);
-
-                drop(lock);
+                let res = self.process_out_miss(epoch, &mut pkt, &mut ameta);
 
                 pkt.update_checksums();
                 res
@@ -1830,29 +1802,20 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn remove_rule(
-        &self,
+        &mut self,
         layer_name: &str,
         dir: Direction,
         id: RuleId,
     ) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+        check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        for layer in &self.layers {
+            let mut layer = layer.write();
             if layer.name() == layer_name {
                 match layer.remove_rule(dir, id) {
                     Err(_) => return Err(OpteError::RuleNotFound(id)),
                     Ok(()) => {
-                        // XXX There is a tiny window between the rule being
-                        // removed and the epoch incremented. For now we don't
-                        // worry about this as a few packets getting by with
-                        // the old rule set is not a major issue. But in the
-                        // future we could eliminate this window by passing a
-                        // reference to the epoch to `Layer::remove_rule()`
-                        // and let it perform the increment.
-                        // XXX(kyle) This is not a concern while we have the
-                        // port lock in place.
-                        self.epoch.fetch_add(1, SeqCst);
+                        self.epoch += 1;
                         return Ok(());
                     }
                 }
@@ -1883,17 +1846,17 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Ready`]
     /// * [`PortState::Running`]
     pub fn set_rules(
-        &self,
+        &mut self,
         layer_name: &str,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+        check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        for layer in &self.layers {
+            let mut layer = layer.write();
             if layer.name() == layer_name {
-                self.epoch.fetch_add(1, SeqCst);
+                self.epoch += 1;
                 layer.set_rules(in_rules, out_rules);
                 return Ok(());
             }
@@ -1904,17 +1867,17 @@ impl<N: NetworkImpl> Port<N> {
 
     // TODO: not dupe `set_rules`.
     pub fn set_rules_soft(
-        &self,
+        &mut self,
         layer_name: &str,
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) -> Result<()> {
-        let mut data = self.data.write();
-        check_state!(data.state, [PortState::Ready, PortState::Running])?;
+        check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &mut data.layers {
+        for layer in &self.layers {
+            let mut layer = layer.write();
             if layer.name() == layer_name {
-                self.epoch.fetch_add(1, SeqCst);
+                self.epoch += 1;
                 layer.set_rules_soft(in_rules, out_rules);
                 return Ok(());
             }
@@ -1931,11 +1894,7 @@ impl<N: NetworkImpl> Port<N> {
     /// Return the [`TcpState`] of a given flow.
     #[cfg(any(feature = "test-help", test))]
     pub fn tcp_state(&self, flow: &InnerFlowId) -> Option<TcpState> {
-        self.data
-            .read()
-            .tcp_flows
-            .get(flow)
-            .map(|entry| entry.state().tcp_state())
+        self.tcp_flows.read().get(flow).map(|entry| entry.state().tcp_state())
     }
 }
 
@@ -2191,7 +2150,6 @@ impl<N: NetworkImpl> Port<N> {
     // * Error: An error has ocurred and processing cannot continue.
     fn layers_process(
         &self,
-        data: &mut PortData,
         dir: Direction,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
@@ -2199,7 +2157,8 @@ impl<N: NetworkImpl> Port<N> {
     ) -> result::Result<LayerResult, LayerError> {
         match dir {
             Direction::Out => {
-                for layer in &mut data.layers {
+                for layer in &self.layers {
+                    let mut layer = layer.write();
                     let res =
                         layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
@@ -2214,7 +2173,8 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             Direction::In => {
-                for layer in data.layers.iter_mut().rev() {
+                for layer in self.layers.iter().rev() {
+                    let mut layer = layer.write();
                     let res =
                         layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
@@ -2408,12 +2368,13 @@ impl<N: NetworkImpl> Port<N> {
 
                     Ok(TcpMaybeClosed::NewState(tcp_state, entry))
                 }
-                Err(OpteError::MaxCapacity(limit)) => {
+                Err(FlowTableError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "TCP", limit })
                 }
-                Err(_) => unreachable!(
-                    "Cannot return other errors from FlowTable::add"
-                ),
+                // TODO(ky) HANDLE HANDLE HANDLE!!!
+                Err(FlowTableError::Existing) => {
+                    Err(ProcessError::FlowRace { kind: "TCP" })
+                }
             }
         } else {
             Ok(TcpMaybeClosed::Closed {
@@ -2442,7 +2403,6 @@ impl<N: NetworkImpl> Port<N> {
     /// a packet as a UFT miss (e.g., `process_out_miss`) and reprocessing the flow.
     fn update_tcp_entry<V: ByteSlice>(
         &self,
-        data: &mut PortData,
         tcp: &impl TcpRef<V>,
         dir: &TcpDirection,
         pkt_len: u64,
@@ -2452,15 +2412,14 @@ impl<N: NetworkImpl> Port<N> {
             TcpDirection::Out { ufid_out } => (ufid_out, None),
         };
 
-        let Some(entry) = data.tcp_flows.get(ufid_out) else {
+        let Some(entry) = self.tcp_flows.read().get(ufid_out).cloned() else {
             return Err(ProcessError::MissingFlow(*ufid_out));
         };
-        let entry = entry.clone();
 
         entry.hit();
-        let tfes_base = entry.state();
 
-        let next_state = tfes_base.update(
+        let next_state = update_tcp_state(
+            entry.as_ref(),
             self.name_cstr(),
             tcp,
             dir.dir(),
@@ -2468,23 +2427,29 @@ impl<N: NetworkImpl> Port<N> {
             ufid_in,
         );
 
-        let ufid_inbound = if matches!(
-            next_state,
-            Ok(TcpState::Closed) | Err(TcpFlowStateError::NewFlow { .. })
-        ) {
-            // Due to order of operations, out_tcp_existing must
-            // call uft_tcp_closed separately.
-            let entry = data.tcp_flows.remove(ufid_out).unwrap();
-            self.stats
-                .vals
-                .tcp_flows
-                .set(u64::from(data.tcp_flows.num_flows()));
-            let lock = entry.state().inner.lock();
-            let state_ufid = lock.inbound_ufid;
+        let ufid_inbound = if entry.is_killed() {
+            let mut tcp_flows = self.tcp_flows.write();
+            // Has someone slipped in another TCP entry in the meantime?
+            let in_table = tcp_flows.get(ufid_out);
+            let state_ufid = match in_table {
+                Some(curr_entry) if Arc::ptr_eq(&entry, curr_entry) => {
+                    let entry = tcp_flows.remove(ufid_out).unwrap();
 
-            // The inbound side of the UFT is based on
-            // the network-side of the flow (pre-processing).
-            self.uft_tcp_closed(data, ufid_out, state_ufid.as_ref());
+                    self.stats
+                        .vals
+                        .tcp_flows
+                        .set(u64::from(tcp_flows.num_flows()));
+
+                    let lock = entry.state().inner.lock();
+                    lock.inbound_ufid
+                }
+                Some(_curr) => {
+                    // TODO(ky) retry the state transition with this one?
+                    let lock = entry.state().inner.lock();
+                    lock.inbound_ufid
+                }
+                None => None,
+            };
 
             ufid_in.copied().or(state_ufid)
         } else {
@@ -2515,7 +2480,6 @@ impl<N: NetworkImpl> Port<N> {
     // when an inbound UFT entry exists.
     fn process_in_tcp(
         &self,
-        data: &mut PortData,
         pmeta: &MblkPacketData,
         ufid_in: &InnerFlowId,
         pkt_len: u64,
@@ -2535,14 +2499,14 @@ impl<N: NetworkImpl> Port<N> {
 
         let dir = TcpDirection::In { ufid_in, ufid_out: &ufid_out };
 
-        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
+        match self.update_tcp_entry(tcp, &dir, pkt_len) {
             // We need to create a new TCP entry here because we can't call
             // `process_in_miss` on the already-modified packet.
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
             ) => self.create_new_tcp_entry(
-                &mut data.tcp_flows,
+                &mut self.tcp_flows.write(),
                 tcp,
                 &dir,
                 pkt_len,
@@ -2553,7 +2517,6 @@ impl<N: NetworkImpl> Port<N> {
 
     fn process_in_miss(
         &self,
-        data: &mut PortData,
         epoch: u64,
         pkt: &mut Packet<MblkFullParsed>,
         ufid_in: &InnerFlowId,
@@ -2563,7 +2526,7 @@ impl<N: NetworkImpl> Port<N> {
 
         self.stats.vals.in_uft_miss.incr(1);
         let mut xforms = Transforms::new();
-        let res = self.layers_process(data, In, pkt, &mut xforms, ameta);
+        let res = self.layers_process(In, pkt, &mut xforms, ameta);
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no flow ID, then do not create a UFT
@@ -2587,8 +2550,8 @@ impl<N: NetworkImpl> Port<N> {
                 return Ok(InternalProcessResult::from(self.net.handle_pkt(
                     In,
                     pkt,
-                    &data.uft_in,
-                    &data.uft_out,
+                    &self.uft_in.read(),
+                    &self.uft_out.read(),
                 )?));
             }
 
@@ -2603,9 +2566,7 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
-        let ufid_out = pkt.flow().mirror();
         let mut hte = UftEntry {
-            pair: KMutex::new(Some(ufid_out)),
             xforms: xforms.compile(flags),
             epoch,
             l4_hash: ufid_in.crc32(),
@@ -2613,39 +2574,10 @@ impl<N: NetworkImpl> Port<N> {
             parents: pkt.take_lfts(),
         };
 
-        // Keep around the comment on the `None` arm
-        #[allow(clippy::single_match)]
-        match data.uft_out.get(&ufid_out) {
-            // If an outbound packet has already created an outbound
-            // UFT entry, make sure to pair it to this inbound entry.
-            Some(out_entry) => {
-                // Remember, the inbound UFID is the flow as seen by
-                // the network, before any processing is done by OPTE.
-
-                *out_entry.state().pair.lock() = Some(*ufid_in);
-            }
-
-            // Ideally we would simulate the outbound flow if no
-            // outbound UFT entry existed at this point as per VFP
-            // §6.4.1. However, the act of "simulating" a flow hasn't
-            // been implemented yet. For now we only lazily create UFT
-            // outbound entries, which also means that their `pair`
-            // value will be `None` in the case where the inbound
-            // packet is the first one for a given flow (because OPTE
-            // cannot assume symmetric UFIDs between inbound and
-            // outbound).
-            None => (),
-        }
-
         // For inbound traffic the TCP flow table must be
         // checked _after_ processing take place.
         if pkt.meta().is_inner_tcp() {
-            match self.process_in_tcp(
-                data,
-                pkt.meta(),
-                ufid_in,
-                pkt.len() as u64,
-            ) {
+            match self.process_in_tcp(pkt.meta(), ufid_in, pkt.len() as u64) {
                 Ok(TcpMaybeClosed::Closed { .. }) => {
                     Ok(InternalProcessResult::Modified)
                 }
@@ -2654,16 +2586,13 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(TcpMaybeClosed::NewState(_, flow)) => {
                     // We have a good TCP flow, create a new UFT entry.
                     hte.tcp_flow = Some(Arc::downgrade(&flow));
-                    match data.uft_in.add(*ufid_in, hte) {
+                    let mut uft_in = self.uft_in.write();
+                    match uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
-                            self.new_uft_kstat(In, data);
-                            match associate_lfts_upstack(
-                                data,
-                                &v,
-                                Direction::In,
-                            ) {
+                            self.new_uft_kstat(In, &mut uft_in);
+                            match associate_lfts_upstack(&v, Direction::In) {
                                 Ok(_) => Ok(InternalProcessResult::Modified),
-                                Err(OpteError::MaxCapacity(_)) => {
+                                Err(FlowTableError::MaxCapacity(_)) => {
                                     Err(ProcessError::LftChildrenFull)
                                 }
                                 Err(_) => unreachable!(
@@ -2671,15 +2600,15 @@ impl<N: NetworkImpl> Port<N> {
                                 ),
                             }
                         }
-                        Err(OpteError::MaxCapacity(limit)) => {
+                        Err(FlowTableError::MaxCapacity(limit)) => {
                             Err(ProcessError::FlowTableFull {
                                 kind: "UFT",
                                 limit,
                             })
                         }
-                        Err(_) => unreachable!(
-                            "Cannot return other errors from FlowTable::add"
-                        ),
+                        Err(FlowTableError::Existing) => {
+                            Err(ProcessError::FlowRace { kind: "UFT" })
+                        }
                     }
                 }
 
@@ -2688,14 +2617,14 @@ impl<N: NetworkImpl> Port<N> {
                 // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err_probe(Direction::In, Some(pkt), ufid_in, e);
                     Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     })
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err_probe(Direction::In, Some(pkt), ufid_in, e);
                     Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     })
@@ -2706,12 +2635,13 @@ impl<N: NetworkImpl> Port<N> {
                 ),
             }
         } else {
-            match data.uft_in.add(*ufid_in, hte) {
+            let mut uft_in = self.uft_in.write();
+            match uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
-                    self.new_uft_kstat(In, data);
-                    match associate_lfts_upstack(data, &v, Direction::In) {
+                    self.new_uft_kstat(In, &mut uft_in);
+                    match associate_lfts_upstack(&v, Direction::In) {
                         Ok(_) => Ok(InternalProcessResult::Modified),
-                        Err(OpteError::MaxCapacity(_)) => {
+                        Err(FlowTableError::MaxCapacity(_)) => {
                             Err(ProcessError::LftChildrenFull)
                         }
                         Err(_) => unreachable!(
@@ -2719,12 +2649,12 @@ impl<N: NetworkImpl> Port<N> {
                         ),
                     }
                 }
-                Err(OpteError::MaxCapacity(limit)) => {
+                Err(FlowTableError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                 }
-                Err(_) => unreachable!(
-                    "Cannot return other errors from FlowTable::add"
-                ),
+                Err(FlowTableError::Existing) => {
+                    Err(ProcessError::FlowRace { kind: "UFT" })
+                }
             }
         }
     }
@@ -2762,7 +2692,6 @@ impl<N: NetworkImpl> Port<N> {
     // when an outbound UFT entry was just created.
     fn process_out_tcp_new(
         &self,
-        data: &mut PortData,
         ufid_out: &InnerFlowId,
         pmeta: &MblkPacketData,
         pkt_len: u64,
@@ -2770,12 +2699,12 @@ impl<N: NetworkImpl> Port<N> {
         let tcp = pmeta.inner_tcp().unwrap();
         let dir = TcpDirection::Out { ufid_out };
 
-        match self.update_tcp_entry(data, tcp, &dir, pkt_len) {
+        match self.update_tcp_entry(tcp, &dir, pkt_len) {
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
             ) => self.create_new_tcp_entry(
-                &mut data.tcp_flows,
+                &mut self.tcp_flows.write(),
                 tcp,
                 &dir,
                 pkt_len,
@@ -2786,7 +2715,6 @@ impl<N: NetworkImpl> Port<N> {
 
     fn process_out_miss(
         &self,
-        data: &mut PortData,
         epoch: u64,
         pkt: &mut Packet<MblkFullParsed>,
         ameta: &mut ActionMeta,
@@ -2796,22 +2724,20 @@ impl<N: NetworkImpl> Port<N> {
         self.stats.vals.out_uft_miss.incr(1);
         let mut tcp_closed = false;
 
+        let flow_before = *pkt.flow();
+
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
         let tcp_flow = if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp_new(
-                data,
-                pkt.flow(),
+                &flow_before,
                 pkt.meta(),
                 pkt.len() as u64,
             ) {
-                Ok(TcpMaybeClosed::Closed { ufid_inbound }) => {
+                // TODO(ky) does anyone *use* ufid_in now??
+                Ok(TcpMaybeClosed::Closed { .. }) => {
                     tcp_closed = true;
-                    self.uft_tcp_closed(
-                        data,
-                        pkt.flow(),
-                        ufid_inbound.as_ref(),
-                    );
+                    self.uft_tcp_closed_probe(Direction::Out, &flow_before);
                     None
                 }
 
@@ -2825,21 +2751,21 @@ impl<N: NetworkImpl> Port<N> {
                 // already encodes a shortcut from `Closed` to `Established.
                 Err(ProcessError::TcpFlow(err)) => {
                     let e = format!("{err}");
-                    self.tcp_err(&data.tcp_flows, Out, e, pkt);
+                    self.tcp_err_probe(Out, Some(pkt), &flow_before, e);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::MissingFlow(flow_id)) => {
                     let e = format!("Missing TCP flow ID: {flow_id}");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err_probe(Out, Some(pkt), &flow_before, e);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
                 }
                 Err(ProcessError::FlowTableFull { kind, limit }) => {
                     let e = format!("{kind} flow table full ({limit} entries)");
-                    self.tcp_err(&data.tcp_flows, Direction::In, e, pkt);
+                    self.tcp_err_probe(Out, Some(pkt), &flow_before, e);
                     return Ok(InternalProcessResult::Drop {
                         reason: DropReason::TcpErr,
                     });
@@ -2853,8 +2779,7 @@ impl<N: NetworkImpl> Port<N> {
         };
 
         let mut xforms = Transforms::new();
-        let flow_before = *pkt.flow();
-        let res = self.layers_process(data, Out, pkt, &mut xforms, ameta);
+        let res = self.layers_process(Out, pkt, &mut xforms, ameta);
 
         let mut flags = TransformFlags::empty();
         if pkt.checksums_dirty() {
@@ -2864,27 +2789,29 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
-        let hte = UftEntry {
-            pair: KMutex::new(None),
-            xforms: xforms.compile(flags),
-            epoch,
-            l4_hash: flow_before.crc32(),
-            tcp_flow,
-            parents: pkt.take_lfts(),
-        };
-
         match res {
             Ok(LayerResult::Allow) => {
                 // If there is no Flow ID, then there is no UFT entry.
                 if flow_before == FLOW_ID_DEFAULT || tcp_closed {
                     return Ok(InternalProcessResult::Modified);
                 }
-                match data.uft_out.add(flow_before, hte) {
+
+                let hte = UftEntry {
+                    xforms: xforms.compile(flags),
+                    epoch,
+                    l4_hash: flow_before.crc32(),
+                    tcp_flow,
+                    parents: pkt.take_lfts(),
+                };
+
+                let mut uft_out = self.uft_out.write();
+
+                match uft_out.add(flow_before, hte) {
                     Ok(v) => {
-                        self.new_uft_kstat(Out, data);
-                        match associate_lfts_upstack(data, &v, Direction::Out) {
+                        self.new_uft_kstat(Out, &mut uft_out);
+                        match associate_lfts_upstack(&v, Direction::Out) {
                             Ok(_) => Ok(InternalProcessResult::Modified),
-                            Err(OpteError::MaxCapacity(_)) => {
+                            Err(FlowTableError::MaxCapacity(_)) => {
                                 Err(ProcessError::LftChildrenFull)
                             }
                             Err(_) => unreachable!(
@@ -2892,12 +2819,12 @@ impl<N: NetworkImpl> Port<N> {
                             ),
                         }
                     }
-                    Err(OpteError::MaxCapacity(limit)) => {
+                    Err(FlowTableError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                     }
-                    Err(_) => unreachable!(
-                        "Cannot return other errors from FlowTable::add"
-                    ),
+                    Err(FlowTableError::Existing) => {
+                        Err(ProcessError::FlowRace { kind: "UFT" })
+                    }
                 }
             }
 
@@ -2911,63 +2838,40 @@ impl<N: NetworkImpl> Port<N> {
                 })
             }
 
-            Ok(LayerResult::HandlePkt) => Ok(InternalProcessResult::from(
-                self.net.handle_pkt(Out, pkt, &data.uft_in, &data.uft_out)?,
-            )),
+            Ok(LayerResult::HandlePkt) => {
+                Ok(InternalProcessResult::from(self.net.handle_pkt(
+                    Out,
+                    pkt,
+                    &self.uft_in.read(),
+                    &self.uft_out.read(),
+                )?))
+            }
 
             Err(e) => Err(ProcessError::Layer(e)),
         }
     }
 
-    fn new_uft_kstat(&self, dir: Direction, data: &mut PortData) {
+    fn new_uft_kstat(&self, dir: Direction, uft: &mut FlowTable<UftEntry>) {
         let vals = &self.stats.vals;
-        let (uft, flow_stat, evict_stat) = match dir {
-            Direction::In => {
-                (&data.uft_in, &vals.in_uft_flows, &vals.in_uft_evictions)
-            }
-            Direction::Out => {
-                (&data.uft_out, &vals.out_uft_flows, &vals.out_uft_evictions)
-            }
+        let (flow_stat, evict_stat) = match dir {
+            Direction::In => (&vals.in_uft_flows, &vals.in_uft_evictions),
+            Direction::Out => (&vals.out_uft_flows, &vals.out_uft_evictions),
         };
 
         // This function is called in response to a successful addition of a UFT.
         // If the flow count is unchanged, then we know another entry was evicted
         // in favour of the new one.
         //
-        // Because we hold the PortData write lock, no one else will alter this
+        // Because we hold the write lock, no one else will alter this
         // value.
+        //
+        // TODO(ky): what if we shard this?
         let n_flows = u64::from(uft.num_flows());
         let old_count = flow_stat.val();
         flow_stat.set(n_flows);
 
         if n_flows == old_count {
             evict_stat.incr(1);
-        }
-    }
-
-    fn uft_invalidate(
-        &self,
-        data: &mut PortData,
-        ufid_out: Option<&InnerFlowId>,
-        ufid_in: Option<&InnerFlowId>,
-        epoch: u64,
-    ) {
-        if let Some(ufid_in) = ufid_in {
-            data.uft_in.remove(ufid_in);
-            self.stats
-                .vals
-                .in_uft_flows
-                .set(u64::from(data.uft_in.num_flows()));
-            self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
-        }
-
-        if let Some(ufid_out) = ufid_out {
-            data.uft_out.remove(ufid_out);
-            self.stats
-                .vals
-                .out_uft_flows
-                .set(u64::from(data.uft_out.num_flows()));
-            self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
         }
     }
 
@@ -2995,25 +2899,6 @@ impl<N: NetworkImpl> Port<N> {
                 let (_, _, _) = (dir, ufid, epoch);
             }
         }
-    }
-
-    fn uft_tcp_closed(
-        &self,
-        data: &mut PortData,
-        ufid_out: &InnerFlowId,
-        ufid_in: Option<&InnerFlowId>,
-    ) {
-        if let Some(ufid_in) = ufid_in {
-            data.uft_in.remove(ufid_in);
-            self.stats
-                .vals
-                .in_uft_flows
-                .set(u64::from(data.uft_in.num_flows()));
-            self.uft_tcp_closed_probe(Direction::In, ufid_in);
-        }
-        data.uft_out.remove(ufid_out);
-        self.stats.vals.out_uft_flows.set(u64::from(data.uft_out.num_flows()));
-        self.uft_tcp_closed_probe(Direction::Out, ufid_out);
     }
 
     fn uft_tcp_closed_probe(&self, dir: Direction, ufid: &InnerFlowId) {
@@ -3111,58 +2996,6 @@ impl<N: NetworkImpl> Port<N> {
     }
 }
 
-// The follow functions are useful for validating state during
-// testing. If one of these functions becomes useful outside of
-// testing, then add it to the impl block above.
-//
-// TODO Move these to main Port impl
-//
-// #[cfg(test)]
-impl<N: NetworkImpl> Port<N> {
-    /// Return the current epoch.
-    pub fn epoch(&self) -> u64 {
-        self.epoch.load(SeqCst)
-    }
-
-    /// Return the list of layer names.
-    pub fn layers(&self) -> Vec<String> {
-        self.data.read().layers.iter().map(|l| l.name().to_string()).collect()
-    }
-
-    /// Get the number of flows currently in the layer and direction
-    /// specified. The value `"uft"` can be used to get the number of
-    /// UFT flows.
-    pub fn num_flows(&self, layer: &str, dir: Direction) -> u32 {
-        let data = self.data.read();
-        use Direction::*;
-
-        match (layer, dir) {
-            ("uft", In) => data.uft_in.num_flows(),
-            ("uft", Out) => data.uft_out.num_flows(),
-            (name, _dir) => {
-                for layer in &data.layers {
-                    if layer.name() == name {
-                        return layer.num_flows();
-                    }
-                }
-
-                panic!("layer not found: {name}");
-            }
-        }
-    }
-
-    /// Return the number of rules registered for the given layer in
-    /// the given direction.
-    pub fn num_rules(&self, layer_name: &str, dir: Direction) -> usize {
-        let data = self.data.read();
-        data.layers
-            .iter()
-            .find(|layer| layer.name() == layer_name)
-            .map(|layer| layer.num_rules(dir))
-            .unwrap_or_else(|| panic!("layer not found: {layer_name}"))
-    }
-}
-
 /// Helper enum for encoding what UFIDs are available when
 /// updating TCP flow state.
 enum TcpDirection<'a> {
@@ -3196,13 +3029,13 @@ pub enum Pos {
 
 /// An entry in the TCP flow table.
 #[derive(Clone, Debug)]
-pub struct TcpFlowEntryStateInner {
+pub struct TcpFlowEntryStateInner<Id: FlowId> {
     // We store this for the benefit of inbound flows who have UFTs
     // but which need to know their partner UFID to perform an invalidation.
-    outbound_ufid: InnerFlowId,
+    outbound_ufid: Id,
     // This must be the UFID of inbound traffic _as it arrives_ from
     // the network, not after it's processed.
-    inbound_ufid: Option<InnerFlowId>,
+    inbound_ufid: Option<Id>,
     tcp_state: TcpFlowState,
     segs_in: u64,
     segs_out: u64,
@@ -3214,7 +3047,7 @@ pub struct TcpFlowEntryStateInner {
 }
 
 pub struct TcpFlowEntryState {
-    inner: KMutex<TcpFlowEntryStateInner>,
+    inner: KMutex<TcpFlowEntryStateInner<InnerFlowId>>,
 }
 
 impl TcpFlowEntryState {
@@ -3265,49 +3098,57 @@ impl TcpFlowEntryState {
         let lock = self.inner.lock();
         lock.tcp_state.tcp_state()
     }
+}
 
-    #[inline(always)]
-    fn update<V: ByteSlice>(
-        &self,
-        port_name: &CStr,
-        tcp: &impl TcpRef<V>,
-        dir: Direction,
-        pkt_len: u64,
-        ufid_in: Option<&InnerFlowId>,
-    ) -> result::Result<TcpState, TcpFlowStateError> {
-        let mut tfes = self.inner.lock();
-        match dir {
-            Direction::In => {
-                tfes.segs_in += 1;
-                tfes.bytes_in += pkt_len;
-            }
-            Direction::Out => {
-                tfes.segs_out += 1;
-                tfes.bytes_out += pkt_len;
-            }
+#[inline(always)]
+fn update_tcp_state<V: ByteSlice>(
+    el: &FlowEntry<TcpFlowEntryState>,
+    port_name: &CStr,
+    tcp: &impl TcpRef<V>,
+    dir: Direction,
+    pkt_len: u64,
+    ufid_in: Option<&InnerFlowId>,
+) -> result::Result<TcpState, TcpFlowStateError> {
+    let mut tfes = el.state().inner.lock();
+    match dir {
+        Direction::In => {
+            tfes.segs_in += 1;
+            tfes.bytes_in += pkt_len;
         }
-
-        if let Some(ufid_in) = ufid_in {
-            // We need to store the UFID of the inbound packet
-            // before it was processed so that we can retire the
-            // correct UFT/LFT entries upon connection
-            // termination.
-            tfes.inbound_ufid = Some(*ufid_in);
+        Direction::Out => {
+            tfes.segs_out += 1;
+            tfes.bytes_out += pkt_len;
         }
-        let ufid_out = tfes.outbound_ufid;
-        let tcp_state = &mut tfes.tcp_state;
+    }
 
-        tcp_state.process(port_name, dir, &ufid_out, tcp)
+    if let Some(ufid_in) = ufid_in {
+        // We need to store the UFID of the inbound packet
+        // before it was processed so that we can retire the
+        // correct UFT/LFT entries upon connection
+        // termination.
+        tfes.inbound_ufid = Some(*ufid_in);
+    }
+    let ufid_out = tfes.outbound_ufid;
+    let tcp_state = &mut tfes.tcp_state;
+
+    match tcp_state.process(port_name, dir, &ufid_out, tcp) {
+        v @ Ok(TcpState::Closed)
+        | v @ Err(TcpFlowStateError::NewFlow { .. }) => {
+            el.mark_dead();
+            v
+        }
+        v => v,
     }
 }
 
 /// Install all parent-child links between a UFT entry, the LFT entries which
 /// underpin it, and the TCP flow state entry if present.
 fn associate_lfts_upstack(
-    _data: &mut PortData,
-    uft: &Arc<FlowEntry<UftEntry<InnerFlowId>>>,
+    uft: &Arc<FlowEntry<UftEntry>>,
     dir: Direction,
-) -> Result<()> {
+) -> core::result::Result<(), FlowTableError> {
+    uft.mark_ready();
+
     // The goal here is to provide each LFT hit with two children where
     // possible. These are the UFT and, when it exists, the TCP flow entry.
     // What this means in practice is that while either is present, the LFTs
@@ -3322,6 +3163,7 @@ fn associate_lfts_upstack(
     let uft_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(uft) as _;
     for lft in &uft.state().parents {
         lft.push_child(&uft_dyn)?;
+        lft.mark_ready();
     }
 
     // Currently, we're explicitly holding a write lock on the parent port,
@@ -3329,7 +3171,11 @@ fn associate_lfts_upstack(
     // window for any thread (mainly cleanup) to see that an inconsistent
     // parent/child relationship between the LFTs and TCP entry. We'll need to
     // be more careful of that when we make these locks more granular.
+    //
+    // TODO(ky): start thinking about this, woo-ee.
     if let Some(tcp) = uft.state().tcp_flow.as_ref().and_then(Weak::upgrade) {
+        tcp.mark_ready();
+
         let tcp_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(&tcp) as _;
         let mut parents = uft.state().parents.clone();
         let mut inner = tcp.state().inner.lock();
@@ -3345,6 +3191,7 @@ fn associate_lfts_upstack(
         }
         for new_lft in new_parent_slot {
             new_lft.push_child(&tcp_dyn)?;
+            new_lft.mark_ready();
         }
     }
 
@@ -3358,7 +3205,7 @@ impl core::fmt::Debug for TcpFlowEntryState {
     }
 }
 
-impl Display for TcpFlowEntryStateInner {
+impl<Id: FlowId> Display for TcpFlowEntryStateInner<Id> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.inbound_ufid {
             None => write!(f, "None {}", self.tcp_state),
@@ -3374,28 +3221,20 @@ impl Display for TcpFlowEntryState {
     }
 }
 
-impl Dump for TcpFlowEntryStateInner {
-    type DumpVal = TcpFlowEntryDump;
-
-    fn dump(&self, hits: u64) -> Self::DumpVal {
-        TcpFlowEntryDump {
-            hits,
-            inbound_ufid: self.inbound_ufid,
-            tcp_state: TcpFlowStateDump::from(self.tcp_state),
-            segs_in: self.segs_in,
-            segs_out: self.segs_out,
-            bytes_in: self.bytes_in,
-            bytes_out: self.bytes_out,
-        }
-    }
-}
-
 impl Dump for TcpFlowEntryState {
     type DumpVal = TcpFlowEntryDump;
 
     fn dump(&self, hits: u64) -> Self::DumpVal {
         let inner = self.inner.lock();
-        inner.dump(hits)
+        TcpFlowEntryDump {
+            hits,
+            inbound_ufid: inner.inbound_ufid,
+            tcp_state: TcpFlowStateDump::from(inner.tcp_state),
+            segs_in: inner.segs_in,
+            segs_out: inner.segs_out,
+            bytes_in: inner.bytes_in,
+            bytes_out: inner.bytes_out,
+        }
     }
 }
 
