@@ -129,10 +129,12 @@
 //! ### Multicast directions
 //! The multicast state stores, and the identity/membership split between
 //! them, are described in detail in the [`overlay`] module docs. XDE implements
-//! both directions over that state. Rx delivery, described above, is the
-//! external-ingress half: a decapsulated packet addressed to an admin-scoped
-//! underlay group is fanned out to the ports on this sled that subscribed to
-//! it, and each copy goes through that member's source filter. For the other
+//! both directions over that state. In the Rx path, described above, an
+//! encapsulated packet addressed to an admin-local underlay group, whether
+//! sent by a guest on another sled or from outside the rack, is fanned out
+//! to the ports on this sled that subscribed to it. Each copy goes through
+//! that member's source filter before the port's inbound processing
+//! decapsulates it. For the other
 //! direction, the per-port `mcast_fwd` state and Tx fan-out serve
 //! guest-originated sends, which resolve the group through the M2P table
 //! during encapsulation, before XDE's multicast forwarding stage.
@@ -2532,12 +2534,13 @@ fn handle_mcast_tx<'a>(
         + usize::from(ctx.tun_meoi.meoi_l3hlen)
         + usize::from(ctx.tun_meoi.meoi_l4hlen);
 
-    // Local same-sled delivery on the guest-egress path: the sending guest
-    // has already gotten past the M2P lookup in the overlay layer, so this
-    // loop only decides which other local ports can receive a copy.
+    // Local same-sled delivery on the guest-originated (Tx) path. The M2P
+    // lookup in the overlay layer must have already admitted the sending
+    // guest's packet. This loop decides the other local ports who should
+    // receive a copy.
     //
-    // The external-ingress fan-out is separate; `handle_mcast_rx` handles
-    // copies arriving from the underlay.
+    // Rx fan-out is separate; `handle_mcast_rx` handles copies arriving from
+    // the underlay.
     //
     // We always deliver to subscribers on this sled, independent of the Tx-only
     // Replication instruction (not an access control mechanism).
@@ -2817,20 +2820,23 @@ fn handle_mcast_tx<'a>(
 
 /// Handle multicast packet reception from the underlay.
 ///
-/// This is the external-ingress half of multicast. A packet addressed to an
-/// admin-scoped underlay group arrives already decapsulated by the caller,
-/// and we fan it out to the ports on this sled that are subscribed to that
-/// group. Each copy must go through that member's source filter.
+/// This is the multicast Rx path. A packet addressed to an admin-local
+/// underlay group still arrives encapsulated, whether a guest on another sled
+/// or a source outside the rack was the sender, and then we fan it out to the
+/// ports on this sled that are subscribed to that group. Each copy must go
+/// through the member's source filter, and is decapsulated by the port's
+/// inbound processing.
 ///
 /// Note: OPTE is always a leaf node in the multicast replication tree; no
 /// further replication toward the underlay (or across transit, or anything
 /// similar) can happen here.
 ///
 /// There is no per-packet M2P lookup here. Subscriptions are keyed
-/// by the underlay group, and (by this point) the subscribe ioctl has already
-/// translated the overlay group through M2P. The guest-egress half, where M2P
-/// decides which overlay groups a guest may send to, lives in the overlay
-/// layer's encap action.
+/// by the underlay group. Subscribe translates an overlay group through
+/// M2P, or accepts an admin-local IPv6 group directly if no mapping exists.
+/// Unsubscribe uses M2P and leaves subscriptions unchanged when no mapping
+/// exists. The Tx path, where M2P decides which overlay groups a guest may
+/// send to, lives in the overlay layer's encap action.
 ///
 /// The Replication type is Tx-only (instructions to the switch), so the
 /// replication field is ignored on Rx.

@@ -98,9 +98,9 @@ pub const BOUNDARY_SERVICES_VNI: u32 = 99u32;
 /// multicast operations (M2P mappings and forwarding entries) that specify
 /// any other VNI.
 ///
-/// M2P (Multicast-to-Physical) mappings are keyed by multicast group, not
-/// VNI. All multicast traffic currently shares one rack-wide namespace; no
-/// VPC isolation.
+/// M2P (multicast-to-underlay) mappings are keyed by multicast group, not
+/// the VNI. All multicast traffic currently shares one rack-wide namespace,
+/// and there is no per-VPC isolation of multicast addresses.
 ///
 /// On the inbound path, the overlay layer's `MulticastVniValidator` (see
 /// [`overlay`]) accepts a multicast packet whose Geneve VNI is either this

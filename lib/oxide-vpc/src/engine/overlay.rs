@@ -34,10 +34,12 @@
 //!
 //! ## Identity: the M2P table
 //!
-//! [`Mcast2Phys`] holds the group's identity translation, mapping an
-//! external group address to the admin-scoped underlay group that carries
-//! it (1:1). There is one entry per group per sled. The table knows nothing
-//! about members or ports.
+//! [`Mcast2Phys`] holds the group's identity translation, mapping an overlay
+//! group address (the inner destination a guest sends to) to the admin-local
+//! underlay group that carries it (1:1). Dendrite calls the same overlay
+//! address the external group, which is how the switch sees it for NATing.
+//! There is one entry per group per sled. The table knows nothing about
+//! members or ports.
 //!
 //! V2P resolves to one sled's underlay address. M2P resolves to an underlay
 //! group that the switches fan out to many sleds. `Phys` denotes the underlay
@@ -69,24 +71,31 @@
 //!
 //! The two directions rely on different state. Guest-originated (Tx) traffic
 //! reaches [`EncapAction`], which resolves the destination through M2P per
-//! flow and denies the send when no such mapping exists. The deny binds at
-//! flow establishment. Removing a mapping stops new flows from establishing,
-//! while established ones keep encapsulating until they age out.
+//! flow and denies the send when no such mapping exists. Removing a mapping
+//! prevents new flows from establishing, while established ones keep
+//! encapsulating until they eventually age out.
 //!
-//! External-ingress delivery never reads the M2P store per packet: XDE
-//! decaps the packet and fans a copy out to each subscribed port, applying
-//! that member's source filter.
+//! Rx from the underlay never reads the M2P table. XDE looks up subscribers
+//! by the outer IPv6 destination (the admin-local underlay group read from
+//! the outer header) while the packet is still encapsulated, applies each
+//! member's source filter, and delivers a copy to each remaining port. Each
+//! copy is then decapsulated by that port's inbound processing. This covers
+//! sends from guests on other sleds as well as traffic from outside the
+//! rack.
 //!
-//! Ingress still uses M2P, just earlier: the subscribe ioctl translates the
-//! overlay group a port joins into the underlay key it listens on. The table
-//! serves egress in the data path and ingress at subscribe time.
+//! M2P reaches Rx only through the subscribe and unsubscribe ioctls, which
+//! translate the overlay group a port names into the underlay group it
+//! listens on. An IPv6 group that is already admin-local may be subscribed
+//! without a mapping. The table serves Tx in the data path and Rx at
+//! (un)subscribe time.
 //!
 //! ```text
 //!  Tx  guest -> gateway -> EncapAction --M2P--> ff04::e9fc:1 -> switch (PRE)
 //!                                    deny when unmapped
 //!
-//!  Rx  ff04::e9fc:1 -> XDE decap -> subscriptions + source filter -> ports
-//!                                    M2P used at subscribe time (not here)
+//!  Rx  ff04::e9fc:1 -> XDE subscriptions + source filter -> per-port copy
+//!                       -> port inbound (decap) -> guest
+//!                       M2P used at (un)subscribe time (not here)
 //! ```
 //!
 //! [`SourceFilter`]: crate::api::SourceFilter
@@ -329,12 +338,11 @@ impl StaticAction for EncapAction {
         // level (cross-VPC) and doesn't go through VPC routing, so router
         // metadata is not required in that case.
         //
-        // This is the guest-egress decision point for multicast. Encapsulation
-        // runs only on outbound (Tx) traffic originated by a guest, so the M2P
-        // lookup below decides which overlay groups a guest may send to.
-        // External-ingress delivery takes the opposite path: decapsulated
-        // copies of an underlay group are fanned out to subscribed ports by
-        // XDE, and never touch this mapping.
+        // Every outbound guest packet we encapsulate needs a valid underlay
+        // destination address. Unicast traffic needs a unicast IPv6 underlay
+        // address, and multicast traffic needs an admin-local multicast IPv6
+        // underlay group, which M2P provides. If we cannot derive one, the send
+        // is denied.
         let is_mcast_addr = dst_ip.is_multicast();
 
         let (is_internal, phys_target, is_mcast) = if is_mcast_addr {

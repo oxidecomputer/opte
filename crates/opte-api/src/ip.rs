@@ -878,8 +878,8 @@ impl Ipv6Addr {
     /// See [RFC 7346] for details on IPv6 multicast address scopes. Routers
     /// must not forward a packet beyond the scope its destination names
     /// ([RFC 4291 §2.7]). Admin-local keeps rack traffic in the rack,
-    /// link-local is dropped at the first hop, and global leaks past the
-    /// rack.
+    /// link-local is dropped at the first hop, and global is permitted to
+    /// leave the rack.
     ///
     /// Requiring flags=0 follows Omicron's allocation rather than the RFCs.
     /// T=0 denotes an IANA-assigned well-known group ([RFC 4291 §2.7]), and
@@ -1128,7 +1128,7 @@ impl MulticastUnderlay {
     /// Create a new `MulticastUnderlay` without validation.
     ///
     /// Callers of this fn must still uphold the type's invariant by supplying
-    /// an admin-scoped multicast address (ff04::/16). So, no validation here.
+    /// an admin-local multicast address (ff04::/16). So, no validation here.
     ///
     /// On the packet path, the address is read directly from the wire, and
     /// the forwarding and subscription table lookups don't recheck it.
