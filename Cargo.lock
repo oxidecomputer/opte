@@ -140,6 +140,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
+name = "c8str"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a407440c9adcc134ae4dc48cfd082fc5d5e8742c8876b55149071d349b9905"
+
+[[package]]
 name = "camino"
 version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1209,6 +1215,7 @@ name = "opte"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+ "c8str",
  "cfg-if",
  "crc32fast",
  "derror-macro",
@@ -1290,6 +1297,7 @@ name = "opte-test-utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "c8str",
  "opte",
  "oxide-vpc",
  "pcap-parser",
@@ -1318,6 +1326,7 @@ dependencies = [
 name = "oxide-vpc"
 version = "0.1.0"
 dependencies = [
+ "c8str",
  "cfg-if",
  "ctor",
  "illumos-sys-hdrs",
@@ -2426,6 +2435,7 @@ name = "xde"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.0",
+ "c8str",
  "crc32fast",
  "heapless",
  "illumos-sys-hdrs",
