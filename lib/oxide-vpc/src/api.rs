@@ -979,6 +979,199 @@ impl SourceFilter {
             SourceFilter::Include(s) | SourceFilter::Exclude(s) => s,
         }
     }
+
+    /// Validate that every `Include` source is fit to serve as an (S,G)
+    /// source.
+    ///
+    /// Both the subscribe and forwarding paths accept operator-supplied
+    /// source lists, so both validate here rather than each carrying its own
+    /// rules.
+    ///
+    /// `Exclude` sets are left unchecked. Their entries name traffic to drop,
+    /// and an address that could never be a legitimate source may still be
+    /// one an operator wants to block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`InvalidSource`] with the rejected address and the
+    /// rule it hit.
+    pub fn validate_sources(&self) -> Result<(), InvalidSource> {
+        let SourceFilter::Include(sources) = self else {
+            return Ok(());
+        };
+        for src in sources {
+            if let Some(reason) = invalid_multicast_source(*src) {
+                return Err(InvalidSource { addr: *src, reason });
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the `Include` sources set for a given `group`, rejecting any
+    /// source whose address family differs from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`InvalidSource`] with the rejected address and the rule
+    /// it hit.
+    pub fn validate_sources_for_group(
+        &self,
+        group: IpAddr,
+    ) -> Result<(), InvalidSource> {
+        self.validate_sources()?;
+
+        let SourceFilter::Include(sources) = self else {
+            return Ok(());
+        };
+
+        sources.iter().try_for_each(|&addr| {
+            if matches!(
+                (addr, group),
+                (IpAddr::Ip4(_), IpAddr::Ip4(_))
+                    | (IpAddr::Ip6(_), IpAddr::Ip6(_))
+            ) {
+                Ok(())
+            } else {
+                Err(InvalidSource {
+                    addr,
+                    reason: InvalidMulticastSource::FamilyMismatch(group),
+                })
+            }
+        })
+    }
+}
+
+/// A source address that failed a validation check, along with the
+/// rule it hit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidSource {
+    /// The address supplied in the `Include` set.
+    pub addr: IpAddr,
+    /// The rule that rejected it.
+    pub reason: InvalidMulticastSource,
+}
+
+impl Display for InvalidSource {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "source filter address {} {}", self.addr, self.reason)
+    }
+}
+
+/// The reason an address cannot serve as a multicast (S,G) source.
+///
+/// The rules are validated in variant order; an address caught by more
+/// than one invalid rule only reports the first hit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InvalidMulticastSource {
+    /// The address is multicast, and an (S,G) source names one sender.
+    NotUnicast,
+
+    /// `0.0.0.0` or `::`.
+    Unspecified,
+
+    /// `127.0.0.0/8` or `::1`.
+    Loopback,
+
+    /// `255.255.255.255`, the limited broadcast address that [RFC 919 §7]
+    /// dictates must not be forwarded. IPv6 has no broadcast address, making
+    /// this IPv4 only.
+    ///
+    /// [RFC 919 §7]: https://www.rfc-editor.org/rfc/rfc919#section-7
+    Broadcast,
+
+    /// `169.254.0.0/16` ([RFC 3927]) or `fe80::/10` ([RFC 4291 §2.5.6]).
+    ///
+    /// [RFC 3927]: https://www.rfc-editor.org/rfc/rfc3927
+    /// [RFC 4291 §2.5.6]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.6
+    LinkLocal,
+
+    /// `0.0.0.0/8`. [RFC 1122 §3.2.1.3] permits it as a source before a
+    /// host learns its own address, but reverse-path forwarding cannot
+    /// resolve it to an incoming interface.
+    ///
+    /// [RFC 1122 §3.2.1.3]: https://www.rfc-editor.org/rfc/rfc1122#section-3.2.1.3
+    ThisNetwork,
+
+    /// The class E block `240.0.0.0/4`, which the IANA special-purpose
+    /// registry marks "Source: False". See [`Ipv4Addr::is_reserved`].
+    Reserved,
+
+    /// An IPv6 address holding an embedded IPv4 address.
+    Ipv4Embedded(EmbeddedIpv4),
+
+    /// The address family differs from the group itself; the source filter
+    /// could never match a packet delivered to that group.
+    ///
+    /// This rule involves a relational check, reachable through
+    /// [`SourceFilter::validate_sources_for_group`].
+    FamilyMismatch(IpAddr),
+}
+
+impl Display for InvalidMulticastSource {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::NotUnicast => write!(f, "is not a unicast address"),
+            Self::Unspecified => write!(f, "is the unspecified address"),
+            Self::Loopback => write!(f, "is a loopback address"),
+            Self::Broadcast => write!(f, "is the broadcast address"),
+            Self::LinkLocal => write!(f, "is a link-local address"),
+            Self::ThisNetwork => {
+                write!(f, "is in 0.0.0.0/8 (this host on this network)")
+            }
+            Self::Reserved => {
+                write!(f, "is in the reserved class E block (240.0.0.0/4)")
+            }
+            Self::Ipv4Embedded(form) => {
+                write!(f, "embeds an IPv4 address, {form}")
+            }
+            Self::FamilyMismatch(group) => {
+                write!(f, "does not match the address family of group {group}")
+            }
+        }
+    }
+}
+
+/// Returns the reason `src` is unfit to serve as a multicast (S,G) source, or
+/// `None` if it is acceptable.
+///
+/// The rule set matches the source validators elsewhere in the stack. Shared
+/// address space (100.64.0.0/10, [RFC 6598]) is permitted on purpose because
+/// it can source traffic inside an operator network.
+///
+/// [RFC 6598]: https://www.rfc-editor.org/rfc/rfc6598
+fn invalid_multicast_source(src: IpAddr) -> Option<InvalidMulticastSource> {
+    if src.is_multicast() {
+        return Some(InvalidMulticastSource::NotUnicast);
+    }
+
+    if src.is_unspecified() {
+        return Some(InvalidMulticastSource::Unspecified);
+    }
+
+    if src.is_loopback() {
+        return Some(InvalidMulticastSource::Loopback);
+    }
+
+    if src.is_broadcast() {
+        return Some(InvalidMulticastSource::Broadcast);
+    }
+
+    if src.is_link_local() {
+        return Some(InvalidMulticastSource::LinkLocal);
+    }
+
+    match src {
+        IpAddr::Ip4(v4) if v4.is_this_network() => {
+            Some(InvalidMulticastSource::ThisNetwork)
+        }
+        IpAddr::Ip4(v4) if v4.is_reserved() => {
+            Some(InvalidMulticastSource::Reserved)
+        }
+        IpAddr::Ip4(_) => None,
+        IpAddr::Ip6(v6) => {
+            v6.embedded_ipv4_form().map(InvalidMulticastSource::Ipv4Embedded)
+        }
+    }
 }
 
 /// Subscribe a port to a multicast group.
@@ -1498,6 +1691,154 @@ impl opte::api::cmd::CmdOk for DetachSubnetResp {}
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// Build an `Include` filter holding a single source.
+    fn filter_with(src: IpAddr) -> SourceFilter {
+        SourceFilter::Include(BTreeSet::from([src]))
+    }
+
+    #[test]
+    fn validate_sources_accepts_ordinary_unicast() {
+        for src in [
+            IpAddr::Ip4("192.168.1.1".parse().unwrap()),
+            // Shared address space (100.64.0.0/10, RFC 6598) can source
+            // traffic inside an operator network.
+            IpAddr::Ip4("100.64.0.1".parse().unwrap()),
+            IpAddr::Ip4("223.255.255.255".parse().unwrap()),
+            IpAddr::Ip6("2001:db8::1".parse().unwrap()),
+        ] {
+            assert!(
+                filter_with(src).validate_sources().is_ok(),
+                "{src} should be accepted as a source"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_sources_rejects_unfit_addresses() {
+        for (src, reason) in [
+            (
+                IpAddr::Ip4("224.1.1.1".parse().unwrap()),
+                InvalidMulticastSource::NotUnicast,
+            ),
+            (
+                IpAddr::Ip4("127.0.0.1".parse().unwrap()),
+                InvalidMulticastSource::Loopback,
+            ),
+            (
+                IpAddr::Ip4("255.255.255.255".parse().unwrap()),
+                InvalidMulticastSource::Broadcast,
+            ),
+            (
+                IpAddr::Ip4("169.254.1.1".parse().unwrap()),
+                InvalidMulticastSource::LinkLocal,
+            ),
+            (
+                IpAddr::Ip4("0.0.0.0".parse().unwrap()),
+                InvalidMulticastSource::Unspecified,
+            ),
+            // 0.0.0.0/8, this host on this network, RFC 1122 §3.2.1.3
+            (
+                IpAddr::Ip4("0.1.2.3".parse().unwrap()),
+                InvalidMulticastSource::ThisNetwork,
+            ),
+            // 240.0.0.0/4, class E, RFC 1112 §4
+            (
+                IpAddr::Ip4("240.0.0.1".parse().unwrap()),
+                InvalidMulticastSource::Reserved,
+            ),
+            (
+                IpAddr::Ip4("255.255.255.254".parse().unwrap()),
+                InvalidMulticastSource::Reserved,
+            ),
+            (
+                IpAddr::Ip6("ff0e::1".parse().unwrap()),
+                InvalidMulticastSource::NotUnicast,
+            ),
+            (
+                IpAddr::Ip6("::1".parse().unwrap()),
+                InvalidMulticastSource::Loopback,
+            ),
+            (
+                IpAddr::Ip6("fe80::1".parse().unwrap()),
+                InvalidMulticastSource::LinkLocal,
+            ),
+            // ::ffff:192.0.2.1, RFC 4291 §2.5.5.2
+            (
+                IpAddr::Ip6("::ffff:c000:201".parse().unwrap()),
+                InvalidMulticastSource::Ipv4Embedded(EmbeddedIpv4::Mapped),
+            ),
+            // ::192.0.2.1, RFC 4291 §2.5.5.1
+            (
+                IpAddr::Ip6("::c000:201".parse().unwrap()),
+                InvalidMulticastSource::Ipv4Embedded(EmbeddedIpv4::Compatible),
+            ),
+        ] {
+            assert_eq!(
+                filter_with(src).validate_sources(),
+                Err(InvalidSource { addr: src, reason }),
+                "{src} should be rejected as a source"
+            );
+        }
+    }
+
+    /// An `Exclude` set names traffic to drop, so its entries are not held to
+    /// the (S,G) source rules. An address that could never be a legitimate
+    /// source may still be one an operator wants to block.
+    #[test]
+    fn validate_sources_ignores_exclude_sets() {
+        let filter = SourceFilter::Exclude(BTreeSet::from([
+            IpAddr::Ip4("0.1.2.3".parse().unwrap()),
+            IpAddr::Ip4("240.0.0.1".parse().unwrap()),
+            IpAddr::Ip6("fe80::1".parse().unwrap()),
+        ]));
+        assert!(filter.validate_sources().is_ok());
+    }
+
+    #[test]
+    fn validate_sources_for_group_checks_family() {
+        let v4_group = IpAddr::Ip4("224.1.2.3".parse().unwrap());
+        let v6_group = IpAddr::Ip6("ff0e::1".parse().unwrap());
+        let v4_src = IpAddr::Ip4("192.168.1.1".parse().unwrap());
+        let v6_src = IpAddr::Ip6("2001:db8::1".parse().unwrap());
+        let unfit_v6 = IpAddr::Ip6("fe80::1".parse().unwrap());
+
+        for (filter, group, expected) in [
+            (filter_with(v4_src), v4_group, Ok(())),
+            (filter_with(v6_src), v6_group, Ok(())),
+            (
+                filter_with(v6_src),
+                v4_group,
+                Err(InvalidSource {
+                    addr: v6_src,
+                    reason: InvalidMulticastSource::FamilyMismatch(v4_group),
+                }),
+            ),
+            (
+                filter_with(v4_src),
+                v6_group,
+                Err(InvalidSource {
+                    addr: v4_src,
+                    reason: InvalidMulticastSource::FamilyMismatch(v6_group),
+                }),
+            ),
+            (
+                filter_with(unfit_v6),
+                v4_group,
+                Err(InvalidSource {
+                    addr: unfit_v6,
+                    reason: InvalidMulticastSource::LinkLocal,
+                }),
+            ),
+            (SourceFilter::Exclude(BTreeSet::from([v6_src])), v4_group, Ok(())),
+        ] {
+            assert_eq!(
+                filter.validate_sources_for_group(group),
+                expected,
+                "{filter:?} against group {group}"
+            );
+        }
+    }
 
     #[test]
     fn ports_from_str_good() {

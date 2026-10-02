@@ -4155,6 +4155,15 @@ fn set_mcast_forwarding_hdlr(
             });
         }
 
+        // The aggregated source filter is operator-supplied, so it is held to
+        // the same rules as a subscriber's filter.
+        if let Err(e) = entry.source_filter.validate_sources() {
+            return Err(OpteError::System {
+                errno: EINVAL,
+                msg: e.to_string(),
+            });
+        }
+
         // Reject `Reserved`. It serves no replication target, so the Tx-side
         // selection never picks such a hop and an accepted one would silently
         // drop the group's traffic with no telemetry.
@@ -4335,23 +4344,10 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         }
 
         // Validate source filter: sources must contain valid unicast addresses
-        for src in req.filter.sources() {
-            if src.is_multicast() {
-                return Err(OpteError::BadState(format!(
-                    "source filter address {src} is multicast"
-                )));
-            }
+        req.filter
+            .validate_sources_for_group(req.group)
+            .map_err(|e| OpteError::BadState(e.to_string()))?;
 
-            if src.is_unspecified()
-                || src.is_loopback()
-                || src.is_broadcast()
-                || src.is_link_local()
-            {
-                return Err(OpteError::BadState(format!(
-                    "source filter address {src} is a special-use address"
-                )));
-            }
-        }
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
                 // If an overlay->underlay mapping exists, use it; otherwise, if the
