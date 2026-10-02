@@ -339,7 +339,6 @@ type McastForwardingTable = BTreeMap<
 
 // Entry limits for the various flow tables.
 const FW_FT_LIMIT: NonZeroU32 = NonZeroU32::new(524288).unwrap();
-const FT_LIMIT_ONE: NonZeroU32 = NonZeroU32::new(1).unwrap();
 
 /// The name of this driver.
 const XDE_STR: *const c_char = c"xde".as_ptr();
@@ -3480,13 +3479,10 @@ fn new_port(
     let mut pb =
         PortBuilder::new(name, cfg.guest_mac, ectx, NonZeroU32::new(cfg.mtu));
     firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
-
-    // XXX some layers have no need for LFT, perhaps have two types
-    // of Layer: one with, one without?
-    gateway::setup(&mut pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
-    router::setup(&mut pb, &cfg, FT_LIMIT_ONE)?;
+    gateway::setup(&mut pb, &cfg, vpc_map)?;
+    router::setup(&mut pb, &cfg)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&mut pb, &cfg, v2p, m2p, v2b.clone(), FT_LIMIT_ONE)?;
+    overlay::setup(&mut pb, &cfg, v2p, m2p, v2b.clone())?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual

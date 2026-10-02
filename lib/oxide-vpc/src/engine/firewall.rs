@@ -29,6 +29,7 @@ use opte::api::OpteError;
 use opte::engine::ether::ETHER_TYPE_ARP;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerKind;
 use opte::engine::layer::LayerSpec;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
@@ -65,7 +66,11 @@ pub fn setup(
         default_out: DefaultAction::StatefulAllow,
     };
 
-    let fw_layer = LayerSpec::new(FW_LAYER_NAME, actions, ft_limit);
+    let fw_layer = LayerSpec::new(
+        FW_LAYER_NAME,
+        actions,
+        LayerKind::Stateful { capacity: ft_limit },
+    );
     pb.add_layer(fw_layer, Pos::First)
 }
 
