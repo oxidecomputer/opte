@@ -48,6 +48,7 @@ heapless = { workspace = true, optional = true }
 itertools = { workspace = true, optional = true }
 postcard.workspace = true
 ref-cast.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 tabwriter = { workspace = true, optional = true }
 usdt = { workspace = true, optional = true }

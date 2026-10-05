@@ -314,13 +314,25 @@ impl<T> KRwLock<T> {
         KRwLock { rwl: UnsafeCell::new(rwl), data: UnsafeCell::new(val) }
     }
 
-    pub fn read(&self) -> KRwLockReadGuard<'_, T> {
+    pub unsafe fn unlock_raw(&self) {
+        unsafe { rw_exit(self.rwl.get()) };
+    }
+
+    pub unsafe fn read_raw(&self) {
         unsafe { rw_enter(self.rwl.get(), krw_t::RW_READER) };
+    }
+
+    pub unsafe fn write_raw(&self) {
+        unsafe { rw_enter(self.rwl.get(), krw_t::RW_WRITER) };
+    }
+
+    pub fn read(&self) -> KRwLockReadGuard<'_, T> {
+        unsafe { self.read_raw() };
         KRwLockReadGuard { lock: self }
     }
 
     pub fn write(&self) -> KRwLockWriteGuard<'_, T> {
-        unsafe { rw_enter(self.rwl.get(), krw_t::RW_WRITER) };
+        unsafe { self.write_raw() };
         KRwLockWriteGuard { lock: self }
     }
 }
@@ -344,7 +356,7 @@ impl<T> Deref for KRwLockReadGuard<'_, T> {
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> Drop for KRwLockReadGuard<'_, T> {
     fn drop(&mut self) {
-        unsafe { rw_exit(self.lock.rwl.get()) };
+        unsafe { self.lock.unlock_raw() };
     }
 }
 
@@ -371,7 +383,7 @@ impl<T> DerefMut for KRwLockWriteGuard<'_, T> {
 #[cfg(all(not(feature = "std"), not(test)))]
 impl<T> Drop for KRwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        unsafe { rw_exit(self.lock.rwl.get()) };
+        unsafe { self.lock.unlock_raw() };
     }
 }
 

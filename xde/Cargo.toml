@@ -18,6 +18,7 @@ c8str.workspace = true
 crc32fast.workspace = true
 heapless.workspace = true
 postcard.workspace = true
+rustc-hash = { workspace = true, features = ["nightly"] }
 serde.workspace = true
 zerocopy.workspace = true
 

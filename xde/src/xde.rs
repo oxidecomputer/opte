@@ -196,9 +196,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use c8str::C8Str;
 use c8str::C8String;
+use core::cell::UnsafeCell;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::num::NonZeroUsize;
+use core::ops::Deref;
+use core::ops::DerefMut;
 use core::ptr;
 use core::ptr::NonNull;
 use core::ptr::addr_of;
@@ -622,6 +625,101 @@ fn stat_parse_error(dir: Direction, err: &ParseError) {
 }
 
 #[repr(C)]
+struct PaddedLock {
+    devs: KRwLock<()>,
+    _pad: [u8; 56],
+}
+
+impl Default for PaddedLock {
+    fn default() -> Self {
+        Self { devs: KRwLock::new(()), _pad: [0; _] }
+    }
+}
+
+const _: () = assert!(
+    size_of::<PaddedLock>().is_multiple_of(64),
+    "PaddedPortLock must be cache-line-sized.",
+);
+
+#[repr(C)]
+struct BigGroupOPortLocks {
+    locks: Vec<PaddedLock>,
+    tx_lock: PaddedLock,
+    port: UnsafeCell<Port<VpcNetwork>>,
+}
+
+unsafe impl Send for BigGroupOPortLocks {}
+unsafe impl Sync for BigGroupOPortLocks {}
+
+impl BigGroupOPortLocks {
+    fn new(port: Port<VpcNetwork>) -> Self {
+        Self {
+            locks: (0..ncpus()).map(|_| Default::default()).collect(),
+            tx_lock: Default::default(),
+            port: port.into(),
+        }
+    }
+
+    fn read(&self) -> BgoplRead {
+        let cpu_index = current_cpu().seq_id;
+        unsafe {
+            self.locks[cpu_index].devs.read_raw();
+        }
+        BgoplRead(&self, cpu_index)
+    }
+
+    fn write(&self) -> BgoplWrite {
+        for lock in &self.locks {
+            unsafe {
+                lock.devs.write_raw();
+            }
+        }
+
+        BgoplWrite(&self)
+    }
+}
+
+struct BgoplRead<'a>(&'a BigGroupOPortLocks, usize);
+struct BgoplWrite<'a>(&'a BigGroupOPortLocks);
+
+impl Drop for BgoplRead<'_> {
+    fn drop(&mut self) {
+        unsafe { self.0.locks[self.1].devs.unlock_raw() }
+    }
+}
+
+impl Drop for BgoplWrite<'_> {
+    fn drop(&mut self) {
+        // TODO(ky): reverse?
+        for lock in &self.0.locks {
+            unsafe { lock.devs.unlock_raw() }
+        }
+    }
+}
+
+impl Deref for BgoplRead<'_> {
+    type Target = Port<VpcNetwork>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0.port.get() }
+    }
+}
+
+impl Deref for BgoplWrite<'_> {
+    type Target = Port<VpcNetwork>;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { &*self.0.port.get() }
+    }
+}
+
+impl DerefMut for BgoplWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { &mut *self.0.port.get() }
+    }
+}
+
+#[repr(C)]
 pub struct XdeDev {
     pub devname: Arc<C8Str>,
     linkid: datalink_id_t,
@@ -634,7 +732,7 @@ pub struct XdeDev {
     // XXX Ideally the xde driver would be a generic driver which
     // could setup ports for any number of network implementations.
     // However, that's not where things are today.
-    port: KRwLock<Port<VpcNetwork>>, // TODO: shard by CPU?
+    port: BigGroupOPortLocks,
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
@@ -1266,7 +1364,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
         mtu,
-        port: KRwLock::new(new_port(
+        port: new_port(
             Arc::clone(&devname),
             &cfg,
             state.vpc_map.clone(),
@@ -1274,7 +1372,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             port_v2p.clone(),
             state.v2b.clone(),
             state.ectx.clone(),
-        )?),
+        )?,
         devname,
         port_v2p,
         postbox_key,
@@ -3469,7 +3567,7 @@ fn new_port(
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
-) -> Result<Port<VpcNetwork>, OpteError> {
+) -> Result<BigGroupOPortLocks, OpteError> {
     let cfg = cfg.clone();
 
     // Unwrap safety: we always have at least one FT entry, because we always
@@ -3494,8 +3592,7 @@ fn new_port(
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork::new(cfg, v2b);
-    let port = pb.create(net, limit, limit)?;
-    Ok(port)
+    Ok(BigGroupOPortLocks::new(pb.create(net, limit, limit)?))
 }
 
 #[unsafe(no_mangle)]

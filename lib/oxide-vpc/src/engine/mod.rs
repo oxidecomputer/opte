@@ -329,8 +329,8 @@ impl NetworkImpl for VpcNetwork {
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
-        _uft_in: &FlowTable<UftEntry>,
-        _uft_out: &FlowTable<UftEntry>,
+        // _uft_in: &FlowTable<UftEntry>,
+        // _uft_out: &FlowTable<UftEntry>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>,

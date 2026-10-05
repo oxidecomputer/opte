@@ -244,8 +244,10 @@ pub trait NetworkImpl {
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
-        uft_in: &FlowTable<UftEntry>,
-        uft_out: &FlowTable<UftEntry>,
+        // TODO(ky): VFP defines this, I think, but why do we need it here?
+        //           Expose full shard set, or nothing at all?
+        // uft_in: &FlowTable<UftEntry>,
+        // uft_out: &FlowTable<UftEntry>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
