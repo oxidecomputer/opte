@@ -64,12 +64,15 @@ pub struct DevMap {
     names: BTreeMap<String, Dev>,
     /// Subscriptions keyed by underlay IPv6 multicast group (admin-scoped ff04::/16).
     /// Each port has its own source filter for per-member filtering.
-    /// This table is sled-local and independent of any per-VPC VNI. VNI validation
-    /// and VPC isolation are enforced during inbound overlay decapsulation on the
-    /// destination port, not here.
     ///
-    /// Rationale: multicast groups are fleet-wide; ports opt-in to receive a given
-    /// underlay group, and the overlay layer subsequently filters by VNI as appropriate.
+    /// The outer group key carries no VNI, as all multicast traffic currently
+    /// uses `oxide_vpc::api::DEFAULT_MULTICAST_VNI`, so a VNI component would
+    /// be constant. The per-member `VniMac` keys still carry each port's VPC
+    /// VNI. Both outbound encapsulation and the forwarding ioctls require
+    /// that value. Delivery is gated by the subscription itself and by the
+    /// per-member source filter. There is no VPC-level isolation for
+    /// multicast right now, as the inbound overlay layer's VNI validator
+    /// accepts either the fleet VNI or the port's own VPC VNI.
     mcast_groups: BTreeMap<MulticastUnderlay, BTreeMap<VniMac, SourceFilter>>,
 }
 
@@ -221,7 +224,7 @@ impl DevMap {
     ///
     /// Safety: Callers must hold a read lock on this `DevMap` for the duration
     /// of delivery. This prevents port removal from tearing down DLS/MAC
-    /// resources while delivery is in progress—management operations attempting
+    /// resources while delivery is in progress. Management operations attempting
     /// to remove a port will block when trying to acquire the write lock to
     /// update the map.
     #[inline]
