@@ -51,7 +51,7 @@ darling = "0.23"
 dlpi = { git = "https://github.com/oxidecomputer/dlpi-sys", default-features = false }
 dyn-clone = "1.0"
 heapless = "0.8"
-ingot = "0.2.0"
+ingot = "0.2.1"
 ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.15", default-features = false }
 libc = "0.2"
