@@ -39,11 +39,13 @@ use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
+use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::FlowStateLiveness;
 use crate::engine::flow_table::TtlDelegateTcp;
+use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -84,6 +86,8 @@ pub enum LayerError {
     /// Another packet on the same flow (in the same or opposite direction)
     /// is still undergoing processing, and has not yet been `Allow`ed.
     Raced,
+    /// XXX TODO.
+    IncompatibleAction,
 }
 
 impl From<GenBtError> for LayerError {
@@ -583,12 +587,17 @@ enum SpaceCreated {
     Evict { in_key: InnerFlowId, out_key: InnerFlowId },
 }
 
+pub enum LayerKind {
+    Stateless,
+    Stateful { capacity: NonZeroU32 },
+}
+
 pub struct LayerSpec {
     name: &'static C8Str,
     actions: LayerActions,
     rules_in: RuleTableCore,
     rules_out: RuleTableCore,
-    ft_limit: NonZeroU32,
+    kind: LayerKind,
 }
 
 impl LayerSpec {
@@ -615,12 +624,12 @@ impl LayerSpec {
     pub fn new(
         name: &'static C8Str,
         actions: LayerActions,
-        ft_limit: NonZeroU32,
+        kind: LayerKind,
     ) -> Self {
         Self {
             name,
             actions,
-            ft_limit,
+            kind,
             rules_in: Default::default(),
             rules_out: Default::default(),
         }
@@ -636,7 +645,7 @@ impl LayerSpec {
     }
 
     pub(crate) fn into_layer(self, port: Arc<C8Str>) -> Layer {
-        let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
+        let LayerSpec { name, actions, rules_in, rules_out, kind } = self;
 
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
@@ -646,20 +655,36 @@ impl LayerSpec {
             LayerStats::new(),
         )
         .unwrap();
-        stats.vals.lft_capacity.set(ft_limit.get() as u64);
         stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
         stats.vals.in_rules.set(rules_in.num_rules() as u64);
         stats.vals.out_rules.set(rules_out.num_rules() as u64);
 
+        let ft = match kind {
+            LayerKind::Stateless => LayerState::Stateless,
+            LayerKind::Stateful { capacity } => {
+                stats.vals.lft_capacity.set(u64::from(capacity.get()));
+
+                LayerState::Stateful {
+                    ft: KRwLock::new(LayerFlowTable::new(
+                        Arc::clone(&port),
+                        name,
+                        capacity,
+                    ))
+                    .into(),
+                    name: CString::new(format!("ft-{name}")).unwrap(),
+                }
+            }
+        };
+
         Layer {
             actions: actions.actions,
             default_in: actions.default_in,
-            default_in_hits: 0,
+            default_in_hits: 0.into(),
             default_out: actions.default_out,
-            default_out_hits: 0,
+            default_out_hits: 0.into(),
             name,
-            ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
-            ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
+
+            ft,
             rules_in: rules_in.into_table(
                 Arc::clone(&port),
                 name,
@@ -690,16 +715,20 @@ impl LayerSpec {
     }
 }
 
+enum LayerState {
+    Stateless,
+    Stateful { ft: Box<KRwLock<LayerFlowTable>>, name: CString },
+}
+
 pub(crate) struct Layer {
     port: Arc<C8Str>,
     name: &'static C8Str,
     actions: Vec<Action>,
     default_in: DefaultAction,
-    default_in_hits: u64,
+    default_in_hits: AtomicU64,
     default_out: DefaultAction,
-    default_out_hits: u64,
-    ft: LayerFlowTable,
-    ft_cstr: CString,
+    default_out_hits: AtomicU64,
+    ft: LayerState,
     rules_in: RuleTable,
     rules_out: RuleTable,
     rt_cstr: CString,
@@ -728,9 +757,15 @@ impl Layer {
     }
 
     /// Clear all flows from the layer's flow tables.
-    pub(crate) fn clear_flows(&mut self) {
-        self.ft.clear();
-        self.stats.vals.flows.set(0);
+    pub(crate) fn clear_flows(&self) {
+        match &self.ft {
+            LayerState::Stateless => {}
+            LayerState::Stateful { ft, .. } => {
+                let mut ft = ft.write();
+                ft.clear();
+                self.stats.vals.flows.set(0);
+            }
+        }
     }
 
     pub(crate) fn default_action(&self, dir: Direction) -> DefaultAction {
@@ -745,17 +780,23 @@ impl Layer {
     pub(crate) fn dump(&self) -> DumpLayerResp {
         let rules_in = self.rules_in.dump();
         let rules_out = self.rules_out.dump();
-        let ftd = self.ft.dump();
+        let (ft_in, ft_out) = match &self.ft {
+            LayerState::Stateless => Default::default(),
+            LayerState::Stateful { ft, .. } => {
+                let dump = ft.read().dump();
+                (dump.ft_in, dump.ft_out)
+            }
+        };
         DumpLayerResp {
             name: self.name.to_string(),
-            ft_in: ftd.ft_in,
-            ft_out: ftd.ft_out,
+            ft_in,
+            ft_out,
             rules_in,
             rules_out,
             default_in: self.default_in.to_string(),
-            default_in_hits: self.default_in_hits,
+            default_in_hits: self.default_in_hits.load(Ordering::Relaxed),
             default_out: self.default_out.to_string(),
-            default_out_hits: self.default_out_hits,
+            default_out_hits: self.default_out_hits.load(Ordering::Relaxed),
         }
     }
 
@@ -826,9 +867,15 @@ impl Layer {
 
     /// Expire all flows whose TTL has been reached based on the
     /// passed in moment.
-    pub(crate) fn expire_flows(&mut self, now: Moment) {
-        self.ft.expire_flows(now);
-        self.stats.vals.flows.set(self.ft.num_flows() as u64);
+    pub(crate) fn expire_flows(&self, now: Moment) {
+        match &self.ft {
+            LayerState::Stateless => {}
+            LayerState::Stateful { ft, .. } => {
+                let mut ft = ft.write();
+                ft.expire_flows(now);
+                self.stats.vals.flows.set(ft.num_flows() as u64);
+            }
+        }
     }
 
     pub(crate) fn layer_process_entry_probe(
@@ -930,7 +977,10 @@ impl Layer {
 
     /// Return the number of active flows.
     pub(crate) fn num_flows(&self) -> u32 {
-        self.ft.num_flows()
+        match &self.ft {
+            LayerState::Stateless => 0,
+            LayerState::Stateful { ft, .. } => ft.read().num_flows(),
+        }
     }
 
     /// Return the number of rules defined in this layer in the given
@@ -942,22 +992,22 @@ impl Layer {
         }
     }
 
-    fn complete_eviction(&mut self, entry: SpaceCreated) {
+    fn complete_eviction(&self, entry: SpaceCreated, ft: &mut LayerFlowTable) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
             self.stats.vals.evictions.incr(1);
 
             // These two entries share the same `FlowLifetime`, so
             // we can avoid wasting work by marking all children as
             // `killed` only for the first entry.
-            self.ft.ft_out.expire(&out_key, true);
-            self.ft.ft_in.expire(&in_key, false);
+            ft.ft_out.expire(&out_key, true);
+            ft.ft_in.expire(&in_key, false);
 
-            self.ft.count = self.ft.ft_out.num_flows();
+            ft.count = ft.ft_out.num_flows();
         }
     }
 
     pub(crate) fn process(
-        &mut self,
+        &self,
         ectx: &ExecCtx,
         dir: Direction,
         pkt: &mut Packet<MblkFullParsed>,
@@ -967,42 +1017,73 @@ impl Layer {
         use Direction::*;
         let flow_before = *pkt.flow();
         self.layer_process_entry_probe(dir, pkt.flow());
-        let res = match dir {
-            Out => self.process_out(ectx, pkt, xforms, ameta),
-            In => self.process_in(ectx, pkt, xforms, ameta),
+        let res = match (dir, &self.ft) {
+            (Out, LayerState::Stateful { .. }) => {
+                self.process_out(ectx, pkt, xforms, ameta)
+            }
+            (Out, LayerState::Stateless) => {
+                self.process_out_rules(ectx, pkt, xforms, ameta, None)
+            }
+            (In, LayerState::Stateful { .. }) => {
+                self.process_in(ectx, pkt, xforms, ameta)
+            }
+            (In, LayerState::Stateless) => {
+                self.process_in_rules(ectx, pkt, xforms, ameta, None)
+            }
         };
         self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
     }
 
     fn process_in(
-        &mut self,
+        &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
+        let LayerState::Stateful { ft, name: ft_name } = &self.ft else {
+            unreachable!(
+                "Layer::process should only call this method if `Stateful`"
+            )
+        };
+
+        // It would be good if we could start with a read lock here and then
+        // escalate to a write in response to a stateful action, particularly
+        // for the benefit of tables which will return stateless allows for
+        // some classes of traffic (e.g., NAT is a stateless table whenever it
+        // is not applied). There's some amount of complexity around
+        // `EntryState::Dirty` and related invalidation that make this not
+        // worth the squeeze, at least for now.
+        let mut ft = ft.write();
+
         // We have no FlowId, thus there can be no FlowTable entry.
         if *pkt.flow() == FLOW_ID_DEFAULT {
-            return self.process_in_rules(ectx, pkt, xforms, ameta);
+            return self.process_in_rules(
+                ectx,
+                pkt,
+                xforms,
+                ameta,
+                Some(&mut ft),
+            );
         }
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_in(&flow)? {
+        let action = match ft.get_in(&flow)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = action.state()
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::In, &flow);
+                    ft.mark_clean(Direction::In, &flow);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_in(&flow);
+                    ft.remove_in(&flow);
                     None
                 }
             }
@@ -1015,19 +1096,19 @@ impl Layer {
 
         match action {
             Some(ActionDescEntry::NoOp) => {
-                self.stats.vals.in_lft_hit += 1;
+                self.stats.vals.in_lft_hit.incr(1);
                 Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
-                self.stats.vals.in_lft_hit += 1;
+                self.stats.vals.in_lft_hit.incr(1);
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
                     self.port.as_c_str(),
-                    self.ft_cstr.as_c_str(),
+                    ft_name.as_c_str(),
                     Direction::In,
                     &flow_before,
                     pkt.flow(),
@@ -1046,29 +1127,30 @@ impl Layer {
 
             None => {
                 // No FlowTable entry, perhaps there is a matching Rule?
-                self.process_in_rules(ectx, pkt, xforms, ameta)
+                self.stats.vals.in_lft_miss.incr(1);
+                self.process_in_rules(ectx, pkt, xforms, ameta, Some(&mut ft))
             }
         }
     }
 
     fn process_in_rules(
-        &mut self,
+        &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
+        ft: Option<&mut LayerFlowTable>,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::In;
 
-        self.stats.vals.in_lft_miss += 1;
         let rule = self.rules_in.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
-            self.stats.vals.in_rule_match += 1;
+            self.stats.vals.in_rule_match.incr(1);
             rule.action()
         } else {
-            self.stats.vals.in_rule_nomatch += 1;
-            self.default_in_hits += 1;
+            self.stats.vals.in_rule_nomatch.incr(1);
+            self.default_in_hits.fetch_add(1, Ordering::Relaxed);
             self.default_in.into()
         };
 
@@ -1076,9 +1158,10 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
+                let ft = ft.ok_or(LayerError::IncompatibleAction)?;
                 let write_to =
-                    self.ft.check_for_space(&self.stats, self.name, In)?;
-                self.complete_eviction(write_to);
+                    ft.check_for_space(&self.stats, self.name, In)?;
+                self.complete_eviction(write_to, ft);
 
                 // The outbound flow ID mirrors the inbound. Remember,
                 // the "top" of layer represents how the client sees
@@ -1086,14 +1169,14 @@ impl Layer {
                 // represents how the network sees the traffic.
                 let flow_out = pkt.flow().mirror();
                 let desc = ActionDescEntry::NoOp;
-                let (in_lft, _) = self.ft.add_pair(desc, *pkt.flow(), flow_out);
+                let (in_lft, _) = ft.add_pair(desc, *pkt.flow(), flow_out);
                 pkt.record_lft(in_lft);
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr(1);
                 Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
-                self.stats.vals.in_deny += 1;
+                self.stats.vals.in_deny.incr(1);
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(In, pkt.flow());
                     DenyReason::Rule
@@ -1154,6 +1237,8 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
+                let ft = ft.ok_or(LayerError::IncompatibleAction)?;
+
                 // A stateful action requires a flow entry in both
                 // directions: inbound and outbound. This entry holds
                 // an implementation of ActionDesc, which has two
@@ -1184,7 +1269,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 let write_to =
-                    self.ft.check_for_space(&self.stats, self.name, In)?;
+                    ft.check_for_space(&self.stats, self.name, In)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1204,7 +1289,7 @@ impl Layer {
                     }
                 };
 
-                self.complete_eviction(write_to);
+                self.complete_eviction(write_to, ft);
 
                 let flow_before = *pkt.flow();
                 let ht_in = desc.gen_ht(In, ameta);
@@ -1233,13 +1318,13 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_out = pkt.flow().mirror();
-                let (in_lft, _) = self.ft.add_pair(
+                let (in_lft, _) = ft.add_pair(
                     ActionDescEntry::Desc(desc),
                     flow_before,
                     flow_out,
                 );
                 pkt.record_lft(in_lft);
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr(1);
                 Ok(LayerResult::Allow)
             }
 
@@ -1264,33 +1349,49 @@ impl Layer {
     }
 
     fn process_out(
-        &mut self,
+        &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
     ) -> result::Result<LayerResult, LayerError> {
+        let LayerState::Stateful { ft, name: ft_name } = &self.ft else {
+            unreachable!(
+                "Layer::process should only call this method if `Stateful`"
+            )
+        };
+
+        // See `process_in` on why this is held as a write lock here, even
+        // if some tables could benefit from taking just a readlock.
+        let mut ft = ft.write();
+
         // We have no FlowId, thus there can be no FlowTable entry.
         if *pkt.flow() == FLOW_ID_DEFAULT {
-            return self.process_out_rules(ectx, pkt, xforms, ameta);
+            return self.process_out_rules(
+                ectx,
+                pkt,
+                xforms,
+                ameta,
+                Some(&mut ft),
+            );
         }
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_out(&flow)? {
+        let action = match ft.get_out(&flow)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::Out, &flow);
+                    ft.mark_clean(Direction::Out, &flow);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_out(&flow);
+                    ft.remove_out(&flow);
                     None
                 }
             }
@@ -1303,19 +1404,19 @@ impl Layer {
 
         match action {
             Some(ActionDescEntry::NoOp) => {
-                self.stats.vals.out_lft_hit += 1;
+                self.stats.vals.out_lft_hit.incr(1);
                 Ok(LayerResult::Allow)
             }
 
             Some(ActionDescEntry::Desc(desc)) => {
-                self.stats.vals.out_lft_hit += 1;
+                self.stats.vals.out_lft_hit.incr(1);
                 let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
                     self.port.as_c_str(),
-                    self.ft_cstr.as_c_str(),
+                    ft_name.as_c_str(),
                     Direction::Out,
                     &flow_before,
                     pkt.flow(),
@@ -1334,29 +1435,31 @@ impl Layer {
 
             None => {
                 // No FlowTable entry, perhaps there is matching Rule?
-                self.process_out_rules(ectx, pkt, xforms, ameta)
+                self.stats.vals.out_lft_miss.incr(1);
+                self.process_out_rules(ectx, pkt, xforms, ameta, Some(&mut ft))
             }
         }
     }
 
     fn process_out_rules(
-        &mut self,
+        &self,
         ectx: &ExecCtx,
         pkt: &mut Packet<MblkFullParsed>,
         xforms: &mut Transforms,
         ameta: &mut ActionMeta,
+        ft: Option<&mut LayerFlowTable>,
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
 
-        self.stats.vals.out_lft_miss += 1;
+        self.stats.vals.out_lft_miss.incr(1);
         let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
-            self.stats.vals.out_rule_match += 1;
+            self.stats.vals.out_rule_match.incr(1);
             rule.action()
         } else {
-            self.stats.vals.out_rule_nomatch += 1;
-            self.default_out_hits += 1;
+            self.stats.vals.out_rule_nomatch.incr(1);
+            self.default_out_hits.fetch_add(1, Ordering::Relaxed);
             self.default_out.into()
         };
 
@@ -1364,9 +1467,10 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
+                let ft = ft.ok_or(LayerError::IncompatibleAction)?;
                 let write_to =
-                    self.ft.check_for_space(&self.stats, self.name, Out)?;
-                self.complete_eviction(write_to);
+                    ft.check_for_space(&self.stats, self.name, Out)?;
+                self.complete_eviction(write_to, ft);
 
                 // The inbound flow ID must be calculated _after_ the
                 // header transformation. Remember, the "top"
@@ -1376,18 +1480,15 @@ impl Layer {
                 // The final step is to mirror the IPs and ports to
                 // reflect the traffic direction change.
                 let flow_in = pkt.flow().mirror();
-                let (_, out_lft) = self.ft.add_pair(
-                    ActionDescEntry::NoOp,
-                    flow_in,
-                    *pkt.flow(),
-                );
+                let (_, out_lft) =
+                    ft.add_pair(ActionDescEntry::NoOp, flow_in, *pkt.flow());
                 pkt.record_lft(out_lft);
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr(1);
                 Ok(LayerResult::Allow)
             }
 
             Action::Deny => {
-                self.stats.vals.out_deny += 1;
+                self.stats.vals.out_deny.incr(1);
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(Out, pkt.flow());
                     DenyReason::Rule
@@ -1448,6 +1549,8 @@ impl Layer {
             }
 
             Action::Stateful(action) => {
+                let ft = ft.ok_or(LayerError::IncompatibleAction)?;
+
                 // A stateful action requires a flow entry in both
                 // directions: inbound and outbound. This entry holds
                 // an implementation of ActionDesc, which has two
@@ -1478,7 +1581,7 @@ impl Layer {
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
                 let write_to =
-                    self.ft.check_for_space(&self.stats, self.name, Out)?;
+                    ft.check_for_space(&self.stats, self.name, Out)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1498,7 +1601,7 @@ impl Layer {
                     }
                 };
 
-                self.complete_eviction(write_to);
+                self.complete_eviction(write_to, ft);
 
                 let flow_before = *pkt.flow();
                 let ht_out = desc.gen_ht(Out, ameta);
@@ -1528,13 +1631,13 @@ impl Layer {
                 // to mirror the IPs and ports to reflect the traffic
                 // direction change.
                 let flow_in = pkt.flow().mirror();
-                let (_, out_lft) = self.ft.add_pair(
+                let (_, out_lft) = ft.add_pair(
                     ActionDescEntry::Desc(desc),
                     flow_in,
                     flow_before,
                 );
                 pkt.record_lft(out_lft);
-                self.stats.vals.flows += 1;
+                self.stats.vals.flows.incr(1);
                 Ok(LayerResult::Allow)
             }
 
@@ -1666,7 +1769,9 @@ impl Layer {
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) {
-        self.ft.clear();
+        if let LayerState::Stateful { ft, .. } = &self.ft {
+            ft.write().clear();
+        }
         self.set_rules_core(in_rules, out_rules);
     }
 
@@ -1679,7 +1784,9 @@ impl Layer {
         in_rules: Vec<Rule<Finalized>>,
         out_rules: Vec<Rule<Finalized>>,
     ) {
-        self.ft.mark_dirty();
+        if let LayerState::Stateful { ft, .. } = &self.ft {
+            ft.write().mark_dirty();
+        }
         self.set_rules_core(in_rules, out_rules);
     }
 

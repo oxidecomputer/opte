@@ -78,6 +78,7 @@ use opte::engine::ip::v4::Ipv4Cidr;
 use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerKind;
 use opte::engine::layer::LayerSpec;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
@@ -123,7 +124,6 @@ pub fn setup(
     pb: &mut PortBuilder,
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
-    ft_limit: core::num::NonZeroU32,
 ) -> Result<(), OpteError> {
     // We implement the gateway as a filtering layer in order to
     // enforce that any traffic that makes it past this layer is
@@ -139,7 +139,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = LayerSpec::new(NAME, actions, ft_limit);
+    let mut layer = LayerSpec::new(NAME, actions, LayerKind::Stateless);
 
     let mut ctx = BuildCtx {
         in_rules: vec![],

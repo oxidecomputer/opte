@@ -31,6 +31,7 @@ use opte::engine::headers::IpAddr;
 use opte::engine::headers::IpCidr;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerKind;
 use opte::engine::layer::LayerSpec;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::port::Port;
@@ -240,11 +241,7 @@ fn compute_rule_priority(cidr: &IpCidr, class: RouterClass) -> u16 {
     ((((max_prefix_len - prefix_len) as u16) << 1) | class_prio) + 10
 }
 
-pub fn setup(
-    pb: &mut PortBuilder,
-    _cfg: &VpcCfg,
-    ft_limit: core::num::NonZeroU32,
-) -> Result<(), OpteError> {
+pub fn setup(pb: &mut PortBuilder, _cfg: &VpcCfg) -> Result<(), OpteError> {
     // Inbound: The router assumes that if the packet made it here,
     // then it had a route to get here.
     //
@@ -256,7 +253,8 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = LayerSpec::new(ROUTER_LAYER_NAME, actions, ft_limit);
+    let mut layer =
+        LayerSpec::new(ROUTER_LAYER_NAME, actions, LayerKind::Stateless);
 
     // Allow multicast traffic (IPv4 224.0.0.0/4 and IPv6 ff00::/8) to bypass route lookup.
     // Multicast operates fleet-wide via M2P mappings, not through VPC routing.
