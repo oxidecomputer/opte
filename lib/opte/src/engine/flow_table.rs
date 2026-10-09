@@ -13,8 +13,10 @@ use super::packet::InnerFlowId;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
+use crate::engine::port::ProcessError;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
+use alloc::collections::btree_map::Entry;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -27,13 +29,15 @@ use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::ops::ControlFlow;
 use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU8;
 use core::sync::atomic::AtomicU64;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use itertools::Either;
-use opte_api::OpteError;
+#[cfg(any(feature = "test-help", test))]
+use opte_api::Direction;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -44,8 +48,6 @@ pub const FLOW_DEF_EXPIRE_SECS: u64 = 60;
 pub const FLOW_DEF_TTL: Ttl = Ttl::new_seconds(FLOW_DEF_EXPIRE_SECS);
 
 pub const FLOW_TABLE_DEF_MAX_ENTRIES: u32 = 8192;
-
-type Result<T> = core::result::Result<T, OpteError>;
 
 /// The Time To Live in milliseconds.
 #[derive(Clone, Copy, Debug)]
@@ -169,14 +171,20 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     fn eviction_priority(&self, now: Moment) -> Option<EvictionPriority>;
 
     /// Set `self` as a parent node to `child`.
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()>;
+    fn push_child(
+        &self,
+        child: &Arc<dyn FlowEntryInfo>,
+    ) -> Result<(), FlowTableAddError>;
 
     /// Remove `child` from this entry's list of children.
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>);
 
     /// Mark this flow entry, and all those which depend on it for validity,
     /// as being invalid.
-    fn mark_evicted(&self);
+    fn mark_dead(&self);
+
+    /// XXX
+    fn mark_ready(&self);
 }
 
 impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
@@ -229,7 +237,10 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         best_prio
     }
 
-    fn push_child(&self, child: &Arc<dyn FlowEntryInfo>) -> Result<()> {
+    fn push_child(
+        &self,
+        child: &Arc<dyn FlowEntryInfo>,
+    ) -> Result<(), FlowTableAddError> {
         let mut children = self.lifetime.children.write();
 
         // Sadly, BTreeSet::entry remains a nightly API.
@@ -241,7 +252,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
             self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
             Ok(())
         } else {
-            Err(OpteError::MaxCapacity(
+            Err(FlowTableAddError::MaxCapacity(
                 u64::try_from(Self::MAX_CHILDREN).expect("usize is u64"),
             ))
         }
@@ -253,22 +264,51 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
         self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
     }
 
-    fn mark_evicted(&self) {
-        if !self.lifetime.killed.swap(true, Ordering::Relaxed) {
+    fn mark_dead(&self) {
+        // Unwrap safety: all stored values must be valid `FlowStateLiveness`.
+        let old_state = FlowStateLiveness::try_from(
+            self.lifetime
+                .state
+                .swap(FlowStateLiveness::Dead.into(), Ordering::Relaxed),
+        )
+        .unwrap();
+
+        if old_state != FlowStateLiveness::Dead {
             // Any flow entry is only valid while all of its parents still
             // exist. Timeout-driven expiry will not remove an entry while there
             // are still live parents, but during eviction we need to go through
             // and mark them as invalid in turn.
             for maybe_child in &*self.lifetime.children.read() {
                 if let Some(child) = maybe_child.0.upgrade() {
-                    child.mark_evicted();
+                    child.mark_dead();
                 }
             }
         }
     }
+
+    fn mark_ready(&self) {
+        // XXX: why safe to discard result?
+        _ = self.lifetime.state.compare_exchange(
+            FlowStateLiveness::Larval.into(),
+            FlowStateLiveness::Ready.into(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
 }
 
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
+
+#[derive(Copy, Clone, Debug)]
+pub enum FlowTableAddError {
+    MaxCapacity(u64),
+    Existing,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum FlowTableGetError {
+    InProgress,
+}
 
 #[derive(Debug)]
 pub struct FlowTable<S: FlowState> {
@@ -323,11 +363,31 @@ impl<S: FlowState> FlowTable<S> {
         &mut self,
         flow_id: InnerFlowId,
         state: S,
-    ) -> Result<Arc<FlowEntry<S>>> {
+    ) -> Result<Arc<FlowEntry<S>>, FlowTableAddError> {
         self.check_for_space()?;
         let entry = Arc::new(FlowEntry::new(flow_id, state, self));
-        self.map.insert(flow_id, Arc::clone(&entry));
-        Ok(entry)
+        match self.map.entry(flow_id) {
+            Entry::Vacant(slot) => {
+                slot.insert(Arc::clone(&entry));
+                Ok(entry)
+            }
+            Entry::Occupied(slot) if slot.get().is_killed() => {
+                *slot.into_mut() = Arc::clone(&entry);
+                Ok(entry)
+            }
+            Entry::Occupied(_) => Err(FlowTableAddError::Existing),
+        }
+    }
+
+    #[cfg(test)]
+    /// Add a new entry to the flow table, unconditionally marking its
+    /// lifecycle state as [`FlowStateLifecycle::Ready`].
+    fn add_ready(
+        &mut self,
+        flow_id: InnerFlowId,
+        state: S,
+    ) -> Result<Arc<FlowEntry<S>>, FlowTableAddError> {
+        self.add(flow_id, state).inspect(|v| v.mark_ready())
     }
 
     /// Add a new entry to the flow table while eliding the capacity check.
@@ -384,7 +444,7 @@ impl<S: FlowState> FlowTable<S> {
         if let Some(entry) = self.map.remove(flowid) {
             entry.expiry_cleanup();
             if mark_evicted {
-                entry.mark_evicted();
+                entry.mark_dead();
             }
         }
     }
@@ -394,6 +454,14 @@ impl<S: FlowState> FlowTable<S> {
         let name_c = &self.name_c;
 
         self.map.retain(|flowid, entry| {
+            // If this element is in use by a current slow-path walk, we
+            // need to leave it in place until the thread operating on it
+            // determines that it's ready.
+            let liveness = entry.liveness();
+            if liveness == FlowStateLiveness::Larval {
+                return true;
+            }
+
             // A flow cannot be expired by the timer while it still has children
             // relying upon its existence. Check whether any remain, and remove
             // dangling references to child entries which have expired.
@@ -401,8 +469,6 @@ impl<S: FlowState> FlowTable<S> {
             // The dangling entries here will have been left by `expire_flows`
             // called on other layers.
             {
-                // We have a write lock on the port, so there shouldn't be
-                // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
                 entry
@@ -413,12 +479,8 @@ impl<S: FlowState> FlowTable<S> {
                     return true;
                 }
             }
-            // If we move to per-layer lock granularity, then we may need to extend
-            // the lifetime of the above writelock and/or poison `entry` such that
-            // `port::associate_lfts_upstack` fails. See that function for
-            // commentary on the guarantees provided by the port-wide lock.
 
-            if entry.is_expired(now) {
+            if liveness == FlowStateLiveness::Dead || entry.is_expired(now) {
                 let my_time = entry.last_hit();
                 flow_expired_probe(
                     self.port.as_c8_str(),
@@ -432,7 +494,7 @@ impl<S: FlowState> FlowTable<S> {
                 return false;
             }
 
-            !entry.is_killed()
+            true
         });
 
         self.cleanup_eviction_cache(now);
@@ -456,6 +518,14 @@ impl<S: FlowState> FlowTable<S> {
         let name_c = &self.name_c;
 
         self.map.retain(|flowid, entry| {
+            // If this element is in use by a current slow-path walk, we
+            // need to leave it in place until the thread operating on it
+            // determines that it's ready.
+            let liveness = entry.liveness();
+            if liveness == FlowStateLiveness::Larval {
+                return true;
+            }
+
             // A flow cannot be expired by the timer while it still has children
             // relying upon its existence. Check whether any remain, and remove
             // dangling references to child entries which have expired.
@@ -463,8 +533,6 @@ impl<S: FlowState> FlowTable<S> {
             // The dangling entries here will have been left by `expire_flows`
             // called on other layers.
             {
-                // We have a write lock on the port, so there shouldn't be
-                // contention here.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
                 entry
@@ -475,9 +543,8 @@ impl<S: FlowState> FlowTable<S> {
                     return true;
                 }
             }
-            // The same lock commentary from `expire_flows` applies here.
 
-            if entry.is_expired(now) {
+            if liveness == FlowStateLiveness::Dead || entry.is_expired(now) {
                 let my_time = entry.last_hit();
                 flow_expired_probe(
                     self.port.as_c8_str(),
@@ -495,7 +562,7 @@ impl<S: FlowState> FlowTable<S> {
                 let partner_flow = extractor(entry.state());
                 #[cfg(debug_assertions)]
                 {
-                    if let Some(other) = partner.get(&partner_flow) {
+                    if let Ok(Some(other)) = partner.get(&partner_flow) {
                         assert!(Arc::ptr_eq(&entry.lifetime, &other.lifetime))
                     }
                 }
@@ -504,7 +571,7 @@ impl<S: FlowState> FlowTable<S> {
                 return false;
             }
 
-            !entry.is_killed()
+            true
         });
 
         self.cleanup_eviction_cache(now);
@@ -526,7 +593,7 @@ impl<S: FlowState> FlowTable<S> {
     /// inserted.
     ///
     /// If out of space, this method will attempt to evict an existing entry.
-    pub fn check_for_space(&mut self) -> Result<()> {
+    pub fn check_for_space(&mut self) -> Result<(), FlowTableAddError> {
         if self.map.len() < self.limit.get() as usize {
             return Ok(());
         }
@@ -535,7 +602,7 @@ impl<S: FlowState> FlowTable<S> {
             self.expire(&key, true);
             Ok(())
         } else {
-            Err(OpteError::MaxCapacity(self.limit.get() as u64))
+            Err(FlowTableAddError::MaxCapacity(self.limit.get() as u64))
         }
     }
 
@@ -632,10 +699,21 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     /// Get a reference to the flow entry for a given flow, if one exists.
-    pub fn get(&self, flow_id: &InnerFlowId) -> Option<&Arc<FlowEntry<S>>> {
-        // Flows which are marked as `killed` no longer really exist, but they
-        // have not yet been reaped.
-        self.map.get(flow_id).and_then(|v| (!v.is_killed()).then_some(v))
+    ///
+    /// This method will not return an entry if the existing entry is marked
+    /// `Dead`, and will return an error if the entry has not been finalised.
+    pub fn get(
+        &self,
+        flow_id: &InnerFlowId,
+    ) -> Result<Option<&Arc<FlowEntry<S>>>, FlowTableGetError> {
+        match self.map.get(flow_id) {
+            None => Ok(None),
+            Some(v) => match v.liveness() {
+                FlowStateLiveness::Larval => Err(FlowTableGetError::InProgress),
+                FlowStateLiveness::Ready => Ok(Some(v)),
+                FlowStateLiveness::Dead => Ok(None),
+            },
+        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a
@@ -729,6 +807,45 @@ pub trait FlowState: Dump + 'static {
     fn parents(&self) -> impl Iterator<Item = Arc<dyn FlowEntryInfo>>;
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// XXX
+///
+/// Valid transitions: Larval -> Ready
+///                         \     /
+///                          v   v
+///                          Dead
+pub(crate) enum FlowStateLiveness {
+    Larval = 0,
+    Ready = 1,
+    Dead = 2,
+}
+
+impl From<FlowStateLiveness> for u8 {
+    fn from(value: FlowStateLiveness) -> Self {
+        value as u8
+    }
+}
+
+impl From<FlowStateLiveness> for AtomicU8 {
+    fn from(value: FlowStateLiveness) -> Self {
+        AtomicU8::new(value.into())
+    }
+}
+
+impl TryFrom<u8> for FlowStateLiveness {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Larval),
+            1 => Ok(Self::Ready),
+            2 => Ok(Self::Dead),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Lifecycle state for a flow entry or set of interlinked flow entries.
 struct FlowLifetime {
     /// This tracks the last time the flow was matched.
@@ -738,7 +855,9 @@ struct FlowLifetime {
     last_hit: AtomicU64,
 
     /// Whether this flow entry has been explicitly removed.
-    killed: AtomicBool,
+    ///
+    /// Is a [`FlowStateLiveness`].
+    state: AtomicU8,
 
     /// An estimate of the number of elements in [`Self::children`], used
     /// to avoid locking and querying consistently empty elements.
@@ -752,12 +871,23 @@ struct FlowLifetime {
     children: KRwLock<BTreeSet<ByAddr>>,
 }
 
+impl FlowLifetime {
+    fn state(&self) -> FlowStateLiveness {
+        // Unwrap safety: all stored values must be valid `FlowStateLiveness`.
+        FlowStateLiveness::try_from(self.state.load(Ordering::Relaxed)).unwrap()
+    }
+}
+
 impl fmt::Debug for FlowLifetime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let FlowLifetime { last_hit, killed, n_children, children: _ } = self;
+        let FlowLifetime { last_hit, state, n_children, children: _ } = self;
         f.debug_struct("FlowEntry")
             .field("last_hit", last_hit)
-            .field("killed", killed)
+            .field(
+                "state",
+                &FlowStateLiveness::try_from(state.load(Ordering::Relaxed))
+                    .unwrap(),
+            )
             .field("n_children", n_children)
             .field("children", &"<lock>")
             .finish()
@@ -871,10 +1001,14 @@ impl<S: FlowState> FlowEntry<S> {
         Moment::from_raw_nanos(self.lifetime.last_hit.load(Ordering::Relaxed))
     }
 
+    pub(crate) fn liveness(&self) -> FlowStateLiveness {
+        self.lifetime.state()
+    }
+
     /// Returns whether this flow entry has explicitly been marked as invalid
     /// (e.g., one of its ancestors has been evicted).
-    fn is_killed(&self) -> bool {
-        self.lifetime.killed.load(Ordering::Relaxed)
+    pub(crate) fn is_killed(&self) -> bool {
+        self.liveness() == FlowStateLiveness::Dead
     }
 
     /// Returns whether this flow entry is past its policy's expiry time.
@@ -902,10 +1036,32 @@ impl<S: FlowState> FlowEntry<S> {
             policy: Arc::clone(&in_table.policy),
             lifetime: Arc::new(FlowLifetime {
                 last_hit: Moment::now().raw().into(),
-                killed: false.into(),
+                state: FlowStateLiveness::Larval.into(),
                 n_children: 0.into(),
                 children: KRwLock::new(BTreeSet::new()),
             }),
+        }
+    }
+
+    /// Test helper for single-threaded execution to verify that this flow
+    /// is `Ready` or `Dead` at the end of port processing.
+    #[cfg(any(feature = "test-help", test))]
+    pub(crate) fn verify_not_larval(
+        &self,
+        table: &str,
+        key: &InnerFlowId,
+        dir: Option<Direction>,
+    ) {
+        let dir_spec = match dir {
+            None => "",
+            Some(Direction::In) => " (In)",
+            Some(Direction::Out) => " (Out)",
+        };
+        if self.liveness() == FlowStateLiveness::Larval {
+            panic!(
+                "table {table}{dir_spec}: flow {key} was left in \
+                larval state after processing"
+            );
         }
     }
 }
@@ -966,10 +1122,19 @@ fn update_eviction_incumbent<'a, S: FlowState>(
         EvictionSource::Cache
     };
 
+    // Flow entries in a larval state are being used by an in-progress slow
+    // path walk. Taking them out would be rude! More pressingly, they lack
+    // any active parents, so they will likely look *very* evictable, when
+    // they really should not be.
+    let liveness = entry.liveness();
+    if liveness == FlowStateLiveness::Larval {
+        return ControlFlow::Continue(EvictionPriority::Protected);
+    }
+
     // We may be visiting this entry before the periodic task is able to reap
     // it. If so, we have a max-priority candidate, due to it losing either the
     // support of a crucial LFT or timer expiry.
-    if entry.is_killed()
+    if liveness == FlowStateLiveness::Dead
         || (entry.lifetime.n_children.load(Ordering::Relaxed) > 0
             && entry.is_expired(now))
     {
@@ -1162,7 +1327,7 @@ mod test {
             None,
         );
         assert_eq!(ft.num_flows(), 0);
-        ft.add(flowid, ()).unwrap();
+        ft.add_ready(flowid, ()).unwrap();
         let now = Moment::now();
         assert_eq!(ft.num_flows(), 1);
         ft.expire_flows(now);
@@ -1185,7 +1350,7 @@ mod test {
         let mut ft =
             FlowTable::new(dummy_port_name(), "flow-clear-test", FT_SIZE, None);
         assert_eq!(ft.num_flows(), 0);
-        ft.add(flowid, ()).unwrap();
+        ft.add_ready(flowid, ()).unwrap();
         assert_eq!(ft.num_flows(), 1);
         ft.clear();
         assert_eq!(ft.num_flows(), 0);
@@ -1207,8 +1372,8 @@ mod test {
         let mut ft1 =
             FlowTable::new(pname.clone(), "parent-table", FT_SIZE, None);
         let mut ft2 = FlowTable::new(pname, "child-table", FT_SIZE, None);
-        let fe1 = ft1.add(flowid, ()).unwrap();
-        let fe2 = ft2.add(flowid, ()).unwrap();
+        let fe1 = ft1.add_ready(flowid, ()).unwrap();
+        let fe2 = ft2.add_ready(flowid, ()).unwrap();
 
         let now = fe2.last_hit();
         fe1.push_child(&(fe2 as Arc<dyn FlowEntryInfo>)).unwrap();
@@ -1244,9 +1409,10 @@ mod test {
         let mut ft1 =
             FlowTable::new(pname.clone(), "parent-table", FT_SIZE, None);
         let mut ft2 = FlowTable::new(pname, "child-table", FT_SIZE, None);
-        let fe1 = ft1.add(flowid, ()).unwrap();
-        let fe2 =
-            ft2.add(flowid, ParentSet(vec![fe1.clone() as Arc<_>])).unwrap();
+        let fe1 = ft1.add_ready(flowid, ()).unwrap();
+        let fe2 = ft2
+            .add_ready(flowid, ParentSet(vec![fe1.clone() as Arc<_>]))
+            .unwrap();
 
         let t1 = fe2.last_hit();
         fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
@@ -1300,24 +1466,24 @@ mod test {
                 proto_info: PortInfo { src_port: i as u16, dst_port: 443 }
                     .into(),
             };
-            default_ft.add(new_id, ()).unwrap();
-            evict_ft.add(new_id, ()).unwrap();
+            default_ft.add_ready(new_id, ()).unwrap();
+            evict_ft.add_ready(new_id, ()).unwrap();
         }
 
         // With the default policy and a table full of UDP entries, we can't make
         // room for anything new.
-        assert!(default_ft.add(flowid, ()).is_err());
+        assert!(default_ft.add_ready(flowid, ()).is_err());
         assert_eq!(default_ft.num_flows(), FT_SIZE.get());
 
         // On a table where every flow is evictable, we can!
-        assert!(evict_ft.add(flowid, ()).is_ok());
+        assert!(evict_ft.add_ready(flowid, ()).is_ok());
         assert_eq!(evict_ft.num_flows(), FT_SIZE.get());
 
         // If we soft-kill a flow entry (i.e., one of its ancestors was evicted)
         // then we can make room to insert a new one.
-        default_ft.map.values().next().unwrap().mark_evicted();
+        default_ft.map.values().next().unwrap().mark_dead();
         assert_eq!(default_ft.num_flows(), FT_SIZE.get());
-        assert!(default_ft.add(flowid, ()).is_ok());
+        assert!(default_ft.add_ready(flowid, ()).is_ok());
         assert_eq!(default_ft.num_flows(), FT_SIZE.get());
     }
 
@@ -1366,7 +1532,7 @@ mod test {
                 proto_info: PortInfo { src_port: i as u16, dst_port: 443 }
                     .into(),
             };
-            evict_ft.add(new_id, ()).unwrap();
+            evict_ft.add_ready(new_id, ()).unwrap();
         }
 
         // We've set this table up so that one of these flows will have a
@@ -1375,7 +1541,7 @@ mod test {
         //
         // This is the entry we will evict, regardless of the age of all others.
         assert!(evict_ft.map.contains_key(&sacrificial_flow));
-        assert!(evict_ft.add(flowid, ()).is_ok());
+        assert!(evict_ft.add_ready(flowid, ()).is_ok());
         assert_eq!(evict_ft.num_flows(), FT_SIZE.get());
         assert!(!evict_ft.map.contains_key(&sacrificial_flow));
     }
@@ -1400,10 +1566,10 @@ mod test {
         let mut ft2_2 =
             FlowTable::new(pname.clone(), "other-child-table", FT_SIZE, None);
         let mut ft3 = FlowTable::new(pname, "grandchild-table", FT_SIZE, None);
-        let fe1 = ft1.add(flowid, ()).unwrap();
-        let fe2 = ft2.add(flowid, ()).unwrap();
-        let fe_out_of_chain = ft2_2.add(flowid, ()).unwrap();
-        let fe3 = ft3.add(flowid, ()).unwrap();
+        let fe1 = ft1.add_ready(flowid, ()).unwrap();
+        let fe2 = ft2.add_ready(flowid, ()).unwrap();
+        let fe_out_of_chain = ft2_2.add_ready(flowid, ()).unwrap();
+        let fe3 = ft3.add_ready(flowid, ()).unwrap();
 
         fe1.push_child(&(fe2.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
         fe2.push_child(&(fe3.clone() as Arc<dyn FlowEntryInfo>)).unwrap();
@@ -1413,7 +1579,7 @@ mod test {
 
         // If we invalidate fe1, then all of its *direct descendants* will also
         // be invalid.
-        fe1.mark_evicted();
+        fe1.mark_dead();
         assert!(fe1.is_killed());
         assert!(fe2.is_killed());
         assert!(fe3.is_killed());
@@ -1466,10 +1632,10 @@ mod test {
             })),
         );
 
-        let fe1 = ft1.add(flowid, ()).unwrap();
-        let fe2 = ft2.add(flowid, ()).unwrap();
-        let fe2_2 = ft2_2.add(flowid, ()).unwrap();
-        let fe2_3 = ft2_3.add(flowid, ()).unwrap();
+        let fe1 = ft1.add_ready(flowid, ()).unwrap();
+        let fe2 = ft2.add_ready(flowid, ()).unwrap();
+        let fe2_2 = ft2_2.add_ready(flowid, ()).unwrap();
+        let fe2_3 = ft2_3.add_ready(flowid, ()).unwrap();
 
         // By default, we have no entry expressing a preference.
         let now = fe2_3.last_hit();
@@ -1564,7 +1730,7 @@ mod test {
                 proto_info: PortInfo { src_port: i as u16, dst_port: 443 }
                     .into(),
             };
-            evict_ft.add(new_id, ()).unwrap();
+            evict_ft.add_ready(new_id, ()).unwrap();
 
             if i == perturb_at {
                 assert_eq!(new_id, sacrificial_flow);

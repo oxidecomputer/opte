@@ -42,6 +42,8 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
+use crate::engine::flow_table::FlowStateLiveness;
+use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -67,13 +69,22 @@ use opte_api::RuleTableEntryDump;
 #[derive(Debug)]
 pub enum LayerError {
     BodyTransform(BodyTransformError),
-    FlowTableFull { layer: &'static str, dir: Direction },
+    FlowTableFull {
+        layer: &'static str,
+        dir: Direction,
+    },
     GenDesc(rule::GenDescError),
     GenBodyTransform(GenBtError),
-    GenHdrTransform { layer: &'static str, err: rule::GenHtError },
+    GenHdrTransform {
+        layer: &'static str,
+        err: rule::GenHtError,
+    },
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
+    /// Another packet on the same flow (in the same or opposite direction)
+    /// is still undergoing processing, and has not yet been `Allow`ed.
+    Raced,
 }
 
 impl From<GenBtError> for LayerError {
@@ -252,33 +263,43 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
+    fn get_in(
+        &self,
+        flow: &InnerFlowId,
+    ) -> result::Result<EntryState<'_, ActionDescEntry>, LayerError> {
         match self.ft_in.get(flow) {
-            Some(entry) => {
+            Ok(Some(entry)) => {
                 entry.hit();
-                if entry.is_dirty() {
+                Ok(if entry.is_dirty() {
                     EntryState::Dirty(entry)
                 } else {
                     EntryState::Clean(entry)
-                }
+                })
             }
-
-            None => EntryState::None,
+            Ok(None) => Ok(EntryState::None),
+            Err(FlowTableGetError::InProgress) => {
+                return Err(LayerError::Raced);
+            }
         }
     }
 
-    fn get_out(&self, flow: &InnerFlowId) -> EntryState<'_, LftOutEntry> {
+    fn get_out(
+        &self,
+        flow: &InnerFlowId,
+    ) -> result::Result<EntryState<'_, LftOutEntry>, LayerError> {
         match self.ft_out.get(flow) {
-            Some(entry) => {
+            Ok(Some(entry)) => {
                 entry.hit();
-                if entry.is_dirty() {
+                Ok(if entry.is_dirty() {
                     EntryState::Dirty(entry)
                 } else {
                     EntryState::Clean(entry)
-                }
+                })
             }
-
-            None => EntryState::None,
+            Ok(None) => Ok(EntryState::None),
+            Err(FlowTableGetError::InProgress) => {
+                return Err(LayerError::Raced);
+            }
         }
     }
 
@@ -294,23 +315,6 @@ impl LayerFlowTable {
         flow: &InnerFlowId,
     ) -> Option<Arc<FlowEntry<LftOutEntry>>> {
         self.ft_out.remove(flow)
-    }
-
-    fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
-        match dir {
-            Direction::In => {
-                let entry = self.ft_in.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-            Direction::Out => {
-                let entry = self.ft_out.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a
@@ -888,14 +892,14 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_in(&flow) {
+        let action = match self.ft.get_in(&flow)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = action.state()
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::In, &flow);
+                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
@@ -1176,14 +1180,14 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow = *pkt.flow();
-        let action = match self.ft.get_out(&flow) {
+        let action = match self.ft.get_out(&flow)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::Out, &flow);
+                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
@@ -1596,6 +1600,20 @@ impl Layer {
 
     pub fn stats_snap(&self) -> LayerStatsSnap {
         self.stats.vals.snapshot()
+    }
+
+    /// Test helper for single-threaded execution to verify that all flows
+    /// in the layer are `Ready` or `Dead`.
+    ///
+    /// Panics if any flows are `Larval`.
+    #[cfg(any(feature = "test-help", test))]
+    pub fn verify_no_larval(&self) {
+        for (k, v) in self.ft.ft_out.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::Out));
+        }
+        for (k, v) in self.ft.ft_in.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::In));
+        }
     }
 }
 

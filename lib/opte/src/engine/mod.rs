@@ -244,8 +244,8 @@ pub trait NetworkImpl {
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
-        uft_in: &FlowTable<UftEntry<InnerFlowId>>,
-        uft_out: &FlowTable<UftEntry<InnerFlowId>>,
+        uft_in: &FlowTable<UftEntry>,
+        uft_out: &FlowTable<UftEntry>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
