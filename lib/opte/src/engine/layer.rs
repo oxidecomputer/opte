@@ -559,7 +559,114 @@ enum SpaceCreated {
     Evict { in_key: InnerFlowId, out_key: InnerFlowId },
 }
 
-pub struct Layer {
+pub struct LayerSpec {
+    name: &'static C8Str,
+    actions: LayerActions,
+    rules_in: RuleTableCore,
+    rules_out: RuleTableCore,
+    ft_limit: NonZeroU32,
+}
+
+impl LayerSpec {
+    pub fn action(&self, idx: usize) -> Option<Action> {
+        self.actions.actions.get(idx).cloned()
+    }
+
+    pub fn add_rule(&mut self, dir: Direction, rule: Rule<Finalized>) {
+        match dir {
+            Direction::Out => {
+                self.rules_out.add(rule);
+            }
+
+            Direction::In => {
+                self.rules_in.add(rule);
+            }
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
+    pub fn new(
+        name: &'static C8Str,
+        actions: LayerActions,
+        ft_limit: NonZeroU32,
+    ) -> Self {
+        Self {
+            name,
+            actions,
+            ft_limit,
+            rules_in: Default::default(),
+            rules_out: Default::default(),
+        }
+    }
+
+    /// Return the number of rules defined in this layer in the given
+    /// direction.
+    pub fn num_rules(&self, dir: Direction) -> usize {
+        match dir {
+            Direction::Out => self.rules_out.num_rules(),
+            Direction::In => self.rules_in.num_rules(),
+        }
+    }
+
+    pub(crate) fn into_layer(self, port: Arc<C8Str>) -> Layer {
+        let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
+
+        // Unwrap: We know this is fine because the stat names are
+        // generated from the LayerStats structure.
+        let stats = KStatNamed::new(
+            "xde",
+            &format!("{port}_{name}"),
+            LayerStats::new(),
+        )
+        .unwrap();
+        stats.vals.lft_capacity.set(ft_limit.get() as u64);
+        stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
+        stats.vals.in_rules.set(rules_in.num_rules() as u64);
+        stats.vals.out_rules.set(rules_out.num_rules() as u64);
+
+        Layer {
+            actions: actions.actions,
+            default_in: actions.default_in,
+            default_in_hits: 0,
+            default_out: actions.default_out,
+            default_out_hits: 0,
+            name,
+            ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
+            ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
+            rules_in: rules_in.into_table(
+                Arc::clone(&port),
+                name,
+                Direction::In,
+            ),
+            rules_out: rules_out.into_table(
+                Arc::clone(&port),
+                name,
+                Direction::Out,
+            ),
+            rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
+            stats,
+            port,
+        }
+    }
+
+    /// Set all rules at once, in an atomic manner.
+    ///
+    /// Updating the ruleset immediately invalidates all flows
+    /// established in the Flow Table.
+    pub fn set_rules(
+        &mut self,
+        in_rules: Vec<Rule<Finalized>>,
+        out_rules: Vec<Rule<Finalized>>,
+    ) {
+        self.rules_in.set_rules(in_rules);
+        self.rules_out.set_rules(out_rules);
+    }
+}
+
+pub(crate) struct Layer {
     port: Arc<C8Str>,
     name: &'static C8Str,
     actions: Vec<Action>,
@@ -795,40 +902,6 @@ impl Layer {
     /// Return the name of the layer.
     pub fn name(&self) -> &str {
         self.name
-    }
-
-    pub fn new(
-        name: &'static C8Str,
-        port: Arc<C8Str>,
-        actions: LayerActions,
-        ft_limit: NonZeroU32,
-    ) -> Self {
-        // Unwrap: We know this is fine because the stat names are
-        // generated from the LayerStats structure.
-        let stats = KStatNamed::new(
-            "xde",
-            &format!("{port}_{name}"),
-            LayerStats::new(),
-        )
-        .unwrap();
-        stats.vals.lft_capacity.set(ft_limit.get() as u64);
-        stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
-
-        Layer {
-            actions: actions.actions,
-            default_in: actions.default_in,
-            default_in_hits: 0,
-            default_out: actions.default_out,
-            default_out_hits: 0,
-            name,
-            ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
-            ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
-            rules_in: RuleTable::new(Arc::clone(&port), name, Direction::In),
-            rules_out: RuleTable::new(Arc::clone(&port), name, Direction::Out),
-            rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
-            stats,
-            port,
-        }
     }
 
     /// Return the number of active flows.
@@ -1635,10 +1708,15 @@ impl From<&RuleTableEntry> for RuleTableEntryDump {
 }
 
 #[derive(Debug)]
-pub struct RuleTable {
+pub(crate) struct RuleTable {
     port: Arc<C8Str>,
     layer_c: CString,
     dir: Direction,
+    rules: RuleTableCore,
+}
+
+#[derive(Debug, Default)]
+struct RuleTableCore {
     rules: Vec<RuleTableEntry>,
     next_id: RuleId,
 }
@@ -1656,25 +1734,12 @@ pub enum RuleRemoveErr {
 
 impl RuleTable {
     fn add(&mut self, rule: Rule<rule::Finalized>) {
-        match self.find_pos(&rule) {
-            RulePlace::End => {
-                let rte =
-                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
-                self.rules.push(rte);
-            }
-
-            RulePlace::Insert(idx) => {
-                let rte =
-                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
-                self.rules.insert(idx, rte);
-            }
-        }
-        self.next_id += 1;
+        self.rules.add(rule);
     }
 
     fn dump(&self) -> Vec<RuleTableEntryDump> {
         let mut dump = Vec::new();
-        for rte in &self.rules {
+        for rte in self.rules.iter() {
             dump.push(RuleTableEntryDump::from(rte));
         }
         dump
@@ -1709,61 +1774,32 @@ impl RuleTable {
         None
     }
 
-    // Find the position in which to insert this rule.
-    fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
-        for (i, rte) in self.rules.iter().enumerate() {
-            if rule.priority() < rte.rule.priority() {
-                return RulePlace::Insert(i);
-            }
-
-            // Deny takes precedence at the same priority. If we are
-            // adding a Deny, and one or more Deny entries already
-            // exist, the new rule is added in the front. The same
-            // goes for multiple non-deny entries at the same
-            // priority.
-            if rule.priority() == rte.rule.priority()
-                && (rule.action().is_deny() || !rte.rule.action().is_deny())
-            {
-                return RulePlace::Insert(i);
-            }
-        }
-
-        RulePlace::End
-    }
-
     /// Find the rule and return its id.
     ///
     /// Search for a matching rule that has the same predicates as the
     /// specified rule. If no matching rule is found, then `None` is
     /// returned.
     pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
-        self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
+        self.rules.find_rule(query_rule)
     }
 
+    #[cfg(test)]
     fn new(port: Arc<C8Str>, layer: &str, dir: Direction) -> Self {
         Self {
             port,
             layer_c: CString::new(layer).unwrap(),
             dir,
-            rules: vec![],
-            next_id: 0,
+            rules: Default::default(),
         }
     }
 
     fn num_rules(&self) -> usize {
-        self.rules.len()
+        self.rules.num_rules()
     }
 
     // Remove the rule with the given `id`. Otherwise, return not found.
     fn remove(&mut self, id: RuleId) -> Result<()> {
-        for (rule_idx, rte) in self.rules.iter().enumerate() {
-            if id == rte.id {
-                let _ = self.rules.remove(rule_idx);
-                return Ok(());
-            }
-        }
-
-        Err(Error::RuleNotFound { id })
+        self.rules.remove(id)
     }
 
     pub fn rule_no_match_probe(
@@ -1835,6 +1871,92 @@ impl RuleTable {
     }
 
     pub fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
+        self.rules.set_rules(new_rules);
+    }
+}
+
+impl RuleTableCore {
+    fn add(&mut self, rule: Rule<rule::Finalized>) {
+        match self.find_pos(&rule) {
+            RulePlace::End => {
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
+                self.rules.push(rte);
+            }
+
+            RulePlace::Insert(idx) => {
+                let rte =
+                    RuleTableEntry { id: self.next_id, hits: 0.into(), rule };
+                self.rules.insert(idx, rte);
+            }
+        }
+        self.next_id += 1;
+    }
+
+    fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
+        for (i, rte) in self.rules.iter().enumerate() {
+            if rule.priority() < rte.rule.priority() {
+                return RulePlace::Insert(i);
+            }
+
+            // Deny takes precedence at the same priority. If we are
+            // adding a Deny, and one or more Deny entries already
+            // exist, the new rule is added in the front. The same
+            // goes for multiple non-deny entries at the same
+            // priority.
+            if rule.priority() == rte.rule.priority()
+                && (rule.action().is_deny() || !rte.rule.action().is_deny())
+            {
+                return RulePlace::Insert(i);
+            }
+        }
+
+        RulePlace::End
+    }
+
+    /// Find the rule and return its id.
+    ///
+    /// Search for a matching rule that has the same predicates as the
+    /// specified rule. If no matching rule is found, then `None` is
+    /// returned.
+    pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
+        self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
+    }
+
+    fn into_table(
+        self,
+        port: Arc<C8Str>,
+        layer_name: &'static str,
+        dir: Direction,
+    ) -> RuleTable {
+        RuleTable {
+            port,
+            layer_c: CString::new(layer_name).unwrap(),
+            dir,
+            rules: self,
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &RuleTableEntry> {
+        self.rules.iter()
+    }
+
+    fn num_rules(&self) -> usize {
+        self.rules.len()
+    }
+
+    fn remove(&mut self, id: RuleId) -> Result<()> {
+        for (rule_idx, rte) in self.rules.iter().enumerate() {
+            if id == rte.id {
+                _ = self.rules.remove(rule_idx);
+                return Ok(());
+            }
+        }
+
+        Err(Error::RuleNotFound { id })
+    }
+
+    fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
         self.rules.clear();
         for r in new_rules {
             self.add(r);

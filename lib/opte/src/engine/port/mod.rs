@@ -76,6 +76,7 @@ use crate::engine::flow_table::FlowTableAddError;
 use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
+use crate::engine::layer::LayerSpec;
 use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
@@ -232,7 +233,7 @@ pub struct PortBuilder {
     ectx: Arc<ExecCtx>,
     name: Arc<C8Str>,
     mac: MacAddr,
-    layers: KMutex<Vec<Layer>>,
+    layers: Vec<LayerSpec>,
     mtu: Option<NonZeroU32>,
 }
 
@@ -268,36 +269,34 @@ impl PortBuilder {
     /// a packet from the guest. The last is the last to see a packet
     /// before it is delivered to the guest.
     pub fn add_layer(
-        &self,
-        new_layer: Layer,
+        &mut self,
+        new_layer: LayerSpec,
         pos: Pos,
     ) -> result::Result<(), OpteError> {
-        let mut lock = self.layers.lock();
-
         match pos {
             Pos::Last => {
-                lock.push(new_layer);
+                self.layers.push(new_layer);
                 return Ok(());
             }
 
             Pos::First => {
-                lock.insert(0, new_layer);
+                self.layers.insert(0, new_layer);
                 return Ok(());
             }
 
             Pos::Before(name) => {
-                for (i, layer) in lock.iter().enumerate() {
+                for (i, layer) in self.layers.iter().enumerate() {
                     if layer.name() == name {
-                        lock.insert(i, new_layer);
+                        self.layers.insert(i, new_layer);
                         return Ok(());
                     }
                 }
             }
 
             Pos::After(name) => {
-                for (i, layer) in lock.iter().enumerate() {
+                for (i, layer) in self.layers.iter().enumerate() {
                     if layer.name() == name {
-                        lock.insert(i + 1, new_layer);
+                        self.layers.insert(i + 1, new_layer);
                         return Ok(());
                     }
                 }
@@ -313,12 +312,12 @@ impl PortBuilder {
     /// Add a new `Rule` to the layer named by `layer`, if such a
     /// layer exists. Otherwise, return an error.
     pub fn add_rule(
-        &self,
+        &mut self,
         layer_name: &str,
         dir: Direction,
         rule: Rule<Finalized>,
     ) -> result::Result<(), OpteError> {
-        for layer in &mut *self.layers.lock() {
+        for layer in &mut self.layers {
             if layer.name() == layer_name {
                 layer.add_rule(dir, rule);
                 return Ok(());
@@ -353,7 +352,6 @@ impl PortBuilder {
         let stats = KStatNamed::new("xde", self.name.as_str(), stats)?;
 
         Ok(Port {
-            name: self.name,
             mac: self.mac,
             ectx: self.ectx,
             epoch: 1,
@@ -362,17 +360,17 @@ impl PortBuilder {
             mtu: self.mtu,
 
             state: PortState::Ready,
-            // At this point the layer pipeline is immutable, thus we
-            // move the layers out of the mutex.
             layers: self
                 .layers
-                .into_inner()
                 .into_iter()
+                .map(|v| v.into_layer(Arc::clone(&self.name)))
                 .map(KRwLock::new)
                 .collect(),
             uft_in: KRwLock::new(uft_in),
             uft_out: KRwLock::new(uft_out),
             tcp_flows: KRwLock::new(tcp_flows),
+
+            name: self.name,
         })
     }
 
@@ -380,32 +378,13 @@ impl PortBuilder {
     /// [`Layer`] at the given index. If the layer does not exist, or
     /// has no action at that index, then `None` is returned.
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
-        for l in &*self.layers.lock() {
+        for l in &self.layers {
             if l.name() == layer {
                 return l.action(idx);
             }
         }
 
         None
-    }
-
-    /// List each [`Layer`] under this port.
-    pub fn list_layers(&self) -> ListLayersResp {
-        let mut tmp = vec![];
-        let lock = self.layers.lock();
-
-        for layer in lock.iter() {
-            tmp.push(LayerDesc {
-                name: layer.name().to_string(),
-                rules_in: layer.num_rules(Direction::In),
-                rules_out: layer.num_rules(Direction::Out),
-                default_in: layer.default_action(Direction::In).to_string(),
-                default_out: layer.default_action(Direction::Out).to_string(),
-                flows: layer.num_flows(),
-            });
-        }
-
-        ListLayersResp { layers: tmp }
     }
 
     /// Return the name of the port.
@@ -419,17 +398,15 @@ impl PortBuilder {
         ectx: Arc<ExecCtx>,
         mtu: Option<NonZeroU32>,
     ) -> Self {
-        PortBuilder { name, mac, ectx, layers: KMutex::new(Vec::new()), mtu }
+        PortBuilder { name, mac, ectx, layers: Vec::new(), mtu }
     }
 
     /// Remove the [`Layer`] registered under `name`, if such a layer
     /// exists.
-    pub fn remove_layer(&self, name: &str) {
-        let mut lock = self.layers.lock();
-
-        for (i, layer) in lock.iter().enumerate() {
+    pub fn remove_layer(&mut self, name: &str) {
+        for (i, layer) in self.layers.iter().enumerate() {
             if layer.name() == name {
-                let _ = lock.remove(i);
+                let _ = self.layers.remove(i);
                 return;
             }
         }
