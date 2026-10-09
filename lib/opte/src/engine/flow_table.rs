@@ -35,6 +35,8 @@ use core::sync::atomic::Ordering;
 #[cfg(all(not(feature = "std"), not(test)))]
 use illumos_sys_hdrs::uintptr_t;
 use itertools::Either;
+#[cfg(any(feature = "test-help", test))]
+use opte_api::Direction;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -1021,6 +1023,28 @@ impl<S: FlowState> FlowEntry<S> {
                 n_children: 0.into(),
                 children: KRwLock::new(BTreeSet::new()),
             }),
+        }
+    }
+
+    /// Test helper for single-threaded execution to verify that this flow
+    /// is `Ready` or `Dead` at the end of port processing.
+    #[cfg(any(feature = "test-help", test))]
+    pub(crate) fn verify_not_larval(
+        &self,
+        table: &str,
+        key: &InnerFlowId,
+        dir: Option<Direction>,
+    ) {
+        let dir_spec = match dir {
+            None => "",
+            Some(Direction::In) => " (In)",
+            Some(Direction::Out) => " (Out)",
+        };
+        if self.liveness() == FlowStateLiveness::Larval {
+            panic!(
+                "table {table}{dir_spec}: flow {key} was left in \
+                larval state after processing"
+            );
         }
     }
 }

@@ -1625,6 +1625,20 @@ impl Layer {
     pub fn stats_snap(&self) -> LayerStatsSnap {
         self.stats.vals.snapshot()
     }
+
+    /// Test helper for single-threaded execution to verify that all flows
+    /// in the layer are `Ready` or `Dead`.
+    ///
+    /// Panics if any flows are `Larvel`.
+    #[cfg(any(feature = "test-help", test))]
+    pub fn verify_no_larval(&self) {
+        for (k, v) in self.ft.ft_out.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::Out));
+        }
+        for (k, v) in self.ft.ft_in.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::In));
+        }
+    }
 }
 
 #[derive(Debug)]

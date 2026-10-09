@@ -626,6 +626,18 @@ impl FlowState for UftEntry {
     }
 }
 
+// This impl Drop is required to safely handle the case where we attempt to
+// create and install a UFT entry, but fail. This moves all flow entries that
+// were created on a given slow path walk to the `Ready` state, and is a NO-OP
+// on any entries which are already `Ready` or `Dead .
+impl Drop for UftEntry {
+    fn drop(&mut self) {
+        for parent in &self.parents {
+            parent.mark_ready();
+        }
+    }
+}
+
 /// Cumulative counters for a single [`Port`].
 #[derive(KStatProvider)]
 struct PortStats {
@@ -1762,6 +1774,29 @@ impl<N: NetworkImpl> Port<N> {
             Direction::Out => self.update_stats_out(&res),
         }
 
+        match res {
+            Ok(InternalProcessResult::Modified) => {}
+            _ => {
+                // If we denied the packet or hit an error, we may still
+                // have generated new LFTs on a slowpath walk. We need to
+                // mark these as having been finalised.
+                //
+                // For packets which have been explicitly dropped, what we
+                // *want* to do here is slightly different. Any LFT entries
+                // which are in a `Larval` state should be explicitly removed
+                // from their table. This gets us a roundabout solution to
+                // #867 -- i.e., firewall-denied packets will _release their
+                // claim on a NAT table entry_. However that requires
+                // intrusive enough changes that it should be its own PR.
+                // The redesign of the locking and use of `Larval` states is
+                // done to allow that soon.
+                let lfts = pkt.take_lfts();
+                for lft in lfts {
+                    lft.mark_ready();
+                }
+            }
+        }
+
         let res = res.and_then(|v| match v {
             InternalProcessResult::Drop { reason } => {
                 Ok(ProcessResult::Drop { reason })
@@ -1895,6 +1930,26 @@ impl<N: NetworkImpl> Port<N> {
     #[cfg(any(feature = "test-help", test))]
     pub fn tcp_state(&self, flow: &InnerFlowId) -> Option<TcpState> {
         self.tcp_flows.read().get(flow).map(|entry| entry.state().tcp_state())
+    }
+
+    /// Test helper for single-threaded execution to verify that all flows
+    /// in the port are `Ready` or `Dead`.
+    ///
+    /// Panics if any flows are `Larvel`.
+    #[cfg(any(feature = "test-help", test))]
+    pub fn verify_no_larval(&self) {
+        for (k, v) in self.uft_in.read().iter() {
+            v.verify_not_larval("uft", k, Some(Direction::In));
+        }
+        for (k, v) in self.uft_out.read().iter() {
+            v.verify_not_larval("uft", k, Some(Direction::Out));
+        }
+        for (k, v) in self.tcp_flows.read().iter() {
+            v.verify_not_larval("tcp", k, None);
+        }
+        for layer in &self.layers {
+            layer.read().verify_no_larval();
+        }
     }
 }
 
