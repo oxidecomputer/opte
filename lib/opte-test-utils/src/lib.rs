@@ -384,7 +384,7 @@ pub fn oxide_net_setup2(
         }],
     );
 
-    let port = oxide_net_builder(
+    let mut port = oxide_net_builder(
         name,
         &converted_cfg,
         vpc_map.clone(),
@@ -399,7 +399,7 @@ pub fn oxide_net_setup2(
     // Add router entry that allows the guest to send to other guests
     // on same subnet.
     router::add_entry(
-        &port,
+        &mut port,
         IpCidr::Ip4(cfg.ipv4().vpc_subnet),
         RouterTarget::VpcSubnet(IpCidr::Ip4(cfg.ipv4().vpc_subnet)),
         RouterClass::System,
@@ -487,18 +487,15 @@ fn set_default_fw_rules(pav: &mut PortAndVps, cfg: &VpcCfg) {
     let icmp_in = "dir=in action=allow priority=65534 protocol=ICMP";
     let vpc_in =
         format!("dir=in action=allow priority=65534 hosts=vni={}", cfg.vni,);
-    firewall::set_fw_rules(
-        &pav.port,
-        &SetFwRulesReq {
-            port_name: pav.port.name().to_string(),
-            rules: vec![
-                vpc_in.parse().unwrap(),
-                ssh_in.parse().unwrap(),
-                icmp_in.parse().unwrap(),
-            ],
-        },
-    )
-    .unwrap();
+    let req = SetFwRulesReq {
+        port_name: pav.port.name().to_string(),
+        rules: vec![
+            vpc_in.parse().unwrap(),
+            ssh_in.parse().unwrap(),
+            icmp_in.parse().unwrap(),
+        ],
+    };
+    firewall::set_fw_rules(&mut pav.port, &req).unwrap();
     update!(pav, ["set:epoch=3", "set:firewall.rules.in=3"]);
 }
 

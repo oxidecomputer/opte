@@ -72,7 +72,7 @@ pub fn setup(
 }
 
 pub fn add_fw_rule(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     req: &AddFwRuleReq,
 ) -> Result<(), OpteError> {
     let action = match req.rule.action {
@@ -85,14 +85,14 @@ pub fn add_fw_rule(
 }
 
 pub fn rem_fw_rule(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     req: &RemFwRuleReq,
 ) -> Result<(), OpteError> {
     port.remove_rule(FW_LAYER_NAME, req.dir, req.id)
 }
 
 pub fn set_fw_rules(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     req: &SetFwRulesReq,
 ) -> Result<(), OpteError> {
     let mut in_rules = vec![];
