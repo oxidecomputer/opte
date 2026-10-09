@@ -13,6 +13,7 @@ use super::packet::InnerFlowId;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
+use crate::engine::port::ProcessError;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
@@ -173,7 +174,7 @@ pub trait FlowEntryInfo: fmt::Debug + Send + Sync {
     fn push_child(
         &self,
         child: &Arc<dyn FlowEntryInfo>,
-    ) -> Result<(), FlowTableError>;
+    ) -> Result<(), FlowTableAddError>;
 
     /// Remove `child` from this entry's list of children.
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>);
@@ -239,7 +240,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     fn push_child(
         &self,
         child: &Arc<dyn FlowEntryInfo>,
-    ) -> Result<(), FlowTableError> {
+    ) -> Result<(), FlowTableAddError> {
         let mut children = self.lifetime.children.write();
 
         // Sadly, BTreeSet::entry remains a nightly API.
@@ -251,7 +252,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
             self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
             Ok(())
         } else {
-            Err(FlowTableError::MaxCapacity(
+            Err(FlowTableAddError::MaxCapacity(
                 u64::try_from(Self::MAX_CHILDREN).expect("usize is u64"),
             ))
         }
@@ -298,10 +299,15 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
-#[derive(Debug)]
-pub enum FlowTableError {
+#[derive(Copy, Clone, Debug)]
+pub enum FlowTableAddError {
     MaxCapacity(u64),
     Existing,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum FlowTableGetError {
+    InProgress,
 }
 
 #[derive(Debug)]
@@ -357,7 +363,7 @@ impl<S: FlowState> FlowTable<S> {
         &mut self,
         flow_id: InnerFlowId,
         state: S,
-    ) -> Result<Arc<FlowEntry<S>>, FlowTableError> {
+    ) -> Result<Arc<FlowEntry<S>>, FlowTableAddError> {
         self.check_for_space()?;
         let entry = Arc::new(FlowEntry::new(flow_id, state, self));
         match self.map.entry(flow_id) {
@@ -369,7 +375,7 @@ impl<S: FlowState> FlowTable<S> {
                 *slot.into_mut() = Arc::clone(&entry);
                 Ok(entry)
             }
-            Entry::Occupied(_) => Err(FlowTableError::Existing),
+            Entry::Occupied(_) => Err(FlowTableAddError::Existing),
         }
     }
 
@@ -380,7 +386,7 @@ impl<S: FlowState> FlowTable<S> {
         &mut self,
         flow_id: InnerFlowId,
         state: S,
-    ) -> Result<Arc<FlowEntry<S>>, FlowTableError> {
+    ) -> Result<Arc<FlowEntry<S>>, FlowTableAddError> {
         self.add(flow_id, state).inspect(|v| v.mark_ready())
     }
 
@@ -556,7 +562,7 @@ impl<S: FlowState> FlowTable<S> {
                 let partner_flow = extractor(entry.state());
                 #[cfg(debug_assertions)]
                 {
-                    if let Some(other) = partner.get(&partner_flow) {
+                    if let Ok(Some(other)) = partner.get(&partner_flow) {
                         assert!(Arc::ptr_eq(&entry.lifetime, &other.lifetime))
                     }
                 }
@@ -587,7 +593,7 @@ impl<S: FlowState> FlowTable<S> {
     /// inserted.
     ///
     /// If out of space, this method will attempt to evict an existing entry.
-    pub fn check_for_space(&mut self) -> Result<(), FlowTableError> {
+    pub fn check_for_space(&mut self) -> Result<(), FlowTableAddError> {
         if self.map.len() < self.limit.get() as usize {
             return Ok(());
         }
@@ -596,7 +602,7 @@ impl<S: FlowState> FlowTable<S> {
             self.expire(&key, true);
             Ok(())
         } else {
-            Err(FlowTableError::MaxCapacity(self.limit.get() as u64))
+            Err(FlowTableAddError::MaxCapacity(self.limit.get() as u64))
         }
     }
 
@@ -693,10 +699,21 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     /// Get a reference to the flow entry for a given flow, if one exists.
-    pub fn get(&self, flow_id: &InnerFlowId) -> Option<&Arc<FlowEntry<S>>> {
-        // Flows which are marked as `killed` no longer really exist, but they
-        // have not yet been reaped.
-        self.map.get(flow_id).and_then(|v| (!v.is_killed()).then_some(v))
+    ///
+    /// This method will not return an entry if the existing entry is marked
+    /// `Dead`, and will return an error if the entry has not been finalised.
+    pub fn get(
+        &self,
+        flow_id: &InnerFlowId,
+    ) -> Result<Option<&Arc<FlowEntry<S>>>, FlowTableGetError> {
+        match self.map.get(flow_id) {
+            None => Ok(None),
+            Some(v) => match v.liveness() {
+                FlowStateLiveness::Larval => Err(FlowTableGetError::InProgress),
+                FlowStateLiveness::Ready => Ok(Some(v)),
+                FlowStateLiveness::Dead => Ok(None),
+            },
+        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a

@@ -72,7 +72,8 @@ use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::flow_table::FlowState;
-use crate::engine::flow_table::FlowTableError;
+use crate::engine::flow_table::FlowTableAddError;
+use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
@@ -635,6 +636,10 @@ impl Drop for UftEntry {
         for parent in &self.parents {
             parent.mark_ready();
         }
+
+        if let Some(flow) = self.tcp_flow.as_ref().and_then(Weak::upgrade) {
+            flow.mark_ready();
+        }
     }
 }
 
@@ -1047,7 +1052,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states.
     ///
     /// * [`PortState::Running`]
-    pub fn clear_uft(&self) -> Result<()> {
+    pub fn clear_uft(&mut self) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
         {
             let mut uft = self.uft_in.write();
@@ -1070,7 +1075,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states.
     ///
     /// * [`PortState::Running`]
-    pub fn clear_lft(&self, layer: &str) -> Result<()> {
+    pub fn clear_lft(&mut self, layer: &str) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
         let layer = self
             .layers
@@ -1400,7 +1405,8 @@ impl<N: NetworkImpl> Port<N> {
         //    piecemeal OR produce a non-`Modified` decision.
         //
         // Generally, 1 > 2 >>> 3 in terms of rate of pps.
-        // Both 1 and 2 are able to drop the port lock very quickly.
+        // Both 1 and 2 are able to drop the UFT lock very quickly and avoid
+        // interaction with any other layers or tables.
         //
         // This tiering exists because we can save space on metadata
         // when we know that we won't have mixed owned/borrowed packet
@@ -1411,6 +1417,14 @@ impl<N: NetworkImpl> Port<N> {
         //
         // In case 1, we can also cache and reuse the same EmitSpec for
         // all hit packets.
+        //
+        // The basis of lock management here is that we generally hold at most
+        // *one* table lock at a time (read or write), and rely on liveness
+        // data of each flow entry to determine whether an entry remains valid.
+        // This is mainly relevant during TCP flow expiry, where XXX
+        //
+        // Flow states are designed such that only one packet on a given
+        // (flow, direction)...
         //
         // Lock management here is generally optimistic -- most fastpath cases
         // take a short hold on the reader lock.
@@ -1435,12 +1449,15 @@ impl<N: NetworkImpl> Port<N> {
 
         self.port_process_entry_probe(dir, &flow_before, epoch, mblk_addr);
 
-        let uft = match dir {
-            Direction::Out => &self.uft_out,
-            Direction::In => &self.uft_in,
+        let (uft, other_uft) = match dir {
+            Direction::Out => (&self.uft_out, &self.uft_in),
+            Direction::In => (&self.uft_in, &self.uft_out),
         };
 
-        let uft_entry = uft.read().get(&flow_before).map(Arc::clone);
+        // This `get` is infallible for the UFT. We will never see a larval
+        // entry here because we always hold a write lock on the UFT for the
+        // duration of associate_lfts_upstack.
+        let uft_entry = uft.read().get(&flow_before).unwrap().map(Arc::clone);
 
         // Packets which are larger than the guest is able to receive may
         // require bespoke handling by the `NetworkImpl`. If this is the case
@@ -1472,20 +1489,6 @@ impl<N: NetworkImpl> Port<N> {
             })
             .unwrap_or(false);
 
-        // TODO(ky) REWRITE COMMENTS
-
-        // If we have a UFT miss or invalid entry, upgrade to a write lock and
-        // fetch again. This lets us use an optimistic lookup more often.
-        let uft_entry = match uft_entry {
-            Some(ref entry) if entry.state().epoch == epoch => uft_entry,
-            Some(ref entry) => {
-                entry.mark_dead();
-                self.uft_invalidate_probe(dir, &flow_before, epoch);
-                None
-            }
-            None => None,
-        };
-
         enum FastPathDecision {
             CompiledUft(Arc<FlowEntry<UftEntry>>),
             Uft(Arc<FlowEntry<UftEntry>>),
@@ -1502,14 +1505,10 @@ impl<N: NetworkImpl> Port<N> {
             }
         }
 
-        // We have either committed to our (suspected valid) UFT, or refetched
-        // it (may have been removed) under the write lock.
-        // Revalidate the entry in the latter case.
+        // If the entry is from a prior table configuration, mark it as invalid
+        // and demote ourselves to the slowpath.
         let mut decision = match uft_entry {
-            // We have a valid UFT entry of some kind -- clone out the saved
-            // transforms so that we can drop the lock ASAP (if reacquired).
-            // Recheck epoch in case we took a write lock and re-read the UFT.
-            Some(entry) => {
+            Some(entry) if entry.state().epoch == epoch => {
                 // The Fast Path.
                 let xforms = &entry.state().xforms;
                 let out = if !oversize && xforms.compiled.is_some() {
@@ -1525,7 +1524,14 @@ impl<N: NetworkImpl> Port<N> {
 
                 out
             }
-
+            Some(ref entry) => {
+                // We don't *remove* the entry here. Leaving it in place
+                // with a `Dead` state will allow a new insertion to take
+                // its place in the map.
+                entry.mark_dead();
+                self.uft_invalidate_probe(dir, &flow_before, epoch);
+                FastPathDecision::Slow
+            }
             None => FastPathDecision::Slow,
         };
 
@@ -1594,7 +1600,8 @@ impl<N: NetworkImpl> Port<N> {
                             //
                             // Verify that the state we want to remove still
                             // exists, and is `Arc`-identical.
-                            if let Some(found_entry) = tcp_lock.get(ufid_out)
+                            if let Ok(Some(found_entry)) =
+                                tcp_lock.get(ufid_out)
                                 && Arc::ptr_eq(found_entry, &tcp_entry)
                             {
                                 self.uft_tcp_closed_probe(dir, &flow_before);
@@ -1603,6 +1610,44 @@ impl<N: NetworkImpl> Port<N> {
                                     .vals
                                     .tcp_flows
                                     .set(u64::from(tcp_lock.num_flows()));
+                            }
+
+                            drop(tcp_lock);
+
+                            // TODO(ky) do this??
+                            let my_ptr = Arc::as_ptr(&tcp_entry);
+
+                            if let Some(ufid_in) = &flow_lock.inbound_ufid {
+                                let mut uft = self.uft_in.write();
+                                if let Ok(Some(found_entry)) = uft.get(ufid_in)
+                                    && core::ptr::addr_eq(
+                                        found_entry
+                                            .state()
+                                            .tcp_flow
+                                            .as_ref()
+                                            .map(Weak::as_ptr)
+                                            .unwrap_or_default(),
+                                        my_ptr,
+                                    )
+                                {
+                                    uft.remove(ufid_in);
+                                }
+                            }
+                            {
+                                let mut uft = self.uft_out.write();
+                                if let Ok(Some(found_entry)) = uft.get(ufid_out)
+                                    && core::ptr::addr_eq(
+                                        found_entry
+                                            .state()
+                                            .tcp_flow
+                                            .as_ref()
+                                            .map(Weak::as_ptr)
+                                            .unwrap_or_default(),
+                                        my_ptr,
+                                    )
+                                {
+                                    uft.remove(ufid_out);
+                                }
                             }
                         }
                     }
@@ -1732,8 +1777,7 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         let res = match (&decision, dir) {
-            // (2) Apply retrieved transform. Lock is dropped.
-            // Reuse cached l4 hash.
+            // (2) Apply retrieved transform. Reuse cached l4 hash.
             (FastPathDecision::Uft(entry), _) => {
                 let l4_hash = entry.state().l4_hash;
                 let tx = Arc::clone(&entry.state().xforms);
@@ -1743,25 +1787,14 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(InternalProcessResult::Modified)
             }
 
-            // (3) Full-table processing for the packet, then drop the lock.
+            // (3) Full-table processing for the packet.
             // Cksum updates are left undone, so we perform those manually
             // outside the port lock.
             (FastPathDecision::Slow, Direction::In) => {
-                let res = self.process_in_miss(
-                    epoch,
-                    &mut pkt,
-                    &flow_before,
-                    &mut ameta,
-                );
-
-                pkt.update_checksums();
-                res
+                self.process_in_miss(epoch, &mut pkt, &flow_before, &mut ameta)
             }
             (FastPathDecision::Slow, Direction::Out) => {
-                let res = self.process_out_miss(epoch, &mut pkt, &mut ameta);
-
-                pkt.update_checksums();
-                res
+                self.process_out_miss(epoch, &mut pkt, &mut ameta)
             }
 
             (FastPathDecision::CompiledUft(_), _) => unreachable!(),
@@ -1929,13 +1962,22 @@ impl<N: NetworkImpl> Port<N> {
     /// Return the [`TcpState`] of a given flow.
     #[cfg(any(feature = "test-help", test))]
     pub fn tcp_state(&self, flow: &InnerFlowId) -> Option<TcpState> {
-        self.tcp_flows.read().get(flow).map(|entry| entry.state().tcp_state())
+        self.tcp_flows
+            .read()
+            .get(flow)
+            .unwrap()
+            .map(|entry| entry.state().tcp_state())
     }
 
     /// Test helper for single-threaded execution to verify that all flows
     /// in the port are `Ready` or `Dead`.
     ///
-    /// Panics if any flows are `Larvel`.
+    /// Larval flows cannot be allowed to persist after a packet is done
+    /// processing. The fact that they are 'in use' means that they cannot
+    /// be evicted or expired, and any attempt to use them will fail under
+    /// the assumption that packet processing is still ongoing.
+    ///
+    /// Panics if any flows are `Larval`.
     #[cfg(any(feature = "test-help", test))]
     pub fn verify_no_larval(&self) {
         for (k, v) in self.uft_in.read().iter() {
@@ -2423,11 +2465,11 @@ impl<N: NetworkImpl> Port<N> {
 
                     Ok(TcpMaybeClosed::NewState(tcp_state, entry))
                 }
-                Err(FlowTableError::MaxCapacity(limit)) => {
+                Err(FlowTableAddError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "TCP", limit })
                 }
                 // TODO(ky) HANDLE HANDLE HANDLE!!!
-                Err(FlowTableError::Existing) => {
+                Err(FlowTableAddError::Existing) => {
                     Err(ProcessError::FlowRace { kind: "TCP" })
                 }
             }
@@ -2467,8 +2509,12 @@ impl<N: NetworkImpl> Port<N> {
             TcpDirection::Out { ufid_out } => (ufid_out, None),
         };
 
-        let Some(entry) = self.tcp_flows.read().get(ufid_out).cloned() else {
-            return Err(ProcessError::MissingFlow(*ufid_out));
+        let entry = match self.tcp_flows.read().get(ufid_out) {
+            Ok(Some(v)) => v.clone(),
+            Ok(None) => return Err(ProcessError::MissingFlow(*ufid_out)),
+            Err(FlowTableGetError::InProgress) => {
+                return Err(ProcessError::FlowRace { kind: "tcp" });
+            }
         };
 
         entry.hit();
@@ -2485,7 +2531,9 @@ impl<N: NetworkImpl> Port<N> {
         let ufid_inbound = if entry.is_killed() {
             let mut tcp_flows = self.tcp_flows.write();
             // Has someone slipped in another TCP entry in the meantime?
-            let in_table = tcp_flows.get(ufid_out);
+            let in_table = tcp_flows
+                .get(ufid_out)
+                .map_err(|_| ProcessError::FlowRace { kind: "tcp" })?;
             let state_ufid = match in_table {
                 Some(curr_entry) if Arc::ptr_eq(&entry, curr_entry) => {
                     let entry = tcp_flows.remove(ufid_out).unwrap();
@@ -2560,12 +2608,22 @@ impl<N: NetworkImpl> Port<N> {
             Err(
                 ProcessError::TcpFlow(TcpFlowStateError::NewFlow { .. })
                 | ProcessError::MissingFlow(_),
-            ) => self.create_new_tcp_entry(
-                &mut self.tcp_flows.write(),
-                tcp,
-                &dir,
-                pkt_len,
-            ),
+            ) => {
+                // In the inbound case, a newly created tcp flow entry has
+                // been successfully accepted by all layers.
+                self.create_new_tcp_entry(
+                    &mut self.tcp_flows.write(),
+                    tcp,
+                    &dir,
+                    pkt_len,
+                )
+                .inspect(|v| match v {
+                    TcpMaybeClosed::NewState(_, flow_entry) => {
+                        flow_entry.mark_ready()
+                    }
+                    _ => {}
+                })
+            }
             v => v,
         }
     }
@@ -2621,6 +2679,8 @@ impl<N: NetworkImpl> Port<N> {
             flags |= TransformFlags::INTERNAL_DESTINATION;
         }
 
+        pkt.update_checksums();
+
         let mut hte = UftEntry {
             xforms: xforms.compile(flags),
             epoch,
@@ -2641,13 +2701,18 @@ impl<N: NetworkImpl> Port<N> {
                 Ok(TcpMaybeClosed::NewState(_, flow)) => {
                     // We have a good TCP flow, create a new UFT entry.
                     hte.tcp_flow = Some(Arc::downgrade(&flow));
+
                     let mut uft_in = self.uft_in.write();
                     match uft_in.add(*ufid_in, hte) {
                         Ok(v) => {
                             self.new_uft_kstat(In, &mut uft_in);
-                            match associate_lfts_upstack(&v, Direction::In) {
+                            match associate_lfts_upstack(
+                                &v,
+                                Direction::In,
+                                &mut uft_in,
+                            ) {
                                 Ok(_) => Ok(InternalProcessResult::Modified),
-                                Err(FlowTableError::MaxCapacity(_)) => {
+                                Err(FlowTableAddError::MaxCapacity(_)) => {
                                     Err(ProcessError::LftChildrenFull)
                                 }
                                 Err(_) => unreachable!(
@@ -2655,13 +2720,13 @@ impl<N: NetworkImpl> Port<N> {
                                 ),
                             }
                         }
-                        Err(FlowTableError::MaxCapacity(limit)) => {
+                        Err(FlowTableAddError::MaxCapacity(limit)) => {
                             Err(ProcessError::FlowTableFull {
                                 kind: "UFT",
                                 limit,
                             })
                         }
-                        Err(FlowTableError::Existing) => {
+                        Err(FlowTableAddError::Existing) => {
                             Err(ProcessError::FlowRace { kind: "UFT" })
                         }
                     }
@@ -2694,9 +2759,10 @@ impl<N: NetworkImpl> Port<N> {
             match uft_in.add(*ufid_in, hte) {
                 Ok(v) => {
                     self.new_uft_kstat(In, &mut uft_in);
-                    match associate_lfts_upstack(&v, Direction::In) {
+                    match associate_lfts_upstack(&v, Direction::In, &mut uft_in)
+                    {
                         Ok(_) => Ok(InternalProcessResult::Modified),
-                        Err(FlowTableError::MaxCapacity(_)) => {
+                        Err(FlowTableAddError::MaxCapacity(_)) => {
                             Err(ProcessError::LftChildrenFull)
                         }
                         Err(_) => unreachable!(
@@ -2704,10 +2770,10 @@ impl<N: NetworkImpl> Port<N> {
                         ),
                     }
                 }
-                Err(FlowTableError::MaxCapacity(limit)) => {
+                Err(FlowTableAddError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                 }
-                Err(FlowTableError::Existing) => {
+                Err(FlowTableAddError::Existing) => {
                     Err(ProcessError::FlowRace { kind: "UFT" })
                 }
             }
@@ -2836,6 +2902,14 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let res = self.layers_process(Out, pkt, &mut xforms, ameta);
 
+        // We always mark this ready because we have finished LFT processing.
+        // See the commentary in `process` wrt. #867 -- in such a world, this
+        // is the place where we'd want to kill the TCP flow entry on a
+        // `LayerResult::Deny`.
+        if let Some(tcp_flow) = tcp_flow.as_ref().and_then(Weak::upgrade) {
+            tcp_flow.mark_ready();
+        }
+
         let mut flags = TransformFlags::empty();
         if pkt.checksums_dirty() {
             flags |= TransformFlags::CSUM_DIRTY;
@@ -2843,6 +2917,8 @@ impl<N: NetworkImpl> Port<N> {
         if ameta.is_internal_target() {
             flags |= TransformFlags::INTERNAL_DESTINATION;
         }
+
+        pkt.update_checksums();
 
         match res {
             Ok(LayerResult::Allow) => {
@@ -2864,9 +2940,13 @@ impl<N: NetworkImpl> Port<N> {
                 match uft_out.add(flow_before, hte) {
                     Ok(v) => {
                         self.new_uft_kstat(Out, &mut uft_out);
-                        match associate_lfts_upstack(&v, Direction::Out) {
+                        match associate_lfts_upstack(
+                            &v,
+                            Direction::Out,
+                            &mut uft_out,
+                        ) {
                             Ok(_) => Ok(InternalProcessResult::Modified),
-                            Err(FlowTableError::MaxCapacity(_)) => {
+                            Err(FlowTableAddError::MaxCapacity(_)) => {
                                 Err(ProcessError::LftChildrenFull)
                             }
                             Err(_) => unreachable!(
@@ -2874,10 +2954,10 @@ impl<N: NetworkImpl> Port<N> {
                             ),
                         }
                     }
-                    Err(FlowTableError::MaxCapacity(limit)) => {
+                    Err(FlowTableAddError::MaxCapacity(limit)) => {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                     }
-                    Err(FlowTableError::Existing) => {
+                    Err(FlowTableAddError::Existing) => {
                         Err(ProcessError::FlowRace { kind: "UFT" })
                     }
                 }
@@ -3201,13 +3281,16 @@ fn update_tcp_state<V: ByteSlice>(
 fn associate_lfts_upstack(
     uft: &Arc<FlowEntry<UftEntry>>,
     dir: Direction,
-) -> core::result::Result<(), FlowTableError> {
+    _table_hold: &mut FlowTable<UftEntry>,
+) -> core::result::Result<(), FlowTableAddError> {
+    // `_table_hold` exists purely so that we can prove, for `process`, that
+    // a UFT read will *never* see a UFT entry in a larval state.
     uft.mark_ready();
 
-    // The goal here is to provide each LFT hit with two children where
-    // possible. These are the UFT and, when it exists, the TCP flow entry.
-    // What this means in practice is that while either is present, the LFTs
-    // should be immune to timer-driven expiry. They are *not* immune to
+    // The goal here is to provide each LFT hit with three children where
+    // possible. These are each UFT entry and, when it exists, the TCP flow
+    // entry. What this means in practice is that while either is present, the
+    // LFTs should be immune to timer-driven expiry. They are *not* immune to
     // explicit eviction.
     //
     // We don't arrange the UFT as a parent of the TCP flow entry because
@@ -3228,9 +3311,9 @@ fn associate_lfts_upstack(
     // be more careful of that when we make these locks more granular.
     //
     // TODO(ky): start thinking about this, woo-ee.
+    //
+    // TODO(ky): Larval state helps us make this guarantee???
     if let Some(tcp) = uft.state().tcp_flow.as_ref().and_then(Weak::upgrade) {
-        tcp.mark_ready();
-
         let tcp_dyn: Arc<dyn FlowEntryInfo> = Arc::clone(&tcp) as _;
         let mut parents = uft.state().parents.clone();
         let mut inner = tcp.state().inner.lock();

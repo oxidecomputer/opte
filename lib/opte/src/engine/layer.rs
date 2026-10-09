@@ -43,6 +43,7 @@ use crate::ddi::time::Moment;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::FlowStateLiveness;
+use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -267,13 +268,7 @@ impl LayerFlowTable {
         flow: &InnerFlowId,
     ) -> result::Result<EntryState<'_, ActionDescEntry>, LayerError> {
         match self.ft_in.get(flow) {
-            Some(entry) => {
-                match entry.liveness() {
-                    FlowStateLiveness::Larval => return Err(LayerError::Raced),
-                    // TODO(ky): remove flow from map?
-                    FlowStateLiveness::Dead => return Ok(EntryState::None),
-                    FlowStateLiveness::Ready => {}
-                }
+            Ok(Some(entry)) => {
                 entry.hit();
                 Ok(if entry.is_dirty() {
                     EntryState::Dirty(entry)
@@ -281,8 +276,10 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 })
             }
-
-            None => Ok(EntryState::None),
+            Ok(None) => Ok(EntryState::None),
+            Err(FlowTableGetError::InProgress) => {
+                return Err(LayerError::Raced);
+            }
         }
     }
 
@@ -291,13 +288,7 @@ impl LayerFlowTable {
         flow: &InnerFlowId,
     ) -> result::Result<EntryState<'_, LftOutEntry>, LayerError> {
         match self.ft_out.get(flow) {
-            Some(entry) => {
-                match entry.liveness() {
-                    FlowStateLiveness::Larval => return Err(LayerError::Raced),
-                    // TODO(ky): remove flow from map?
-                    FlowStateLiveness::Dead => return Ok(EntryState::None),
-                    FlowStateLiveness::Ready => {}
-                }
+            Ok(Some(entry)) => {
                 entry.hit();
                 Ok(if entry.is_dirty() {
                     EntryState::Dirty(entry)
@@ -305,8 +296,10 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 })
             }
-
-            None => Ok(EntryState::None),
+            Ok(None) => Ok(EntryState::None),
+            Err(FlowTableGetError::InProgress) => {
+                return Err(LayerError::Raced);
+            }
         }
     }
 
@@ -322,23 +315,6 @@ impl LayerFlowTable {
         flow: &InnerFlowId,
     ) -> Option<Arc<FlowEntry<LftOutEntry>>> {
         self.ft_out.remove(flow)
-    }
-
-    fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
-        match dir {
-            Direction::In => {
-                let entry = self.ft_in.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-            Direction::Out => {
-                let entry = self.ft_out.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a
@@ -923,7 +899,7 @@ impl Layer {
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::In, &flow);
+                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
@@ -1211,7 +1187,7 @@ impl Layer {
                 {
                     let desc = Arc::clone(desc);
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::Out, &flow);
+                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
@@ -1629,7 +1605,7 @@ impl Layer {
     /// Test helper for single-threaded execution to verify that all flows
     /// in the layer are `Ready` or `Dead`.
     ///
-    /// Panics if any flows are `Larvel`.
+    /// Panics if any flows are `Larval`.
     #[cfg(any(feature = "test-help", test))]
     pub fn verify_no_larval(&self) {
         for (k, v) in self.ft.ft_out.iter() {

@@ -4594,7 +4594,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.read().clear_uft()?;
+    dev.port.write().clear_uft()?;
     Ok(NoResp::default())
 }
 
@@ -4607,7 +4607,7 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.read().clear_lft(&req.layer_name)?;
+    dev.port.write().clear_lft(&req.layer_name)?;
     Ok(NoResp::default())
 }
 
