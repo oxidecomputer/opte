@@ -95,7 +95,7 @@ impl DevMap {
     ///
     /// Returns an existing port, if one exists.
     pub fn insert(&mut self, val: Dev) -> Option<Dev> {
-        let key = get_key(&val);
+        let key = val.postbox_key;
         _ = self.names.insert(val.devname.clone(), val.clone());
         self.devs.insert(key, val)
     }
@@ -104,14 +104,14 @@ impl DevMap {
     ///
     /// This also cleans up all multicast subscriptions for the removed port.
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
-        let key = get_key(&self.names.remove(name)?);
+        let key = &self.names.remove(name)?.postbox_key;
 
         self.mcast_groups.retain(|_group, members| {
-            members.remove(&key);
+            members.remove(key);
             !members.is_empty()
         });
 
-        self.devs.remove(&key)
+        self.devs.remove(key)
     }
 
     /// Allow a port to receive on a given multicast group with source filtering.
@@ -135,7 +135,7 @@ impl DevMap {
             .names
             .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
-        let key = get_key(port);
+        let key = port.postbox_key;
 
         self.mcast_groups
             .entry(mcast_underlay)
@@ -155,7 +155,7 @@ impl DevMap {
             .names
             .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
-        let key = get_key(port);
+        let key = port.postbox_key;
 
         if let Entry::Occupied(mut entry) =
             self.mcast_groups.entry(mcast_underlay)
@@ -260,11 +260,6 @@ impl DevMap {
 fn mac_to_u64(val: MacAddr) -> u64 {
     let val = val.bytes();
     u64::from_be_bytes([0, 0, val[0], val[1], val[2], val[3], val[4], val[5]])
-}
-
-#[inline(always)]
-fn get_key(dev: &Dev) -> VniMac {
-    VniMac::new(dev.vni, dev.port.mac_addr())
 }
 
 /// A read-only wrapper around a shared [`DevMap`], used to

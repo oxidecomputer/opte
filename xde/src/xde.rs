@@ -658,9 +658,7 @@ pub struct XdeDev {
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
-    pub vni: Vni,
-
-    postbox_key: VniMac,
+    pub postbox_key: VniMac,
 
     // These are clones of the underlay ports initialized by the
     // driver.
@@ -1295,7 +1293,6 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             state.ectx.clone(),
         )?,
         port_v2p,
-        vni: cfg.vni,
         postbox_key,
         port_igw_map: KMutex::new(None),
         u1,
@@ -2552,12 +2549,9 @@ fn handle_mcast_tx<'a>(
     let group_key = MulticastUnderlay::new_unchecked(underlay_addr);
 
     if let Some(subscribers) = devs.mcast_subscribers(&group_key) {
-        // Use the port's VPC VNI, not the multicast VNI from the
-        // Geneve header (ctx.vni), to match how DevMap keys on ports.
-        let my_key = VniMac::new(src_dev.vni, src_dev.port.mac_addr());
         for (key, filter) in subscribers {
             // Skip delivering to self
-            if my_key == *key {
+            if key == &src_dev.postbox_key {
                 continue;
             }
 
