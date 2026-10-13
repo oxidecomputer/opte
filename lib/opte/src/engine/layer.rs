@@ -42,8 +42,6 @@ use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
-use crate::engine::flow_table::FlowStateLiveness;
-use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::TtlDelegateTcp;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -69,22 +67,14 @@ use opte_api::RuleTableEntryDump;
 #[derive(Debug)]
 pub enum LayerError {
     BodyTransform(BodyTransformError),
-    FlowTableFull {
-        layer: &'static str,
-        dir: Direction,
-    },
+    FlowTableFull { layer: &'static str, dir: Direction },
     GenDesc(rule::GenDescError),
     GenBodyTransform(GenBtError),
-    GenHdrTransform {
-        layer: &'static str,
-        err: rule::GenHtError,
-    },
+    GenHdrTransform { layer: &'static str, err: rule::GenHtError },
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
-    /// Another packet on the same flow (in the same or opposite direction)
-    /// is still undergoing processing, and has not yet been `Allow`ed.
-    Raced,
+    EntryTooBusy,
 }
 
 impl From<GenBtError> for LayerError {
@@ -263,43 +253,31 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(
-        &self,
-        flow: &InnerFlowId,
-    ) -> result::Result<EntryState<'_, ActionDescEntry>, LayerError> {
+    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
         match self.ft_in.get(flow) {
-            Ok(Some(entry)) => {
+            Some(entry) => {
                 entry.hit();
-                Ok(if entry.is_dirty() {
+                if entry.is_dirty() {
                     EntryState::Dirty(entry)
                 } else {
                     EntryState::Clean(entry)
-                })
+                }
             }
-            Ok(None) => Ok(EntryState::None),
-            Err(FlowTableGetError::InProgress) => {
-                return Err(LayerError::Raced);
-            }
+            None => EntryState::None,
         }
     }
 
-    fn get_out(
-        &self,
-        flow: &InnerFlowId,
-    ) -> result::Result<EntryState<'_, LftOutEntry>, LayerError> {
+    fn get_out(&self, flow: &InnerFlowId) -> EntryState<'_, LftOutEntry> {
         match self.ft_out.get(flow) {
-            Ok(Some(entry)) => {
+            Some(entry) => {
                 entry.hit();
-                Ok(if entry.is_dirty() {
+                if entry.is_dirty() {
                     EntryState::Dirty(entry)
                 } else {
                     EntryState::Clean(entry)
-                })
+                }
             }
-            Ok(None) => Ok(EntryState::None),
-            Err(FlowTableGetError::InProgress) => {
-                return Err(LayerError::Raced);
-            }
+            None => EntryState::None,
         }
     }
 
@@ -384,7 +362,7 @@ impl LayerFlowTable {
 }
 
 /// The result of a flowtable lookup.
-pub enum EntryState<'a, S: FlowState> {
+enum EntryState<'a, S: FlowState> {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
@@ -848,13 +826,8 @@ impl Layer {
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
             self.stats.vals.evictions.incr(1);
-
-            // These two entries share the same `FlowLifetime`, so
-            // we can avoid wasting work by marking all children as
-            // `killed` only for the first entry.
-            self.ft.ft_out.expire(&out_key, true);
-            self.ft.ft_in.expire(&in_key, false);
-
+            self.ft.ft_out.expire(&out_key);
+            self.ft.ft_in.expire(&in_key);
             self.ft.count = self.ft.ft_out.num_flows();
         }
     }
@@ -891,25 +864,27 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let action = match self.ft.get_in(&flow)? {
+        let flow_before = *pkt.flow();
+        let action = match self.ft.get_in(&flow_before) {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = action.state()
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
-                    pkt.record_lft(Arc::clone(action) as _);
                     action.mark_clean();
+                    action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
+                    pkt.record_lft(Arc::clone(action) as _);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_in(&flow);
+                    self.ft.remove_in(&flow_before);
                     None
                 }
             }
             EntryState::Clean(action) => {
+                action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().clone())
             }
@@ -924,7 +899,6 @@ impl Layer {
 
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.in_lft_hit += 1;
-                let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1179,13 +1153,14 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let action = match self.ft.get_out(&flow)? {
+        let flow_before = *pkt.flow();
+        let action = match self.ft.get_out(&flow_before) {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
+                    action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
                     pkt.record_lft(Arc::clone(action) as _);
                     action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
@@ -1193,11 +1168,12 @@ impl Layer {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_out(&flow);
+                    self.ft.remove_out(&flow_before);
                     None
                 }
             }
             EntryState::Clean(action) => {
+                action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().action_desc.clone())
             }
@@ -1212,7 +1188,6 @@ impl Layer {
 
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.out_lft_hit += 1;
-                let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
