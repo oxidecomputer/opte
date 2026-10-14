@@ -560,7 +560,7 @@ pub trait FlowId:
 impl FlowId for InnerFlowId {}
 
 /// An entry in the Unified Flow Table.
-pub struct UftEntry<Id: FlowId = InnerFlowId> {
+pub struct UftEntry<Id: FlowId> {
     /// The flow ID for the other side.
     pair: KMutex<Option<Id>>,
 
@@ -1612,65 +1612,75 @@ impl<N: NetworkImpl> Port<N> {
                         // Elevate lock to full scope, if we are reprocessing
                         // as well.
                         if let Some(tcp_entry) = invalidated_tcp {
-                            let mut tcp_lock = self.tcp_flows.write();
+                            let ufid_out = tcp_entry.id();
+                            let removed_entry = {
+                                let mut tcp_lock = self.tcp_flows.write();
 
-                            let flow_lock = tcp_entry.state().inner.lock();
-                            let ufid_out = &flow_lock.outbound_ufid;
-
-                            // Because we've dropped the port lock, another
-                            // packet could have also invalidated this flow and
-                            // removed the entry. It could even install new
-                            // UFT/TCP entries, depending on lock/process
-                            // ordering.
-                            //
-                            // Verify that the state we want to remove still
-                            // exists, and is `Arc`-identical.
-                            if let Some(found_entry) = tcp_lock.get(ufid_out)
-                                && Arc::ptr_eq(found_entry, &tcp_entry)
-                            {
-                                self.uft_tcp_closed_probe(dir, &flow_before);
-                                _ = tcp_lock.remove(ufid_out);
-                                self.stats
-                                    .vals
-                                    .tcp_flows
-                                    .set(u64::from(tcp_lock.num_flows()));
-                            }
-
-                            drop(tcp_lock);
-
-                            // TODO(ky) do this??
-                            let my_ptr = Arc::as_ptr(&tcp_entry);
-
-                            if let Some(ufid_in) = &flow_lock.inbound_ufid {
-                                let mut uft = self.uft_in.write();
-                                if let Some(found_entry) = uft.get(ufid_in)
-                                    && core::ptr::addr_eq(
-                                        found_entry
-                                            .state()
-                                            .tcp_flow
-                                            .as_ref()
-                                            .map(Weak::as_ptr)
-                                            .unwrap_or_default(),
-                                        my_ptr,
-                                    )
+                                // Because we've dropped the port lock, another
+                                // packet could have also invalidated this flow and
+                                // removed the entry. It could even install new
+                                // UFT/TCP entries, depending on lock/process
+                                // ordering.
+                                //
+                                // Verify that the state we want to remove still
+                                // exists, and is `Arc`-identical.
+                                if let Some(found_entry) =
+                                    tcp_lock.get(ufid_out)
+                                    && Arc::ptr_eq(found_entry, &tcp_entry)
                                 {
-                                    uft.remove(ufid_in);
+                                    self.uft_tcp_closed_probe(
+                                        dir,
+                                        &flow_before,
+                                    );
+                                    let el = tcp_lock.remove(ufid_out);
+                                    self.stats
+                                        .vals
+                                        .tcp_flows
+                                        .set(u64::from(tcp_lock.num_flows()));
+                                    el
+                                } else {
+                                    None
                                 }
-                            }
-                            {
-                                let mut uft = self.uft_out.write();
-                                if let Some(found_entry) = uft.get(ufid_out)
-                                    && core::ptr::addr_eq(
-                                        found_entry
-                                            .state()
-                                            .tcp_flow
-                                            .as_ref()
-                                            .map(Weak::as_ptr)
-                                            .unwrap_or_default(),
-                                        my_ptr,
-                                    )
+                            };
+
+                            if let Some(el) = removed_entry {
+                                let ufid_in =
+                                    el.state().inner.lock().inbound_ufid;
+                                let my_ptr = Arc::as_ptr(&el);
+
+                                if let Some(ufid_in) = ufid_in {
+                                    let mut uft = self.uft_in.write();
+                                    if let Some(found_entry) = uft.get(&ufid_in)
+                                        && core::ptr::addr_eq(
+                                            found_entry
+                                                .state()
+                                                .tcp_flow
+                                                .as_ref()
+                                                .map(Weak::as_ptr)
+                                                .unwrap_or_default(),
+                                            my_ptr,
+                                        )
+                                    {
+                                        uft.remove(&ufid_in);
+                                    }
+                                }
+
                                 {
-                                    uft.remove(ufid_out);
+                                    let mut uft = self.uft_out.write();
+                                    if let Some(found_entry) =
+                                        uft.get(ufid_out)
+                                        && core::ptr::addr_eq(
+                                            found_entry
+                                                .state()
+                                                .tcp_flow
+                                                .as_ref()
+                                                .map(Weak::as_ptr)
+                                                .unwrap_or_default(),
+                                            my_ptr,
+                                        )
+                                    {
+                                        uft.remove(ufid_out);
+                                    }
                                 }
                             }
                         }
@@ -2459,14 +2469,11 @@ impl<N: NetworkImpl> Port<N> {
             let (ufid_out, tfes) = match *dir {
                 TcpDirection::In { ufid_in, ufid_out } => (
                     ufid_out,
-                    TcpFlowEntryState::new_inbound(
-                        *ufid_out, *ufid_in, tfs, pkt_len,
-                    ),
+                    TcpFlowEntryState::new_inbound(*ufid_in, tfs, pkt_len),
                 ),
-                TcpDirection::Out { ufid_out } => (
-                    ufid_out,
-                    TcpFlowEntryState::new_outbound(*ufid_out, tfs, pkt_len),
-                ),
+                TcpDirection::Out { ufid_out } => {
+                    (ufid_out, TcpFlowEntryState::new_outbound(tfs, pkt_len))
+                }
             };
             match tcp_flows.add(*ufid_out, tfes) {
                 Ok(entry) => {
@@ -3222,11 +3229,10 @@ pub enum Pos {
 /// An entry in the TCP flow table.
 #[derive(Clone, Debug)]
 pub struct TcpFlowEntryStateInner<Id: FlowId> {
-    // We store this for the benefit of inbound flows who have UFTs
-    // but which need to know their partner UFID to perform an invalidation.
-    outbound_ufid: Id,
     // This must be the UFID of inbound traffic _as it arrives_ from
     // the network, not after it's processed.
+    //
+    // The outbound UFID is stored in the outer `FlowEntry`.
     inbound_ufid: Option<Id>,
     tcp_state: TcpFlowState,
     segs_in: u64,
@@ -3244,14 +3250,12 @@ pub(super) struct TcpFlowEntryState {
 
 impl TcpFlowEntryState {
     fn new_inbound(
-        outbound_ufid: InnerFlowId,
         inbound_ufid: InnerFlowId,
         tcp_state: TcpFlowState,
         bytes_in: u64,
     ) -> Self {
         Self {
             inner: KMutex::new(TcpFlowEntryStateInner {
-                outbound_ufid,
                 inbound_ufid: Some(inbound_ufid),
                 tcp_state,
                 segs_in: 1,
@@ -3265,14 +3269,9 @@ impl TcpFlowEntryState {
         }
     }
 
-    fn new_outbound(
-        outbound_ufid: InnerFlowId,
-        tcp_state: TcpFlowState,
-        bytes_out: u64,
-    ) -> Self {
+    fn new_outbound(tcp_state: TcpFlowState, bytes_out: u64) -> Self {
         Self {
             inner: KMutex::new(TcpFlowEntryStateInner {
-                outbound_ufid,
                 inbound_ufid: None,
                 tcp_state,
                 segs_in: 0,
@@ -3301,7 +3300,8 @@ fn update_tcp_state<V: ByteSlice>(
     pkt_len: u64,
     ufid_in: Option<&InnerFlowId>,
 ) -> result::Result<TcpState, TcpFlowStateError> {
-    let mut tfes = el.state().inner.lock();
+    let tcp_flow = el.state();
+    let mut tfes = tcp_flow.inner.lock();
     match dir {
         Direction::In => {
             tfes.segs_in += 1;
@@ -3320,10 +3320,9 @@ fn update_tcp_state<V: ByteSlice>(
         // termination.
         tfes.inbound_ufid = Some(*ufid_in);
     }
-    let ufid_out = tfes.outbound_ufid;
     let tcp_state = &mut tfes.tcp_state;
 
-    match tcp_state.process(port_name, dir, &ufid_out, tcp) {
+    match tcp_state.process(port_name, dir, el.id(), tcp) {
         v @ Ok(TcpState::Closed)
         | v @ Err(TcpFlowStateError::NewFlow { .. }) => {
             el.mark_dead();
@@ -3654,7 +3653,7 @@ mod tests {
                 &dummy_tcp_hdr,
             )
             .unwrap();
-        let tcp_state = TcpFlowEntryState::new_outbound(flowid, state, 52);
+        let tcp_state = TcpFlowEntryState::new_outbound(state, 52);
 
         let policy = Arc::<TcpExpiry>::default();
         let mut ft = FlowTable::new(
@@ -3723,7 +3722,7 @@ mod tests {
                 &dummy_reply_tcp_hdr,
             )
             .unwrap();
-        let tcp_state = TcpFlowEntryState::new_outbound(flowid, state, 52);
+        let tcp_state = TcpFlowEntryState::new_outbound(state, 52);
 
         let policy = Arc::<TcpExpiry>::default();
         let mut ft = FlowTable::new(
