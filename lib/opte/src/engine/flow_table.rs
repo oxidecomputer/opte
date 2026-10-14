@@ -762,6 +762,7 @@ impl<S: FlowState> FlowTable<S> {
         }
     }
 
+    #[cfg(any(feature = "std", test))]
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = (&InnerFlowId, &Arc<FlowEntry<S>>)> {
@@ -801,7 +802,7 @@ fn flow_expired_probe(
 }
 
 /// A type that can be "dumped" for the purposes of presenting an
-/// external view into internal state of the [`FlowEntry<T>`].
+/// external view into internal state of the `FlowEntry`.
 pub trait Dump: fmt::Debug + Send + Sync {
     type DumpVal: DeserializeOwned + Serialize;
 
@@ -831,6 +832,7 @@ enum Liveness {
 impl Liveness {
     const MAX_HOLDS: u8 = 0b0011_1111;
 
+    #[cfg(any(feature = "std", test))]
     fn is_larval(&self) -> bool {
         matches!(self, Self::Larval { .. })
     }
@@ -839,6 +841,7 @@ impl Liveness {
         matches!(self, Self::Dead)
     }
 
+    #[cfg(any(feature = "std", test))]
     fn is_held(&self) -> bool {
         self.holds().is_some_and(|n| n > 0)
     }
@@ -851,6 +854,7 @@ impl Liveness {
         }
     }
 
+    #[cfg(any(feature = "std", test))]
     fn holds(&self) -> Option<u8> {
         match self {
             Liveness::Larval { holds } => Some(*holds),
@@ -1171,8 +1175,8 @@ unsafe extern "C" {
         port: uintptr_t,
         layer: uintptr_t,
         flowid: *const InnerFlowId,
-        last_hit: uintptr_t,
-        now: uintptr_t,
+        last_hit: u64,
+        now: u64,
     );
 
     pub safe fn __dtrace_probe_ft__entry__invalidated(
