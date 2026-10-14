@@ -1667,8 +1667,7 @@ impl<N: NetworkImpl> Port<N> {
 
                                 {
                                     let mut uft = self.uft_out.write();
-                                    if let Some(found_entry) =
-                                        uft.get(ufid_out)
+                                    if let Some(found_entry) = uft.get(ufid_out)
                                         && core::ptr::addr_eq(
                                             found_entry
                                                 .state()
