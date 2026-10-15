@@ -26,6 +26,7 @@ use ingot::types::Emit;
 use ingot::types::HeaderLen;
 use ingot::types::HeaderParse;
 use opte::engine::Checksum as OpteCsum;
+use opte_api::Ipv6PrefixLen;
 pub use opte_api::ip::Icmpv6EchoReply;
 pub use opte_api::ip::Ipv6Addr;
 pub use opte_api::ip::Ipv6Cidr;
@@ -447,16 +448,15 @@ fn construct_neighbor_advert<'a>(
 
 impl HairpinAction for NeighborAdvertisement {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
-        // The source IP must be a link-local IPv6 address, or, if
-        // `allow_unspec` is true, the unspecified address.
-        let source_addrs = if self.allow_unspec {
-            vec![
-                Ipv6AddrMatch::Prefix(Ipv6Cidr::LINK_LOCAL),
-                Ipv6AddrMatch::Exact(Ipv6Addr::ANY_ADDR),
-            ]
+        // If `allow_any_addr` is true, then we make no requirements at all
+        // about the source IP address. Otherwise, it must come from a
+        // link-local, which "should" only be one address
+        let source_prefix = if self.allow_any_addr {
+            Ipv6Cidr::new(Ipv6Addr::ANY_ADDR, Ipv6PrefixLen::NETMASK_NONE)
         } else {
-            vec![Ipv6AddrMatch::Prefix(Ipv6Cidr::LINK_LOCAL)]
+            Ipv6Cidr::LINK_LOCAL
         };
+        let source_addrs = vec![Ipv6AddrMatch::Prefix(source_prefix)];
 
         // There are a few MAC addresses we need to support:
         // - Unicast directly to us
