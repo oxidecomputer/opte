@@ -24,6 +24,7 @@ use super::rule::FiniteResource;
 use super::rule::GenDescError;
 use super::rule::GenDescResult;
 use super::rule::HdrTransform;
+use super::rule::ImportError;
 use super::rule::Resource;
 use super::rule::ResourceEntry;
 use super::rule::ResourceError;
@@ -32,6 +33,7 @@ use crate::api::IcmpInfo;
 use crate::api::L4Info;
 use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
+use crate::engine::export::ActionDescKind;
 use crate::engine::freelist::Freelist;
 use crate::engine::icmp::QueryEcho;
 use crate::engine::nat::ExternalIpTag;
@@ -90,7 +92,9 @@ type SNatAlloc<T> = FiniteHandle<NatPool<T>>;
 mod private {
     use opte_api::Protocol;
 
-    pub trait Ip: Into<super::IpAddr> + Send + Sync {
+    pub trait Ip:
+        Into<super::IpAddr> + TryFrom<super::IpAddr> + Send + Sync
+    {
         const MESSAGE_PROTOCOL: Protocol;
     }
 
@@ -239,6 +243,7 @@ impl From<GenIcmpErr> for GenDescError {
 }
 
 impl<T: ConcreteIpAddr + 'static> SNat<T> {
+    /// Construct a new pool of SNAT addresses for each protocol.
     pub fn new(addr: T) -> Self {
         SNat {
             priv_ip: addr,
@@ -248,6 +253,9 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
         }
     }
 
+    /// Add an SNAT mapping from a public to a private IP and port range.
+    ///
+    /// This adds the mapping to the pool for each protocol.
     pub fn add(&self, priv_ip: T, pub_ip: T, pub_ports: RangeInclusive<u16>) {
         let pools = [&self.tcp_pool, &self.udp_pool, &self.icmp_pool];
         for pool in pools {
@@ -302,6 +310,67 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
             Ok(AllowOrDeny::Deny)
         }
     }
+
+    fn pool_for_protocol(
+        &self,
+        protocol: Protocol,
+    ) -> Option<&Arc<NatPool<T>>> {
+        let is_icmp = protocol == T::MESSAGE_PROTOCOL;
+        match protocol {
+            Protocol::TCP => Some(&self.tcp_pool),
+            Protocol::UDP => Some(&self.udp_pool),
+            _ if is_icmp => Some(&self.icmp_pool),
+            _ => None,
+        }
+    }
+
+    /// Reclaim an SNAT action from its exported LFT pair.
+    fn reclaim_imported_pair(
+        &self,
+        kind: ActionDescKind,
+        flow_in: &InnerFlowId,
+        flow_out: &InnerFlowId,
+    ) -> Result<Arc<dyn ActionDesc>, ImportError> {
+        let malformed = || ImportError::MalformedPair {
+            kind,
+            flow_in: *flow_in,
+            flow_out: *flow_out,
+        };
+
+        let protocol = flow_out.protocol();
+        if flow_in.protocol() != protocol {
+            return Err(malformed());
+        }
+
+        // Ensure that we could even handle the kind of action before doing
+        // anything else.
+        let is_icmp = protocol == T::MESSAGE_PROTOCOL;
+        match (kind, protocol) {
+            (ActionDescKind::SNat, Protocol::TCP | Protocol::UDP) => {}
+            (ActionDescKind::SNatIcmpEcho, _) if is_icmp => {}
+            _ => return Err(malformed()),
+        }
+
+        // Extract the pool and the destination / source data we're attempting
+        // to reclaim from it.
+        let pool = self.pool_for_protocol(protocol).ok_or_else(malformed)?;
+        let priv_id = flow_out.src_ident().ok_or_else(malformed)?;
+        let ext_id = flow_in.dst_ident().ok_or_else(malformed)?;
+        let ip = T::try_from(flow_in.dst_ip()).map_err(|_| malformed())?;
+
+        // Reclaim the entry itself.
+        let entry = NatPoolEntry { ip, port: ext_id };
+        let nat = pool
+            .reclaim(&self.priv_ip, entry)
+            .map_err(ImportError::Resource)?;
+
+        // Generate the right actual action descriptor based on the protocol.
+        if is_icmp {
+            Ok(Arc::new(SNatIcmpEchoDesc { nat, echo_ident: priv_id }))
+        } else {
+            Ok(Arc::new(SNatDesc { nat, priv_port: priv_id }))
+        }
+    }
 }
 
 impl Display for SNat<Ipv4Addr> {
@@ -339,16 +408,11 @@ where
             }),
         }?;
         let is_icmp = proto == T::MESSAGE_PROTOCOL;
-        let pool = match proto {
-            Protocol::TCP => &self.tcp_pool,
-            Protocol::UDP => &self.udp_pool,
-            _ if is_icmp => &self.icmp_pool,
-            proto => {
-                return Err(GenDescError::Unexpected {
-                    msg: format!("SNAT pool (unexpected ULP: {proto})"),
-                });
+        let pool = self.pool_for_protocol(proto).ok_or_else(|| {
+            GenDescError::Unexpected {
+                msg: format!("SNAT pool (unexpected ULP: {proto})"),
             }
-        };
+        })?;
 
         match pool.obtain(&self.priv_ip) {
             Ok(nat) => {
@@ -385,6 +449,25 @@ where
     // now just keep the predicates fully explicit.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         (vec![], vec![])
+    }
+
+    fn import_desc(
+        &self,
+        kind: ActionDescKind,
+        flow_in: &InnerFlowId,
+        flow_out: &InnerFlowId,
+    ) -> Option<Result<Arc<dyn ActionDesc>, ImportError>> {
+        // Check whether we should attempt to import this descriptor.
+        //
+        // We should only do so for SNAT-based actions that have our private IP.
+        // Any other imported descriptor should be ignored, but anything after
+        // that (e.g. a validation issue) indicates we _can't_ import the data.
+        let is_snat =
+            matches!(kind, ActionDescKind::SNat | ActionDescKind::SNatIcmpEcho);
+        if !is_snat || flow_out.src_ip() != self.priv_ip.into() {
+            return None;
+        }
+        Some(self.reclaim_imported_pair(kind, flow_in, flow_out))
     }
 }
 
@@ -443,6 +526,10 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
     fn name(&self) -> &str {
         SNAT_NAME
     }
+
+    fn kind(&self) -> ActionDescKind {
+        ActionDescKind::SNat
+    }
 }
 
 // NOTE: we may or may not want to fuse with `SNatDesc` using an
@@ -499,6 +586,10 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
     fn name(&self) -> &str {
         SNAT_ICMP_ECHO_NAME
+    }
+
+    fn kind(&self) -> ActionDescKind {
+        ActionDescKind::SNatIcmpEcho
     }
 }
 

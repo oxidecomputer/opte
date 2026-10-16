@@ -855,6 +855,20 @@ impl<S: FlowState> FlowEntry<S> {
         self.lifetime.last_hit.store(now.raw(), Ordering::Relaxed);
     }
 
+    /// Set the last hit time directly.
+    ///
+    /// This should only be used on import.
+    pub(super) fn set_last_hit_time_on_import(&self, at: Moment) {
+        self.lifetime.last_hit.store(at.raw(), Ordering::Relaxed);
+    }
+
+    /// Set the hit count directly.
+    ///
+    /// This should only be used on import.
+    pub(super) fn set_hit_count_on_import(&self, hits: u64) {
+        self.hits.store(hits, Ordering::Relaxed);
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Relaxed)
     }

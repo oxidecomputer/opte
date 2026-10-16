@@ -40,6 +40,8 @@ use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::export::ActionDescKind;
+use crate::engine::layer::LayerError;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -70,6 +72,7 @@ use ingot::types::Read;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use opte_api::Direction;
+use opte_api::IpAddr;
 use opte_api::RuleDump;
 use serde::Deserialize;
 use serde::Serialize;
@@ -232,6 +235,9 @@ pub trait ActionDesc: Send + Sync {
     fn is_valid(&self) -> bool {
         false
     }
+
+    /// Return the export kind for this descriptor.
+    fn kind(&self) -> ActionDescKind;
 }
 
 impl fmt::Debug for dyn ActionDesc {
@@ -243,6 +249,44 @@ impl fmt::Debug for dyn ActionDesc {
 impl Display for dyn ActionDesc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name())
+    }
+}
+
+/// An error importing a descriptor from an exported spec.
+#[derive(Debug)]
+pub enum ImportError {
+    /// The resource pool could not honor the claim on its resources.
+    Resource(ResourceError),
+    /// The external IP in the spec doesn't exist on the import destination.
+    ExternalIpNotFound(IpAddr),
+    /// The layer into which we're importing data isn't empty.
+    LayerNotEmpty(&'static str),
+    /// Error importing at a layer
+    Layer(LayerError),
+    /// The flows could not be imported because they appear malformed.
+    ///
+    /// This could happen if the flow protocols on the in / out don't match, or
+    /// if the action attempting to import the pair doesn't have the resources
+    /// the pair reclaims.
+    MalformedPair {
+        kind: ActionDescKind,
+        flow_in: InnerFlowId,
+        flow_out: InnerFlowId,
+    },
+    /// The import data has too many flows to fit into the required layer.
+    TooManyFlows { layer: &'static str, needed: usize, limit: usize },
+    /// No rule in the destination layer accepted the imported data.
+    NotAccepted {
+        layer: &'static str,
+        kind: ActionDescKind,
+        flow_in: InnerFlowId,
+        flow_out: InnerFlowId,
+    },
+}
+
+impl From<ResourceError> for ImportError {
+    fn from(value: ResourceError) -> Self {
+        Self::Resource(value)
     }
 }
 
@@ -286,6 +330,10 @@ impl ActionDesc for IdentityDesc {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn kind(&self) -> ActionDescKind {
+        ActionDescKind::NoOp
     }
 }
 
@@ -796,6 +844,20 @@ pub trait StatefulAction: Display + Send + Sync {
     ) -> GenDescResult;
 
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>);
+
+    /// Recreate an action descriptor from exported data.
+    ///
+    /// Returns `None` if the `spec` isn't of the right type for this action.
+    /// Returns an error if the import failed, e.g., because it referred to
+    /// resources that the object importing the descriptor doesn't have.
+    fn import_desc(
+        &self,
+        _kind: ActionDescKind,
+        _flow_in: &InnerFlowId,
+        _flow_out: &InnerFlowId,
+    ) -> Option<Result<Arc<dyn ActionDesc>, ImportError>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]

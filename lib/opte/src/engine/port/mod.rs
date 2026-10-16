@@ -67,6 +67,8 @@ use crate::ddi::sync::KMutex;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::Moment;
 use crate::engine::HdlErrAction;
+use crate::engine::export::PortImportError;
+use crate::engine::export::PortLftExport;
 use crate::engine::flow_table::EvictionPriority;
 use crate::engine::flow_table::ExpiryPolicy;
 use crate::engine::flow_table::FLOW_DEF_TTL;
@@ -964,6 +966,72 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         Err(OpteError::LayerNotFound(layer_name.to_string()))
+    }
+
+    /// Export LFTs from all layers of a port.
+    ///
+    /// Port has to be paused.
+    pub fn export_lfts(&self) -> Result<PortLftExport> {
+        let data = self.data.read();
+        check_state!(data.state, [PortState::Paused])?;
+        let now = Moment::now();
+        let layers = data
+            .layers
+            .iter()
+            .map(|layer| layer.export_lft(now))
+            .filter(|export| !export.pairs.is_empty())
+            .collect();
+        Ok(PortLftExport { layers })
+    }
+
+    /// Import previously-exported LFT state.
+    ///
+    /// Port must be paused and all LFTs must currently be empty.
+    pub fn import_lfts(
+        &self,
+        export: PortLftExport,
+    ) -> result::Result<(), PortImportError> {
+        let mut data = self.data.write();
+        if !matches!(data.state, PortState::Ready) {
+            return Err(PortImportError::BadState(data.state));
+        }
+        // Check that all LFTs are currently empty.
+        if let Some(layer) =
+            data.layers.iter().find(|layer| layer.num_flows() > 0)
+        {
+            return Err(PortImportError::NotEmpty(layer.name().to_string()));
+        }
+        let now = Moment::now();
+        let result = self.import_lfts_by_layer(&mut data.layers, export, now);
+        if result.is_err() {
+            for layer in data.layers.iter_mut() {
+                layer.clear_flows();
+            }
+        }
+        result
+    }
+
+    fn import_lfts_by_layer(
+        &self,
+        layers: &mut [Layer],
+        export: PortLftExport,
+        now: Moment,
+    ) -> result::Result<(), PortImportError> {
+        for exported_layer in export.layers {
+            let layer = layers
+                .iter_mut()
+                .find(|layer| layer.name() == exported_layer.layer)
+                .ok_or_else(|| {
+                    PortImportError::UnknownLayer(exported_layer.layer.clone())
+                })?;
+            if let Err(error) = layer.import_lft(exported_layer, now) {
+                return Err(PortImportError::Layer {
+                    layer: layer.name().to_string(),
+                    error,
+                });
+            }
+        }
+        Ok(())
     }
 
     // XXX While it's been helpful to panic on a bad packet for the

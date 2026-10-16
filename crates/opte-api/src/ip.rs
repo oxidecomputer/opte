@@ -397,6 +397,28 @@ impl From<IpAddr> for std::net::IpAddr {
     }
 }
 
+impl TryFrom<IpAddr> for Ipv6Addr {
+    type Error = ();
+
+    fn try_from(value: IpAddr) -> Result<Self, Self::Error> {
+        match value {
+            IpAddr::Ip4(_) => Err(()),
+            IpAddr::Ip6(ipv6) => Ok(ipv6),
+        }
+    }
+}
+
+impl TryFrom<IpAddr> for Ipv4Addr {
+    type Error = ();
+
+    fn try_from(value: IpAddr) -> Result<Self, Self::Error> {
+        match value {
+            IpAddr::Ip4(ipv4) => Ok(ipv4),
+            IpAddr::Ip6(_) => Err(()),
+        }
+    }
+}
+
 impl Default for IpAddr {
     fn default() -> Self {
         IpAddr::Ip4(Default::default())

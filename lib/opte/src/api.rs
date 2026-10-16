@@ -244,6 +244,26 @@ impl InnerFlowId {
         self.hash(&mut hasher);
         hasher.finalize()
     }
+
+    /// Return the source ident, either the port or the ICMP echo ident.
+    #[cfg(feature = "engine")]
+    pub(crate) fn src_ident(&self) -> Option<u16> {
+        self.l4_info().map(|info| match info {
+            L4Info::Ports(ports) => ports.src_port,
+            L4Info::Icmpv4(icmp) => icmp.id,
+            L4Info::Icmpv6(icmp) => icmp.id,
+        })
+    }
+
+    /// Return the destination ident, either the port or the ICMP echo ident.
+    #[cfg(feature = "engine")]
+    pub(crate) fn dst_ident(&self) -> Option<u16> {
+        self.l4_info().map(|info| match info {
+            L4Info::Ports(ports) => ports.dst_port,
+            L4Info::Icmpv4(icmp) => icmp.id,
+            L4Info::Icmpv6(icmp) => icmp.id,
+        })
+    }
 }
 
 impl Display for InnerFlowId {
