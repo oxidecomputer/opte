@@ -67,7 +67,10 @@ pub(super) fn setup(
             ctx.cfg.gateway_mac,
             // Set the ROUTER flag to true.
             true,
-            // Respond to solicitations from `::`
+            // Respond to solicitations from any IPv6 address.
+            //
+            // While most NSs should come from the IPv6 link-local, that's not
+            // strictly required, nor does it buy us much to enforce it.
             true,
         ))),
     ];
