@@ -55,7 +55,6 @@ use opte::engine::arp::ValidArpEthIpv4;
 use opte::engine::checksum::Checksum;
 use opte::engine::ether::Ethernet;
 use opte::engine::ether::EthernetRef;
-use opte::engine::flow_table::FlowTable;
 use opte::engine::geneve::GeneveMeta;
 use opte::engine::geneve::GeneveMetaRef;
 use opte::engine::headers::EncapMeta;
@@ -80,7 +79,6 @@ use opte::engine::packet::Pullup;
 use opte::engine::parse::Ulp;
 use opte::engine::parse::ValidGeneveOverV6;
 use opte::engine::parse::ValidNoEncap;
-use opte::engine::port::UftEntry;
 use opte::engine::rule::CompiledTransform;
 use opte::ingot::ethernet::Ethertype;
 use opte::ingot::types::HeaderParse;
@@ -329,8 +327,6 @@ impl NetworkImpl for VpcNetwork {
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
-        _uft_in: &FlowTable<UftEntry<InnerFlowId>>,
-        _uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>,

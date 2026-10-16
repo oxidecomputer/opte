@@ -74,6 +74,7 @@ pub enum LayerError {
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
+    EntryTooBusy,
 }
 
 impl From<GenBtError> for LayerError {
@@ -262,7 +263,6 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 }
             }
-
             None => EntryState::None,
         }
     }
@@ -277,7 +277,6 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 }
             }
-
             None => EntryState::None,
         }
     }
@@ -294,23 +293,6 @@ impl LayerFlowTable {
         flow: &InnerFlowId,
     ) -> Option<Arc<FlowEntry<LftOutEntry>>> {
         self.ft_out.remove(flow)
-    }
-
-    fn mark_clean(&mut self, dir: Direction, flow: &InnerFlowId) {
-        match dir {
-            Direction::In => {
-                let entry = self.ft_in.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-            Direction::Out => {
-                let entry = self.ft_out.get(flow);
-                if let Some(entry) = entry {
-                    entry.mark_clean();
-                }
-            }
-        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a
@@ -380,7 +362,7 @@ impl LayerFlowTable {
 }
 
 /// The result of a flowtable lookup.
-pub enum EntryState<'a, S: FlowState> {
+enum EntryState<'a, S: FlowState> {
     /// No flow entry was found matching a given flowid.
     None,
     /// An existing flow table entry was found.
@@ -844,13 +826,8 @@ impl Layer {
     fn complete_eviction(&mut self, entry: SpaceCreated) {
         if let SpaceCreated::Evict { in_key, out_key } = entry {
             self.stats.vals.evictions.incr(1);
-
-            // These two entries share the same `FlowLifetime`, so
-            // we can avoid wasting work by marking all children as
-            // `killed` only for the first entry.
-            self.ft.ft_out.expire(&out_key, true);
-            self.ft.ft_in.expire(&in_key, false);
-
+            self.ft.ft_out.expire(&out_key);
+            self.ft.ft_in.expire(&in_key);
             self.ft.count = self.ft.ft_out.num_flows();
         }
     }
@@ -887,25 +864,27 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let action = match self.ft.get_in(&flow) {
+        let flow_before = *pkt.flow();
+        let action = match self.ft.get_in(&flow_before) {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = action.state()
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
+                    action.mark_clean();
+                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::In, &flow);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_in(&flow);
+                    self.ft.remove_in(&flow_before);
                     None
                 }
             }
             EntryState::Clean(action) => {
+                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().clone())
             }
@@ -920,7 +899,6 @@ impl Layer {
 
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.in_lft_hit += 1;
-                let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::In, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1175,25 +1153,27 @@ impl Layer {
         }
 
         // Do we have a FlowTable entry? If so, use it.
-        let flow = *pkt.flow();
-        let action = match self.ft.get_out(&flow) {
+        let flow_before = *pkt.flow();
+        let action = match self.ft.get_out(&flow_before) {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
+                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
-                    self.ft.mark_clean(Direction::Out, &flow);
+                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
                     // whether it remains valid: the simplest method to do so is
                     // to rerun lookup.
-                    self.ft.remove_out(&flow);
+                    self.ft.remove_out(&flow_before);
                     None
                 }
             }
             EntryState::Clean(action) => {
+                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().action_desc.clone())
             }
@@ -1208,7 +1188,6 @@ impl Layer {
 
             Some(ActionDescEntry::Desc(desc)) => {
                 self.stats.vals.out_lft_hit += 1;
-                let flow_before = *pkt.flow();
                 let ht = desc.gen_ht(Direction::Out, ameta);
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
@@ -1571,7 +1550,7 @@ impl Layer {
 
     /// Set all rules at once without clearing the flow table.
     ///
-    /// See [`FlowTable::mark_dirty`] for the performance and correctness
+    /// See `FlowTable::mark_dirty` for the performance and correctness
     /// implications.
     pub fn set_rules_soft(
         &mut self,
@@ -1596,6 +1575,20 @@ impl Layer {
 
     pub fn stats_snap(&self) -> LayerStatsSnap {
         self.stats.vals.snapshot()
+    }
+
+    /// Test helper for single-threaded execution to verify that all flows
+    /// in the layer are `Ready` or `Dead`.
+    ///
+    /// Panics if any flows are `Larval`.
+    #[cfg(any(feature = "test-help", test))]
+    pub fn verify_no_larval(&self) {
+        for (k, v) in self.ft.ft_out.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::Out));
+        }
+        for (k, v) in self.ft.ft_in.iter() {
+            v.verify_not_larval(self.name(), k, Some(Direction::In));
+        }
     }
 }
 

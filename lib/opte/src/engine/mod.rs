@@ -135,10 +135,8 @@ cfg_if! {
 pub use dbg_macro as dbg;
 pub use err_macro as err;
 
-use crate::engine::flow_table::FlowTable;
 use crate::engine::packet::InnerFlowId;
 use crate::engine::packet::ParseError;
-use crate::engine::port::UftEntry;
 
 /// The action to take for a single packet, based on the processing of
 /// the [`NetworkImpl::handle_pkt()`] callback.
@@ -229,6 +227,9 @@ pub trait NetworkImpl {
     /// take in regards to the input packet. That response is dictated
     /// by the [`HdlPktAction`] value.
     ///
+    /// XXX WE NO LONGER DO THE BELOW. SHARDING WOULD BREAK THIS.
+    /// XXX IF THIS IS NEEDED WE NEED ANOTHER INTERFACE.
+    ///
     /// This callback is given access to both the inbound and outbound
     /// UFT tables. This can be useful for handling certain types of
     /// traffic, such as ICMP DU, where you may want to match parts of
@@ -244,8 +245,6 @@ pub trait NetworkImpl {
         &self,
         dir: Direction,
         pkt: &mut Packet<FullParsed<T>>,
-        uft_in: &FlowTable<UftEntry<InnerFlowId>>,
-        uft_out: &FlowTable<UftEntry<InnerFlowId>>,
     ) -> Result<HdlPktAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
