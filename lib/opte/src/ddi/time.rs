@@ -68,6 +68,19 @@ impl core::ops::Sub<Duration> for Moment {
     }
 }
 
+#[cfg(not(any(feature = "std", test)))]
+impl core::ops::Sub<Duration> for Moment {
+    type Output = Self;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        let delta = u64::from(rhs.subsec_nanos())
+            .saturating_add(rhs.as_secs().saturating_mul(NANOS));
+        let delta = i64::try_from(delta).unwrap_or(i64::MAX);
+        let inner = self.inner.saturating_sub(delta).max(0);
+        Moment { inner }
+    }
+}
+
 impl Moment {
     /// Compute the delta between `now - self` and return as
     /// milliseconds.
@@ -82,6 +95,20 @@ impl Moment {
                 delta.as_secs() * MILLIS + delta.subsec_millis() as u64
             }
         }
+    }
+
+    /// Return `self - other` as a duration, if the value is non-negative.
+    ///
+    /// If `other` is before `self`, return `None`.
+    #[must_use = "returns a new duration, does not modify self"]
+    pub fn checked_sub(&self, other: Moment) -> Option<Duration> {
+        self.raw().checked_sub(other.raw()).map(Duration::from_nanos)
+    }
+
+    /// Return `self - other` as a duration, saturating at zero.
+    #[must_use = "returns a new duration, does not modify self"]
+    pub fn saturating_sub(&self, other: Moment) -> Duration {
+        Duration::from_nanos(self.raw().saturating_sub(other.raw()))
     }
 
     pub fn now() -> Self {
