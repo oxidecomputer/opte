@@ -2627,9 +2627,9 @@ impl<N: NetworkImpl> Port<N> {
             // At this point we need to make a new entry!!!!
             // We know that we have the write lock, and we know we are NOT in the map.
             break self.create_new_tcp_entry(
-                &mut write_lock.as_mut().unwrap(),
+                write_lock.as_mut().unwrap(),
                 tcp,
-                &dir,
+                dir,
                 pkt_len,
             );
         }
