@@ -77,8 +77,8 @@ use opte::engine::headers::HeaderAction;
 use opte::engine::ip::v4::Ipv4Cidr;
 use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::layer::DefaultAction;
-use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerSpec;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
 use opte::engine::port::Port;
@@ -120,7 +120,7 @@ struct BuildCtx<'a> {
 }
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     vpc_mappings: Arc<VpcMappings>,
     ft_limit: core::num::NonZeroU32,
@@ -139,7 +139,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = Layer::new(NAME, Arc::clone(pb.name()), actions, ft_limit);
+    let mut layer = LayerSpec::new(NAME, actions, ft_limit);
 
     let mut ctx = BuildCtx {
         in_rules: vec![],

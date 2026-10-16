@@ -151,8 +151,8 @@ use opte::engine::ip::v6::Ipv6Addr;
 use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
-use opte::engine::layer::Layer;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerSpec;
 use opte::engine::nat::ExternalIpTag;
 use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::MblkPacketData;
@@ -179,7 +179,7 @@ use poptrie::Poptrie;
 pub const OVERLAY_LAYER_NAME: &c8str::C8Str = c8str::c8!("overlay");
 
 pub fn setup(
-    pb: &PortBuilder,
+    pb: &mut PortBuilder,
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
@@ -208,12 +208,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = Layer::new(
-        OVERLAY_LAYER_NAME,
-        Arc::clone(pb.name()),
-        actions,
-        ft_limit,
-    );
+    let mut layer = LayerSpec::new(OVERLAY_LAYER_NAME, actions, ft_limit);
 
     // Outbound: encapsulation (priority 1)
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
