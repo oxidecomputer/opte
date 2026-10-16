@@ -209,6 +209,8 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use c8str::C8Str;
+use c8str::C8String;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::num::NonZeroUsize;
@@ -484,15 +486,12 @@ unsafe extern "C" {
 }
 
 fn bad_packet_parse_probe(
-    port: Option<&CString>,
+    port: Option<&CStr>,
     dir: Direction,
     mp: uintptr_t,
     err: &ParseError,
 ) {
-    let port_str = match port {
-        None => c"unknown",
-        Some(name) => name.as_c_str(),
-    };
+    let port_str = port.unwrap_or(c"unknown");
 
     // Truncation is captured *in* the LabelBlock.
     let block = match LabelBlock::<8>::from_nested(err) {
@@ -510,15 +509,12 @@ fn bad_packet_parse_probe(
 }
 
 fn bad_packet_probe(
-    port: Option<&CString>,
+    port: Option<&CStr>,
     dir: Direction,
     mp: uintptr_t,
     msg: &CStr,
 ) {
-    let port_str = match port {
-        None => c"unknown",
-        Some(name) => name.as_c_str(),
-    };
+    let port_str = port.unwrap_or(c"unknown");
     let mut eb = LabelBlock::<8>::new();
 
     unsafe {
@@ -643,7 +639,7 @@ fn stat_parse_error(dir: Direction, err: &ParseError) {
 
 #[repr(C)]
 pub struct XdeDev {
-    pub devname: String,
+    pub devname: Arc<C8Str>,
     linkid: datalink_id_t,
     mh: *mut mac::mac_handle,
     link_state: mac::link_state_t,
@@ -1216,6 +1212,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // TODO name validation
     let state = get_xde_state();
 
+    let devname = Arc::from(
+        C8String::from_string(req.xde_devname.as_str())
+            .map_err(|_| OpteError::BadName)?
+            .into_boxed_c8_str(),
+    );
+
     // Taking the management lock allows us to create XDE ports atomically
     // with respect to other threads (and enforces a lockout on, e.g., the
     // underlay).
@@ -1278,13 +1280,12 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     let mut guest_addr = cfg.guest_mac.bytes();
 
     let mut xde = Arc::new(XdeDev {
-        devname: req.xde_devname.clone(),
         linkid: req.linkid,
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
         mtu,
         port: new_port(
-            &req.xde_devname,
+            Arc::clone(&devname),
             &cfg,
             state.vpc_map.clone(),
             state.m2p.clone(),
@@ -1292,6 +1293,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             state.v2b.clone(),
             state.ectx.clone(),
         )?,
+        devname,
         port_v2p,
         postbox_key,
         port_igw_map: KMutex::new(None),
@@ -2971,7 +2973,7 @@ unsafe extern "C" fn xde_mc_tx(
     // ================================================================
     let Ok(mut chain) = (unsafe { MsgBlkChain::new(mp_chain) }) else {
         bad_packet_probe(
-            Some(src_dev.port.name_cstr()),
+            Some(src_dev.devname.as_c_str()),
             Direction::Out,
             mp_chain as uintptr_t,
             c"rx'd packet chain from guest was null",
@@ -3052,7 +3054,7 @@ fn xde_mc_tx_one<'a>(
             // can examine the packet on failure.
             opte::engine::dbg!("Tx bad packet: {:?}", e);
             bad_packet_parse_probe(
-                Some(src_dev.port.name_cstr()),
+                Some(src_dev.devname.as_c_str()),
                 Direction::Out,
                 mblk_addr,
                 &e,
@@ -3499,7 +3501,7 @@ unsafe extern "C" fn xde_mc_propinfo(
 
 #[unsafe(no_mangle)]
 fn new_port(
-    name: &str,
+    name: Arc<C8Str>,
     cfg: &VpcCfg,
     vpc_map: Arc<overlay::VpcMappings>,
     m2p: Arc<overlay::Mcast2Phys>,
@@ -3508,19 +3510,13 @@ fn new_port(
     ectx: Arc<ExecCtx>,
 ) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
     let cfg = cfg.clone();
-    let name_cstr = CString::new(name).map_err(|_| OpteError::BadName)?;
 
     // Unwrap safety: we always have at least one FT entry, because we always
     // have at least one IP stack (v4 and/or v6).
     let nat_ft_limit = NonZeroU32::new(cfg.required_nat_space()).unwrap();
 
-    let mut pb = PortBuilder::new(
-        name,
-        name_cstr,
-        cfg.guest_mac,
-        ectx,
-        NonZeroU32::new(cfg.mtu),
-    );
+    let mut pb =
+        PortBuilder::new(name, cfg.guest_mac, ectx, NonZeroU32::new(cfg.mtu));
     firewall::setup(&mut pb, NonZeroU32::max(FW_FT_LIMIT, nat_ft_limit))?;
 
     // XXX some layers have no need for LFT, perhaps have two types
