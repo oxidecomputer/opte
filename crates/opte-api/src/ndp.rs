@@ -169,10 +169,11 @@ pub struct NeighborAdvertisement {
     /// If true, advertise that this neighbor is a router.
     pub is_router: bool,
 
-    /// If true, respond to Neighbor Solicitations sent from the unspecified
-    /// address `::`, in addition to those from a link-local address
-    /// `fe80::/10`.
-    pub allow_unspec: bool,
+    /// If true, respond to Neighbor Solicitations sent from any IPv6 address.
+    ///
+    /// Note that's different from the _unspecified_ address, and literally
+    /// means we do not filter any NDP NSs based on their source IP address.
+    pub allow_any_addr: bool,
 }
 
 impl NeighborAdvertisement {
@@ -190,16 +191,16 @@ impl NeighborAdvertisement {
     /// `is_router` is `true` if the advert should be marked as coming from a
     /// router.
     ///
-    /// `allow_unspec` is `true` if the advertisement is generated in response
-    /// to Neigbor Solicitations from the unspecified address.
+    /// `allow_any_addr` is `true` if the advertisement is generated in response
+    /// to Neigbor Solicitations from any IPv6 address.
     pub fn new(
         src_mac: MacAddr,
         mac: MacAddr,
         is_router: bool,
-        allow_unspec: bool,
+        allow_any_addr: bool,
     ) -> Self {
         let ip = Ipv6Addr::from_eui64(&mac);
-        Self { src_mac, mac, ip, is_router, allow_unspec }
+        Self { src_mac, mac, ip, is_router, allow_any_addr }
     }
 
     /// Return the IPv6 address the neighbor sends advertisements from.
