@@ -13,6 +13,7 @@ pub mod dhcp;
 pub mod dhcpv6;
 #[macro_use]
 pub mod ether;
+pub mod export;
 pub mod flow_table;
 pub mod geneve;
 #[macro_use]

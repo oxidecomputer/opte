@@ -6,6 +6,7 @@
 
 //! Types for working with IP Source NAT, both IPv4 and IPv6.
 
+use super::export::ActionDescExport;
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::headers::UlpGenericModify;
@@ -24,6 +25,8 @@ use super::rule::FiniteResource;
 use super::rule::GenDescError;
 use super::rule::GenDescResult;
 use super::rule::HdrTransform;
+use super::rule::ImportError;
+use super::rule::ImportResources;
 use super::rule::Resource;
 use super::rule::ResourceEntry;
 use super::rule::ResourceError;
@@ -32,8 +35,12 @@ use crate::api::IcmpInfo;
 use crate::api::L4Info;
 use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
+use crate::engine::export::SNatIcmpEchoSpec;
+use crate::engine::export::SNatSpec;
 use crate::engine::icmp::QueryEcho;
 use crate::engine::nat::ExternalIpTag;
+use crate::engine::rule::ExportableDesc;
+use crate::engine::rule::SNatPools;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -92,7 +99,9 @@ type SNatAlloc<T> = FiniteHandle<NatPool<T>>;
 mod private {
     use opte_api::Protocol;
 
-    pub trait Ip: Into<super::IpAddr> + Send + Sync {
+    pub trait Ip:
+        Into<super::IpAddr> + TryFrom<super::IpAddr> + Send + Sync
+    {
         const MESSAGE_PROTOCOL: Protocol;
     }
 
@@ -257,7 +266,10 @@ impl From<GenIcmpErr> for GenDescError {
     }
 }
 
-impl<T: ConcreteIpAddr + 'static> SNat<T> {
+impl<T: ConcreteIpAddr + 'static> SNat<T>
+where
+    T: SNatPoolsFor<T>,
+{
     pub fn new(addr: T) -> Self {
         SNat {
             priv_ip: addr,
@@ -341,6 +353,7 @@ impl Display for SNat<Ipv6Addr> {
 impl<T: ConcreteIpAddr + 'static> StatefulAction for SNat<T>
 where
     SNat<T>: Display,
+    T: SNatPoolsFor<T>,
 {
     fn gen_desc(
         &self,
@@ -414,7 +427,10 @@ pub struct SNatDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_NAME: &str = "SNAT";
 
-impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
+impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T>
+where
+    T: SNatPoolsFor<T>,
+{
     fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform {
         match dir {
             // Outbound traffic needs its source IP and source port
@@ -462,6 +478,80 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatDesc<T> {
     fn name(&self) -> &str {
         SNAT_NAME
     }
+
+    fn export(&self) -> Option<ActionDescExport> {
+        Some(self.spec().into())
+    }
+}
+
+pub trait SNatPoolsFor<T: ConcreteIpAddr> {
+    fn pool_for(resources: &ImportResources) -> Option<&SNatPools<T>>;
+}
+
+impl SNatPoolsFor<Ipv4Addr> for Ipv4Addr {
+    fn pool_for(resources: &ImportResources) -> Option<&SNatPools<Ipv4Addr>> {
+        resources.snat4.as_ref()
+    }
+}
+
+impl SNatPoolsFor<Ipv6Addr> for Ipv6Addr {
+    fn pool_for(resources: &ImportResources) -> Option<&SNatPools<Ipv6Addr>> {
+        resources.snat6.as_ref()
+    }
+}
+
+impl<T: ConcreteIpAddr> ExportableDesc for SNatDesc<T>
+where
+    T: SNatPoolsFor<T>,
+{
+    type Spec = SNatSpec;
+
+    fn spec(&self) -> Self::Spec {
+        SNatSpec {
+            private_ip: self.nat.key.into(),
+            private_port: self.priv_port,
+            external_ip: self.nat.entry.ip.into(),
+            external_port: self.nat.entry.port,
+        }
+    }
+
+    fn from_spec(
+        spec: Self::Spec,
+        flow: &InnerFlowId,
+        resources: &ImportResources,
+    ) -> Result<Self, ImportError> {
+        // This is a specific IP version, which we have to make sure the spec
+        // we're importing from matches.
+        let private_ip = T::try_from(spec.private_ip)
+            .map_err(|_| ImportError::AddrFamily)?;
+        let external_ip = T::try_from(spec.external_ip)
+            .map_err(|_| ImportError::AddrFamily)?;
+
+        // Choose the pool based on the protocol of the flow.
+        //
+        // NOTE: This has to match how we select pools on the export
+        // destination, or we'll need to export enough information to know how
+        // the mapping is chosen.
+        let pools = T::pool_for(resources)
+            .ok_or(ImportError::MissingResource { kind: "SNAT pool" })?;
+        let proto = flow.protocol();
+        let is_icmp = proto == T::MESSAGE_PROTOCOL;
+        let pool = match proto {
+            Protocol::TCP => &pools.tcp,
+            Protocol::UDP => &pools.udp,
+            _ if is_icmp => &pools.icmp,
+            _other => {
+                return Err(ImportError::MissingResource {
+                    kind: "SNAT pool for unsupported protocol",
+                });
+            }
+        };
+        let nat = pool.reclaim(
+            &private_ip,
+            NatPoolEntry { ip: external_ip, port: spec.external_port },
+        )?;
+        Ok(SNatDesc { nat, priv_port: spec.private_port })
+    }
 }
 
 // NOTE: we may or may not want to fuse with `SNatDesc` using an
@@ -474,7 +564,10 @@ pub struct SNatIcmpEchoDesc<T: ConcreteIpAddr> {
 
 pub const SNAT_ICMP_ECHO_NAME: &str = "SNAT_ICMP_ECHO";
 
-impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
+impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T>
+where
+    T: SNatPoolsFor<T>,
+{
     // SNAT needs to generate an additional transform for ICMP traffic in
     // order to treat the Echo Identifier as a psuedo ULP port.
     fn gen_ht(&self, dir: Direction, meta: &mut ActionMeta) -> HdrTransform {
@@ -518,6 +611,56 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
     fn name(&self) -> &str {
         SNAT_ICMP_ECHO_NAME
+    }
+
+    fn export(&self) -> Option<ActionDescExport> {
+        Some(self.spec().into())
+    }
+}
+
+impl<T: ConcreteIpAddr> ExportableDesc for SNatIcmpEchoDesc<T>
+where
+    T: SNatPoolsFor<T>,
+{
+    type Spec = SNatIcmpEchoSpec;
+
+    fn spec(&self) -> Self::Spec {
+        SNatIcmpEchoSpec {
+            private_ip: self.nat.key.into(),
+            external_ip: self.nat.entry.ip.into(),
+            external_ident: self.nat.entry.port,
+            private_ident: self.echo_ident,
+        }
+    }
+
+    fn from_spec(
+        spec: Self::Spec,
+        flow: &InnerFlowId,
+        resources: &ImportResources,
+    ) -> Result<Self, ImportError> {
+        // This is a specific IP version, which we have to make sure the spec
+        // we're importing from matches.
+        let private_ip = T::try_from(spec.private_ip)
+            .map_err(|_| ImportError::AddrFamily)?;
+        let external_ip = T::try_from(spec.external_ip)
+            .map_err(|_| ImportError::AddrFamily)?;
+
+        // Choose the pool based on the protocol of the flow.
+        //
+        // NOTE: This has to match how we select pools on the export
+        // destination, or we'll need to export enough information to know how
+        // the mapping is chosen.
+        let pools = T::pool_for(resources)
+            .ok_or(ImportError::MissingResource { kind: "SNAT pool" })?;
+        if flow.protocol() != T::MESSAGE_PROTOCOL {
+            // TODO: this is the wrong error.
+            return Err(ImportError::MissingResource { kind: "SNAT Pool" });
+        }
+        let nat = pools.icmp.reclaim(
+            &private_ip,
+            NatPoolEntry { ip: external_ip, port: spec.external_ident },
+        )?;
+        Ok(SNatIcmpEchoDesc { nat, echo_ident: spec.private_ident })
     }
 }
 
