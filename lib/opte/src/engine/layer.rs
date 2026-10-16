@@ -872,7 +872,7 @@ impl Layer {
                 {
                     let desc = Arc::clone(desc);
                     action.mark_clean();
-                    action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
+                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
@@ -884,7 +884,7 @@ impl Layer {
                 }
             }
             EntryState::Clean(action) => {
-                action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
+                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().clone())
             }
@@ -1166,7 +1166,7 @@ impl Layer {
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
-                    action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
+                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
                     action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
@@ -1179,7 +1179,7 @@ impl Layer {
                 }
             }
             EntryState::Clean(action) => {
-                action.add_hold().map_err(|_| LayerError::EntryTooBusy)?;
+                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().action_desc.clone())
             }

@@ -13,6 +13,8 @@ use super::packet::InnerFlowId;
 use crate::ddi::sync::KRwLock;
 use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
+use crate::engine::layer::LayerError;
+use crate::engine::port::ProcessError;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
@@ -904,8 +906,21 @@ impl Default for Liveness {
     }
 }
 
+/// A `FlowEntry` has too many threads attempting to hold it parallel.
 #[derive(Copy, Clone, Debug)]
-struct LivenessFull;
+pub(crate) struct LivenessFull;
+
+impl From<LivenessFull> for LayerError {
+    fn from(_: LivenessFull) -> Self {
+        LayerError::EntryTooBusy
+    }
+}
+
+impl From<LivenessFull> for ProcessError {
+    fn from(value: LivenessFull) -> Self {
+        ProcessError::Layer(value.into())
+    }
+}
 
 impl From<u8> for Liveness {
     fn from(value: u8) -> Self {
@@ -1127,17 +1142,21 @@ impl<S: FlowState> FlowEntry<S> {
         }
     }
 
-    /// XXX DOCUMENT ME
+    /// Increments the slowpath hold counter on this flow entry. This prevents
+    /// eviction of this flow entry by another attempted insertion, or removal
+    /// of this entry by the periodic cleanup task.
     ///
-    /// I NEED TO BE CALLED WITH MY TABLE LOCK HELD
-    pub(super) fn add_hold(&self) -> Result<(), ()> {
+    /// This function *should* be called with a read or write lock on the
+    /// `FlowEntry`'s enclosing table to ensure that another thread cannot
+    /// see it with a zeroed hold count in the table.
+    pub(super) fn add_hold(&self) -> Result<(), LivenessFull> {
         self.lifetime
             .state
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                 let curr = Liveness::from(v);
                 curr.increment_holds().ok().map(Into::into)
             })
-            .map_err(|_| ())
+            .map_err(|_| LivenessFull)
             .map(|_| ())
     }
 
