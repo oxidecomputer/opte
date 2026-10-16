@@ -6,6 +6,7 @@
 
 //! A layer in a port.
 
+use super::export::ActionDescKind;
 use super::flow_table::Dump;
 use super::flow_table::FLOW_DEF_EXPIRE_SECS;
 use super::flow_table::FlowEntry;
@@ -40,9 +41,13 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::export::LayerExport;
+use crate::engine::export::LftPairExport;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::TtlDelegateTcp;
+use crate::engine::rule::ImportError;
+use crate::engine::rule::StatefulAction;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -622,6 +627,146 @@ impl Layer {
             default_out: self.default_out.to_string(),
             default_out_hits: self.default_out_hits,
         }
+    }
+
+    /// Export all flow table pairs.
+    pub(crate) fn export_lft(&self, now: Moment) -> LayerExport {
+        let pairs = self
+            .ft
+            .ft_out
+            .iter()
+            .filter_map(|(flow_out, out_entry)| {
+                // Get the corresponding inbound FT entry.
+                //
+                // NOTE: `FlowTable::get` also skips killed entries, which have
+                // expired but not yet removed. That's OK, since we'll just skip
+                // them by returning `None` here.
+                let state = out_entry.state();
+                let flow_in = state.in_flow_pair;
+                let in_entry = self.ft.ft_in.get(&flow_in)?;
+                let is_dirty = out_entry.is_dirty() || in_entry.is_dirty();
+
+                // Decide whether we're going to export this entry.
+                let do_export = match (&state.action_desc, is_dirty) {
+                    // Entry isn't dirty at all, keep it regardless of the type
+                    (_, false) => true,
+                    // Dirty no-ops don't get exported
+                    (ActionDescEntry::NoOp, true) => false,
+                    // Dirty actions get to decide based on their validity.
+                    (ActionDescEntry::Desc(desc), true) => desc.is_valid(),
+                };
+                if !do_export {
+                    return None;
+                }
+
+                // Extract the statistics.
+                let age = now.saturating_sub(out_entry.last_hit());
+                let hits_out = out_entry.hits();
+                let hits_in = in_entry.hits();
+
+                // Extract the actual kind of descriptor, used to route the pair
+                // to the right layer / rule / action on import.
+                let kind = match &state.action_desc {
+                    ActionDescEntry::NoOp => ActionDescKind::NoOp,
+                    ActionDescEntry::Desc(desc) => desc.kind(),
+                };
+                Some(LftPairExport {
+                    flow_in,
+                    flow_out: *flow_out,
+                    age,
+                    hits_in,
+                    hits_out,
+                    kind,
+                })
+            })
+            .collect();
+        LayerExport { layer: self.name.to_string(), pairs }
+    }
+
+    /// Import LFT entries from exported data.
+    pub(crate) fn import_lft(
+        &mut self,
+        export: LayerExport,
+        now: Moment,
+    ) -> result::Result<(), ImportError> {
+        // Ensure we're importing into an empty layer, and that we have space
+        // for all the flows we will import.
+        if self.ft.num_flows() != 0 {
+            return Err(ImportError::LayerNotEmpty(self.name));
+        }
+        let limit = usize::try_from(self.ft.limit.get()).unwrap();
+        if export.pairs.len() > limit {
+            return Err(ImportError::TooManyFlows {
+                layer: self.name,
+                needed: export.pairs.len(),
+                limit,
+            });
+        }
+        let result = self.import_lft_pairs(export, now);
+        if result.is_err() {
+            self.stats.vals.flows.set(0);
+            self.ft.clear();
+        } else {
+            self.stats.vals.flows.set(u64::from(self.ft.num_flows()));
+        }
+        result
+    }
+
+    fn import_lft_pairs(
+        &mut self,
+        export: LayerExport,
+        now: Moment,
+    ) -> result::Result<(), ImportError> {
+        for pair in export.pairs {
+            let action_desc = self.import_desc_from_pair(&pair)?;
+            let (in_lft, out_lft) =
+                self.ft.add_pair(action_desc, pair.flow_in, pair.flow_out);
+
+            // Adjust the last hit time (shared between the in and out entries),
+            // and the hit counts, which could be different.
+            let last_hit = now - pair.age;
+            in_lft.set_last_hit_time_on_import(last_hit);
+            in_lft.set_hit_count_on_import(pair.hits_in);
+            out_lft.set_hit_count_on_import(pair.hits_out);
+        }
+        Ok(())
+    }
+
+    /// Import a descriptor by finding an accepting rule, if any.
+    fn import_desc_from_pair(
+        &self,
+        pair: &LftPairExport,
+    ) -> result::Result<ActionDescEntry, ImportError> {
+        match pair.kind {
+            ActionDescKind::NoOp => Ok(ActionDescEntry::NoOp),
+            ActionDescKind::SNat
+            | ActionDescKind::SNatIcmpEcho
+            | ActionDescKind::Nat => self
+                .iter_stateful_rule_actions()
+                .filter_map(|action| {
+                    action.import_desc(pair.kind, &pair.flow_in, &pair.flow_out)
+                })
+                .next()
+                .ok_or_else(|| ImportError::NotAccepted {
+                    layer: self.name,
+                    kind: pair.kind,
+                    flow_in: pair.flow_in,
+                    flow_out: pair.flow_out,
+                })?
+                .map(ActionDescEntry::Desc),
+        }
+    }
+
+    /// Iterate over the stateful actions of all rules, outbound first.
+    fn iter_stateful_rule_actions(
+        &self,
+    ) -> impl Iterator<Item = &Arc<dyn StatefulAction>> {
+        self.rules_out.iter().chain(self.rules_in.iter()).filter_map(|rule| {
+            match rule.action() {
+                Action::Stateful(s) => Some(s),
+                _ => None,
+            }
+        })
     }
 
     fn gen_desc_fail_probe(
@@ -1746,6 +1891,12 @@ impl RuleTable {
 
     fn num_rules(&self) -> usize {
         self.rules.len()
+    }
+
+    /// Iterate all the rules in this table.
+    // TODO-completeness: Need hits?
+    fn iter(&self) -> impl Iterator<Item = &Rule<Finalized>> {
+        self.rules.iter().map(|rte| &rte.rule)
     }
 
     // Remove the rule with the given `id`. Otherwise, return not found.

@@ -240,6 +240,8 @@ use opte::api::DumpTcpFlowsReq;
 use opte::api::DumpTcpFlowsResp;
 use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
+use opte::api::ExportLftReq;
+use opte::api::ImportLftReq;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
 use opte::api::MacAddr;
@@ -249,6 +251,7 @@ use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
 use opte::api::PausePortReq;
+use opte::api::PortLftExport;
 use opte::api::ResetPortReq;
 use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
@@ -1181,6 +1184,16 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::DumpMcast2Phys => {
             let resp = dump_m2p_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ImportLft => {
+            let resp = import_lft_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ExportLft => {
+            let resp = export_lft_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -4836,6 +4849,33 @@ fn reset_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     };
     dev.port.reset();
     Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn export_lft_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<PortLftExport, OpteError> {
+    let ExportLftReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.export_lfts()
+}
+
+#[unsafe(no_mangle)]
+fn import_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ImportLftReq { port_name, export } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port
+        .import_lfts(export)
+        .map_err(|e| OpteError::Import(e.report_str()))
+        .map(|_| NoResp::default())
 }
 
 impl From<&crate::ip::in6_addr> for Ipv6Addr {

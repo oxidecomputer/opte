@@ -31,6 +31,8 @@ use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
 use super::rule::MetaAction;
 use super::rule::StatefulAction;
+use crate::engine::export::ActionDescKind;
+use crate::engine::rule::ImportError;
 use crate::engine::snat::ConcreteIpAddr;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -143,6 +145,41 @@ impl StatefulAction for OutboundNat {
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         (vec![], vec![])
     }
+
+    fn import_desc(
+        &self,
+        kind: ActionDescKind,
+        flow_in: &InnerFlowId,
+        flow_out: &InnerFlowId,
+    ) -> Option<Result<Arc<dyn ActionDesc>, ImportError>> {
+        import_nat_desc(kind, flow_in, flow_out, self.priv_ip, &self.verifier)
+    }
+}
+
+fn import_nat_desc(
+    kind: ActionDescKind,
+    flow_in: &InnerFlowId,
+    flow_out: &InnerFlowId,
+    priv_ip: IpAddr,
+    verifier: &Arc<dyn VerifyAddr>,
+) -> Option<Result<Arc<dyn ActionDesc>, ImportError>> {
+    if !matches!(kind, ActionDescKind::Nat) {
+        return None;
+    }
+    if flow_out.src_ip() != priv_ip {
+        // Importantly handles the case where the IPs are different
+        // versions, so we can support dual-stack.
+        return None;
+    }
+    let external_ip = flow_in.dst_ip();
+    if !verifier.is_addr_valid(&external_ip) {
+        return Some(Err(ImportError::ExternalIpNotFound(external_ip)));
+    }
+    Some(Ok(Arc::new(NatDesc {
+        priv_ip,
+        external_ip,
+        verifier: verifier.clone(),
+    })))
 }
 
 /// A NAT mapping which preserves affinity with the external IP that a port
@@ -189,6 +226,15 @@ impl StatefulAction for InboundNat {
     // now just keep the predicates fully explicit.
     fn implicit_preds(&self) -> (Vec<Predicate>, Vec<DataPredicate>) {
         (vec![], vec![])
+    }
+
+    fn import_desc(
+        &self,
+        kind: ActionDescKind,
+        flow_in: &InnerFlowId,
+        flow_out: &InnerFlowId,
+    ) -> Option<Result<Arc<dyn ActionDesc>, ImportError>> {
+        import_nat_desc(kind, flow_in, flow_out, self.priv_ip, &self.verifier)
     }
 }
 
@@ -259,6 +305,10 @@ impl ActionDesc for NatDesc {
             ) => Ok(Some(Box::new(IcmpV6Nat { priv_ip, external_ip }))),
             _ => Ok(None),
         }
+    }
+
+    fn kind(&self) -> ActionDescKind {
+        ActionDescKind::Nat
     }
 }
 
