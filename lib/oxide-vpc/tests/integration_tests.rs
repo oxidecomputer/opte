@@ -2302,6 +2302,9 @@ struct SolicitTestData {
 //    and the guest need to appear to be on an isolated L2 segment. Nothing else
 //    should resolve.
 fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
+    const UNEXPECTED_SRC_IP: Ipv6Addr = Ipv6Addr::from_const([
+        0x2001, 0xdb80, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]);
     vec![
         // When the client first initializes its IPv6 interface, it can give
         // itself a tentative address. This is usually generated from the EUI-64
@@ -2388,7 +2391,7 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
                     | NdiscNeighborFlags::OVERRIDE,
             }),
         },
-        // In our last case, the guest is doing resolution for _any_ old
+        // In our next case, the guest is doing resolution for _any_ old
         // link-local IPv6 address (other than the gateway's, which is tested in
         // case (2)). Since this is resolution, the address should be sent to
         // the solicited-node multicast group. But since the guest already has
@@ -2410,6 +2413,32 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
                 lladdr: None,
             },
             na: None,
+        },
+        // We should still respond to NSs even if they're from some wacky
+        // address, so long as the come from the guest directly. This should
+        // handle the case of self-assigned IP addresses or addresses within
+        // attached subnets, which we don't necessarily know at the time we
+        // construct the port.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.guest_mac,
+                dst_mac: cfg.gateway_mac,
+                src_ip: UNEXPECTED_SRC_IP,
+                dst_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.guest_mac),
+            },
+            na: Some(AdvertInfo {
+                src_mac: cfg.gateway_mac,
+                dst_mac: cfg.guest_mac,
+                src_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                dst_ip: UNEXPECTED_SRC_IP,
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.gateway_mac),
+                flags: NdiscNeighborFlags::ROUTER
+                    | NdiscNeighborFlags::SOLICITED
+                    | NdiscNeighborFlags::OVERRIDE,
+            }),
         },
     ]
 }
