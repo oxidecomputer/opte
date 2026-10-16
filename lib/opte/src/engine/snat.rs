@@ -53,7 +53,7 @@ use opte_api::Protocol;
 
 /// A single entry in the NAT pool, describing the public IP and port used to
 /// NAT a private address.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NatPoolEntry<T: ConcreteIpAddr> {
     ip: T,
     port: u16,
@@ -172,6 +172,44 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
             }
 
             None => Err(ResourceError::NoMatch(priv_ip.to_string())),
+        }
+    }
+
+    fn restore_raw(
+        &self,
+        priv_ip: &T,
+        entry: NatPoolEntry<T>,
+    ) -> Result<(), ResourceError> {
+        // TODO-performance: This is a linear scan over the full range of ports.
+        // We could be smarter about storing this (e.g., a b-tree, sorted array,
+        // or set of optional "slots"). But restoring isn't a hot-path today,
+        // and we'd rather not pay any penalty on the currently O(1) call to
+        // `Self::obtain()`.
+        match self.free_list.lock().get_mut(priv_ip) {
+            Some(PortList { ip, free_ports, ports }) => {
+                if *ip != entry.ip {
+                    return Err(ResourceError::NoMatch(format!(
+                        "IP: {}",
+                        entry.ip
+                    )));
+                }
+                if !ports.contains(&entry.port) {
+                    return Err(ResourceError::NoMatch(format!(
+                        "Port: {}",
+                        entry.port
+                    )));
+                }
+                free_ports
+                    .iter()
+                    .position(|p| *p == entry.port)
+                    .map(|i| {
+                        let _ = free_ports.swap_remove(i);
+                    })
+                    .ok_or_else(|| {
+                        ResourceError::InUse(format!("Port: {}", entry.port))
+                    })
+            }
+            None => Err(ResourceError::NoMatch(format!("IP: {}", priv_ip))),
         }
     }
 
@@ -347,8 +385,16 @@ where
                 })
             }
 
-            Err(ResourceError::NoMatch(ip)) => Err(GenDescError::Unexpected {
-                msg: format!("SNAT pool (no match: {ip})"),
+            Err(ResourceError::NoMatch(item)) => {
+                Err(GenDescError::Unexpected {
+                    msg: format!("SNAT pool (no match: {item})"),
+                })
+            }
+
+            // NOTE: This should never happen because `InUse` is only returned
+            // by calls to `FiniteResource::restore()`, not `obtain()`.
+            Err(ResourceError::InUse(item)) => Err(GenDescError::Unexpected {
+                msg: format!("SNAT pool (resource in use: {item})"),
             }),
         }
     }
@@ -702,5 +748,236 @@ mod test {
         assert_eq!(pool.num_avail(priv1).unwrap(), 3072);
         pool.release(&priv2, npe2);
         assert_eq!(pool.num_avail(priv2).unwrap(), 4096);
+    }
+
+    struct RestoreTestContext {
+        private_ips: [Ipv4Addr; 2],
+        port_ranges: [RangeInclusive<u16>; 2],
+        external_ip: Ipv4Addr,
+        original_pool: Arc<NatPool<Ipv4Addr>>,
+        restore_pool: Arc<NatPool<Ipv4Addr>>,
+    }
+
+    impl RestoreTestContext {
+        fn new() -> Self {
+            let private_ips = [
+                "192.168.2.8".parse::<Ipv4Addr>().unwrap(),
+                "192.168.2.33".parse::<Ipv4Addr>().unwrap(),
+            ];
+            let port_ranges = [1025..=4096, 4097..=8192];
+            let external_ip = "52.10.128.69".parse().unwrap();
+
+            let original_pool = Arc::new(NatPool::new());
+            original_pool.add(
+                private_ips[0],
+                external_ip,
+                port_ranges[0].clone(),
+            );
+            original_pool.add(
+                private_ips[1],
+                external_ip,
+                port_ranges[1].clone(),
+            );
+
+            let restore_pool = Arc::new(NatPool::new());
+            restore_pool.add(
+                private_ips[0],
+                external_ip,
+                port_ranges[0].clone(),
+            );
+
+            Self {
+                private_ips,
+                port_ranges,
+                external_ip,
+                original_pool,
+                restore_pool,
+            }
+        }
+
+        fn obtain_from_original(
+            &self,
+            n_to_take: usize,
+        ) -> Vec<FiniteHandle<NatPool<Ipv4Addr>>> {
+            (0..n_to_take)
+                .map(|_| {
+                    self.original_pool
+                        .obtain(&self.private_ips[0])
+                        .expect("able to obtain handle from original pool")
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn can_restore_previously_obtained_mapping() {
+        let ctx = RestoreTestContext::new();
+
+        // Take a few handles out of the pool.
+        //
+        // This is pretty important. The NatPool type pops entries off the back,
+        // i.e., starting with the highest port. So obtaining one entry and
+        // restoring one are hard to tell apart with an empty pool.
+        let n_avail = ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap();
+        assert_eq!(n_avail, ctx.port_ranges[0].len());
+        let n_to_take = 10;
+        let original_handles = ctx.obtain_from_original(n_to_take);
+        let handle1 = original_handles.last().unwrap();
+        assert_eq!(
+            n_avail - n_to_take,
+            ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap()
+        );
+
+        // Since we've previously obtained the entry on the original pool, it
+        // should be "restorable" on the new pool too.
+        assert_eq!(
+            n_avail,
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap()
+        );
+        let restored_handle =
+            ctx.restore_pool.restore(&handle1.key, handle1.entry).expect(
+                "should be able to restore previous entry in an empty pool",
+            );
+        assert_eq!(
+            n_avail - 1,
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap()
+        );
+        assert_eq!(handle1.key, restored_handle.key);
+        assert_eq!(handle1.entry, restored_handle.entry);
+
+        // But we shouldn't be able to restore it a second time
+        let Err(err) = ctx.restore_pool.restore(&handle1.key, handle1.entry)
+        else {
+            panic!("unexpected success restoring handle a second time");
+        };
+        std::assert_matches!(err, ResourceError::InUse(_));
+        assert_eq!(
+            n_avail - 1,
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap()
+        );
+    }
+
+    #[test]
+    fn cannot_restore_mapping_restore_pool_does_not_have() {
+        let ctx = RestoreTestContext::new();
+
+        // Create a handle, from the _second_ private IP.
+        let Ok(unrestorable) = ctx.original_pool.obtain(&ctx.private_ips[1])
+        else {
+            panic!("should be able to obtain handle from pool");
+        };
+
+        // The new pool doesn't have this private IP at all.
+        let Err(err) =
+            ctx.restore_pool.restore(&unrestorable.key, unrestorable.entry)
+        else {
+            panic!("unexpected success restoring missing mapping");
+        };
+        std::assert_matches!(err, ResourceError::NoMatch(_));
+
+        // Also check that we can't restore something with the right key, but
+        // that's outside the port range.
+        let key = ctx.private_ips[0];
+        let Err(err) = ctx
+            .restore_pool
+            .restore(&key, NatPoolEntry { ip: ctx.external_ip, port: 12000 })
+        else {
+            panic!(
+                "unexpected success restoring handle with out of range port"
+            );
+        };
+        std::assert_matches!(err, ResourceError::NoMatch(_));
+
+        // And that we can't restore an otherwise valid entry, but which points
+        // at the wrong external IP.
+        let bad_ip = "1.1.1.1".parse().unwrap();
+        let Err(err) = ctx
+            .restore_pool
+            .restore(&key, NatPoolEntry { ip: bad_ip, port: 2000 })
+        else {
+            panic!("unexpected success restoring handle with bad external IP");
+        };
+        std::assert_matches!(err, ResourceError::NoMatch(_));
+    }
+
+    #[test]
+    fn obtain_never_yields_restored_mapping() {
+        let ctx = RestoreTestContext::new();
+
+        // Obtain a mapping from the pool, and restore it on the new pool.
+        let Ok(original_handle) = ctx.original_pool.obtain(&ctx.private_ips[0])
+        else {
+            panic!("should be able to obtain handle from new pool");
+        };
+        let Ok(restored_handle) = ctx
+            .restore_pool
+            .restore(&ctx.private_ips[0], original_handle.entry)
+        else {
+            panic!("should be able to restore handle from new pool");
+        };
+
+        // Obtaining new resources from the pool should never yield the mapping
+        // we restored. We need to keep references to the handles around in a
+        // container so they don't release themselves to the pool right away.
+        let n_avail = ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap();
+        let mut drained_handles = Vec::with_capacity(n_avail);
+        while let Ok(handle) = ctx.restore_pool.obtain(&original_handle.key) {
+            assert_ne!(handle.entry, restored_handle.entry);
+            drained_handles.push(handle);
+        }
+        assert_eq!(drained_handles.len(), n_avail);
+        assert_eq!(ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap(), 0);
+    }
+
+    #[test]
+    fn can_obtain_restored_handle_after_drop() {
+        let ctx = RestoreTestContext::new();
+
+        // Take a few handles out of the original pool.
+        let n_avail = ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap();
+        assert_eq!(n_avail, ctx.port_ranges[0].len());
+        let n_to_take = 10;
+        let original_handles = ctx.obtain_from_original(n_to_take);
+        let original_handle = original_handles.last().unwrap();
+        assert_eq!(
+            n_avail - n_to_take,
+            ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap()
+        );
+
+        // Restore the last handle in the new pool.
+        let Ok(restored_handle) = ctx
+            .restore_pool
+            .restore(&ctx.private_ips[0], original_handle.entry)
+        else {
+            panic!("should be able to restore handle from restore pool");
+        };
+
+        let n_original_avail =
+            ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap();
+        let n_restored_avail =
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap();
+
+        // Now if we drop the restored handle, we should be able to obtain it
+        // again. The counts of available entries should go up by one in the
+        // restored pool, but not change in the original pool.
+        drop(restored_handle);
+        assert_eq!(
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap(),
+            n_restored_avail + 1
+        );
+        assert_eq!(
+            ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap(),
+            n_original_avail,
+        );
+        let new = ctx
+            .restore_pool
+            .obtain(&ctx.private_ips[0])
+            .expect("able to obtain restored handle after releasing it back");
+        assert_eq!(
+            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap(),
+            n_restored_avail
+        );
+        assert_eq!(new.key, original_handle.key);
+        assert_eq!(new.entry, original_handle.entry);
     }
 }

@@ -954,6 +954,12 @@ impl Layer {
         }
     }
 
+    /// Apply the layer's rules to an inbound packet.
+    ///
+    /// This attempts to find a rule whose predicates match the packet. It then
+    /// applies the rule's actions to the packet itself, adds any
+    /// transformations to `xforms`, and potentially updates the action metadata
+    /// for downstream layers to consume.
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
@@ -1242,6 +1248,12 @@ impl Layer {
         }
     }
 
+    /// Apply the layer's rules to an outbound packet.
+    ///
+    /// This attempts to find a rule whose predicates match the packet. It then
+    /// applies the rule's actions to the packet itself, adds any
+    /// transformations to `xforms`, and potentially updates the action metadata
+    /// for downstream layers to consume.
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
