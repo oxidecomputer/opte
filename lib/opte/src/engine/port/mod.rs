@@ -2474,8 +2474,8 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
-    /// Attempts to lookup and update TCP flowstate in response to a given
-    /// packet from within the slowpath.
+    /// Lookup and update TCP flow state in response to a given packet from
+    /// within the slowpath.
     ///
     /// Unexpected TCP segments on existing connections will be allowed,
     /// but will fire DTrace probes via `Self::tcp_err_probe`.
@@ -2484,11 +2484,8 @@ impl<N: NetworkImpl> Port<N> {
     /// a hold registered.
     ///
     /// # Errors
-    /// * `ProcessError::MissingFlow` if no flow currently exists.
-    /// * `ProcessError::TcpFlow(NewFlow { .. })` if this packet retired
-    ///   an existing TCP flow state entry.
-    ///   
-    /// * `ProcessError::Layer(LayerError::EntryTooBusy)`
+    /// * `ProcessError::Layer(LayerError::EntryTooBusy)` if too many
+    ///   slowpath threads place a hold on the same flow entry.
     fn update_tcp_entry_slowpath<V: ByteSlice>(
         &self,
         tcp: &impl TcpRef<V>,
@@ -2535,10 +2532,13 @@ impl<N: NetworkImpl> Port<N> {
         let mut entry = None;
 
         loop {
-            // Either use the
             entry = if let Some(v) = entry.take() {
+                // We have upgraded to a write lock, having found another
+                // state that we need to try and use.
                 Some(v)
             } else {
+                // We're here either at the start of processing, or because
+                // the initial lookup failed.
                 let read_lock = if write_lock.is_some() {
                     None
                 } else {
@@ -2555,9 +2555,7 @@ impl<N: NetworkImpl> Port<N> {
 
                 match table.get(ufid_out) {
                     Some(v) => {
-                        v.add_hold().map_err(|_| {
-                            ProcessError::Layer(LayerError::EntryTooBusy)
-                        })?;
+                        v.add_hold()?;
                         v.hit();
                         Some(v.clone())
                     }
@@ -2565,8 +2563,9 @@ impl<N: NetworkImpl> Port<N> {
                         drop(read_lock);
 
                         // If we never saw an entry, we need to grab the
-                        // writelock to be sure no one beat us to it before
-                        // we create a new one.
+                        // writelock and retry from initial lookup to be
+                        // sure no one beat us to it before we create a
+                        // new one.
                         if write_lock.is_none() {
                             write_lock = Some(self.tcp_flows.write());
                             continue;
@@ -2577,6 +2576,8 @@ impl<N: NetworkImpl> Port<N> {
                 }
             };
 
+            // If we've found some TCP state, advance its state machine and
+            // see whether it needs to be invalidated with a write lock.
             if let Some(e) = entry {
                 let next_state = self.update_installed_tcp_state(
                     e.as_ref(),
@@ -2624,8 +2625,8 @@ impl<N: NetworkImpl> Port<N> {
                 }
             };
 
-            // At this point we need to make a new entry!!!!
-            // We know that we have the write lock, and we know we are NOT in the map.
+            // We need to create new TCP state -- e are guaranteed a write lock
+            // at this point.
             break self.create_new_tcp_entry(
                 write_lock.as_mut().unwrap(),
                 tcp,
