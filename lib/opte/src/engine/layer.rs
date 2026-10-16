@@ -40,9 +40,14 @@ use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
 use crate::ddi::mblk::MsgBlk;
 use crate::ddi::time::Moment;
+use crate::engine::export::LayerExport;
+use crate::engine::export::LftPairExport;
+use crate::engine::export::import_descriptor_from_spec;
 use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::TtlDelegateTcp;
+use crate::engine::rule::ImportError;
+use crate::engine::rule::ImportResources;
 use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -622,6 +627,77 @@ impl Layer {
             default_out: self.default_out.to_string(),
             default_out_hits: self.default_out_hits,
         }
+    }
+
+    /// Export all flow table pairs.
+    pub(crate) fn export_lft(&self, now: Moment) -> LayerExport {
+        let pairs = self
+            .ft
+            .ft_out
+            .iter()
+            .map(|(flow_out, entry)| {
+                let state = entry.state();
+                let flow_in = state.in_flow_pair;
+                let age_ms = now.delta_as_millis(entry.last_hit());
+                let descriptor = match &state.action_desc {
+                    ActionDescEntry::NoOp => None,
+                    ActionDescEntry::Desc(desc) => desc.export(),
+                };
+                LftPairExport {
+                    flow_in,
+                    flow_out: *flow_out,
+                    age_ms,
+                    descriptor,
+                }
+            })
+            .collect();
+        LayerExport { layer: self.name.to_string(), pairs }
+    }
+
+    /// Import LFT entries from exported data.
+    pub(crate) fn import_lft(
+        &mut self,
+        export: LayerExport,
+        resources: &ImportResources,
+    ) -> result::Result<(), ImportError> {
+        let mut result = Ok(());
+
+        // Sanity checks: Is the layer empty, others?
+        if self.ft.num_flows() != 0 {
+            return Err(ImportError::LayerNotEmpty(self.name));
+        }
+
+        for pair in export.pairs {
+            let descriptor = match pair.descriptor {
+                Some(spec) => {
+                    match import_descriptor_from_spec(
+                        spec,
+                        &pair.flow_out,
+                        resources,
+                    ) {
+                        Ok(desc) => ActionDescEntry::Desc(desc),
+                        Err(e) => {
+                            result = Err(e);
+                            break;
+                        }
+                    }
+                }
+                None => ActionDescEntry::NoOp,
+            };
+
+            // Make sure we have space for this new entry and add it.
+            // self.ft.check_for_space().map_err(ImportError::Layer)?;
+            let (_, _) =
+                self.ft.add_pair(descriptor, pair.flow_in, pair.flow_out);
+
+            // TODO-completeness: Stats, counter, update last hit time.
+        }
+
+        // We hit an error, completely clear the state so we can start over.
+        if result.is_err() {
+            self.ft.clear();
+        }
+        result
     }
 
     fn gen_desc_fail_probe(

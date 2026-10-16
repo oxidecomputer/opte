@@ -40,6 +40,11 @@ use super::port::meta::ActionMeta;
 use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use crate::ddi::mblk::MsgBlk;
+use crate::engine::export::ActionDescExport;
+use crate::engine::layer::LayerError;
+use crate::engine::nat::VerifyAddr;
+use crate::engine::snat::ConcreteIpAddr;
+use crate::engine::snat::NatPool;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::string::String;
@@ -71,6 +76,9 @@ use ingot::types::Read;
 use ingot::udp::Udp;
 use ingot::udp::UdpMut;
 use opte_api::Direction;
+use opte_api::IpAddr;
+use opte_api::Ipv4Addr;
+use opte_api::Ipv6Addr;
 use opte_api::RuleDump;
 use serde::Deserialize;
 use serde::Serialize;
@@ -204,6 +212,12 @@ pub trait ActionDesc: Send + Sync {
     fn is_valid(&self) -> bool {
         false
     }
+
+    /// Export this action descriptor.
+    ///
+    /// By returning `None`, the implementor means that no data should be
+    /// exported, and so no corresponding entry could be exported either.
+    fn export(&self) -> Option<ActionDescExport>;
 }
 
 impl fmt::Debug for dyn ActionDesc {
@@ -216,6 +230,56 @@ impl Display for dyn ActionDesc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.name())
     }
+}
+
+/// A trait indicating that an action descriptor can be exported.
+pub trait ExportableDesc: Sized {
+    type Spec: Into<ActionDescExport>;
+
+    /// Return the exportable spec for this action.
+    fn spec(&self) -> Self::Spec;
+
+    /// Construct self from an exported spec.
+    fn from_spec(
+        spec: Self::Spec,
+        flow: &InnerFlowId,
+        resources: &ImportResources,
+    ) -> Result<Self, ImportError>;
+}
+
+/// An error importing a descriptor from an exported spec.
+#[derive(Debug)]
+pub enum ImportError {
+    /// The resource pool could not honor the claim on its resources.
+    Resource(ResourceError),
+    /// The address family in the spec doesn't match the descriptor.
+    AddrFamily,
+    /// The external IP in the spec doesn't exist on the import destination.
+    ExternalIpNotFound(IpAddr),
+    /// The import destination doesn't have the resource needed by the spec at
+    /// all. E.g., we're trying to import an SNAT descriptor, and we have no
+    /// SNAT pool.
+    MissingResource { kind: &'static str },
+    /// The layer into which we're importing data isn't empty.
+    LayerNotEmpty(&'static str),
+    /// Error importing at a layer
+    Layer(LayerError),
+}
+
+/// Resources on an import destination that importable resources can claim from.
+///
+/// E.g., NAT pool entries on the destination port.
+pub struct ImportResources {
+    pub snat4: Option<SNatPools<Ipv4Addr>>,
+    pub snat6: Option<SNatPools<Ipv6Addr>>,
+    pub verifier: Option<Arc<dyn VerifyAddr>>,
+}
+
+/// The SNAT pools for each protocol, for a single address version.
+pub struct SNatPools<T: ConcreteIpAddr> {
+    pub icmp: Arc<NatPool<T>>,
+    pub udp: Arc<NatPool<T>>,
+    pub tcp: Arc<NatPool<T>>,
 }
 
 #[derive(Debug)]
@@ -258,6 +322,10 @@ impl ActionDesc for IdentityDesc {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn export(&self) -> Option<ActionDescExport> {
+        None
     }
 }
 

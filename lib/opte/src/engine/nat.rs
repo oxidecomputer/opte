@@ -6,6 +6,7 @@
 
 //! 1:1 NAT.
 
+use super::export::ActionDescExport;
 use super::headers::HeaderAction;
 use super::headers::IpMod;
 use super::ip::v4::Ipv4Mut;
@@ -31,6 +32,10 @@ use super::rule::AllowOrDeny;
 use super::rule::HdrTransform;
 use super::rule::MetaAction;
 use super::rule::StatefulAction;
+use crate::engine::export::NatSpec;
+use crate::engine::rule::ExportableDesc;
+use crate::engine::rule::ImportError;
+use crate::engine::rule::ImportResources;
 use crate::engine::snat::ConcreteIpAddr;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
@@ -259,6 +264,38 @@ impl ActionDesc for NatDesc {
             ) => Ok(Some(Box::new(IcmpV6Nat { priv_ip, external_ip }))),
             _ => Ok(None),
         }
+    }
+
+    fn export(&self) -> Option<ActionDescExport> {
+        Some(self.spec().into())
+    }
+}
+
+impl ExportableDesc for NatDesc {
+    type Spec = NatSpec;
+
+    fn spec(&self) -> Self::Spec {
+        NatSpec { private_ip: self.priv_ip, external_ip: self.external_ip }
+    }
+
+    fn from_spec(
+        spec: Self::Spec,
+        _: &InnerFlowId,
+        resources: &ImportResources,
+    ) -> Result<Self, ImportError> {
+        let verifier = resources.verifier.clone().ok_or_else(|| {
+            ImportError::MissingResource { kind: "NAT verifier" }
+        })?;
+        // We have to check that the external IP this spec indicates is actually
+        // attached at the import destination.
+        if !verifier.is_addr_valid(&spec.external_ip) {
+            return Err(ImportError::ExternalIpNotFound(spec.external_ip));
+        }
+        Ok(NatDesc {
+            priv_ip: spec.private_ip,
+            external_ip: spec.external_ip,
+            verifier,
+        })
     }
 }
 
