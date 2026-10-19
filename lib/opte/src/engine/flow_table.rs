@@ -417,6 +417,14 @@ impl<S: FlowState> FlowTable<S> {
 
     // Clear all entries from the flow table.
     pub fn clear(&mut self) {
+        core::mem::take(&mut self.map)
+            .into_values()
+            .for_each(|v| FlowEntry::on_remove(&v));
+    }
+
+    // Clear all entries from the flow table without explicitly marking
+    // each entry as `Dead`.
+    pub fn clear_raw(&mut self) {
         self.map.clear()
     }
 
@@ -491,8 +499,7 @@ impl<S: FlowState> FlowTable<S> {
                     entry.last_hit(),
                     Some(now),
                 );
-                entry.mark_dead();
-                entry.expiry_cleanup();
+                FlowEntry::on_remove(entry);
 
                 return false;
             }
@@ -555,8 +562,7 @@ impl<S: FlowState> FlowTable<S> {
                     entry.last_hit(),
                     Some(now),
                 );
-                entry.mark_dead();
-                entry.expiry_cleanup();
+                FlowEntry::on_remove(entry);
 
                 // The partner flow is guaranteed to have the same lifetime.
                 let partner_flow = extractor(entry.state());
@@ -742,10 +748,7 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     pub fn remove(&mut self, flow: &InnerFlowId) -> Option<Arc<FlowEntry<S>>> {
-        self.map.remove(flow).inspect(|v| {
-            v.mark_dead();
-            v.expiry_cleanup();
-        })
+        self.map.remove(flow).inspect(FlowEntry::on_remove)
     }
 
     pub fn remove_if(
@@ -755,9 +758,7 @@ impl<S: FlowState> FlowTable<S> {
     ) -> Option<Arc<FlowEntry<S>>> {
         match self.map.entry(flow) {
             Entry::Occupied(v) if f(v.get()) => {
-                let el = v.get();
-                el.mark_dead();
-                el.expiry_cleanup();
+                FlowEntry::on_remove(v.get());
                 Some(v.remove())
             }
             _ => None,
@@ -834,7 +835,7 @@ enum Liveness {
 impl Liveness {
     const MAX_HOLDS: u8 = 0b0011_1111;
 
-    #[cfg(any(feature = "std", test))]
+    #[cfg(any(feature = "test-help", test))]
     fn is_larval(&self) -> bool {
         matches!(self, Self::Larval { .. })
     }
@@ -843,7 +844,7 @@ impl Liveness {
         matches!(self, Self::Dead)
     }
 
-    #[cfg(any(feature = "std", test))]
+    #[cfg(any(feature = "test-help", test))]
     fn is_held(&self) -> bool {
         self.holds().is_some_and(|n| n > 0)
     }
@@ -856,7 +857,7 @@ impl Liveness {
         }
     }
 
-    #[cfg(any(feature = "std", test))]
+    #[cfg(any(feature = "test-help", test))]
     fn holds(&self) -> Option<u8> {
         match self {
             Liveness::Larval { holds } => Some(*holds),
@@ -1115,9 +1116,12 @@ impl<S: FlowState> FlowEntry<S> {
         self.policy.is_expired(self, now)
     }
 
-    /// Update the last hit time of this flow entry's parents if it has been
-    /// used more recently, and remove any of their references to `self`.
-    fn expiry_cleanup(self: &Arc<Self>) {
+    /// Transition this flow entry's state to `Dead`, update the last hit time
+    /// of its parents if it has been used more recently than they have, and
+    /// remove any of their references to `self`.
+    fn on_remove(self: &Arc<Self>) {
+        self.mark_dead();
+
         let my_time = self.last_hit();
         let dyn_entry = Arc::clone(self) as Arc<dyn FlowEntryInfo>;
         for parent in self.state.parents() {

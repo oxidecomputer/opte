@@ -234,7 +234,7 @@ impl LayerFlowTable {
     /// Clear all flow table entries.
     fn clear(&mut self) {
         self.ft_in.clear();
-        self.ft_out.clear();
+        self.ft_out.clear_raw();
         self.count = 0;
     }
 

@@ -17,7 +17,7 @@ clap.workspace = true
 criterion.workspace = true
 itertools = { workspace = true, features = ["use_std"] }
 nix.workspace = true
-rand.workspace = true
+rand = { workspace = true, default-features = true }
 opte.workspace = true
 opte-test-utils.workspace = true
 oxide-vpc.workspace = true
