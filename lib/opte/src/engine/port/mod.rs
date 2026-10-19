@@ -1083,7 +1083,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states.
     ///
     /// * [`PortState::Running`]
-    pub fn clear_uft(&mut self) -> Result<()> {
+    pub fn clear_uft(&self) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
         {
             let mut uft = self.uft_in.write();
@@ -1106,7 +1106,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This command is valid for the following states.
     ///
     /// * [`PortState::Running`]
-    pub fn clear_lft(&mut self, layer: &str) -> Result<()> {
+    pub fn clear_lft(&self, layer: &str) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
         let layer = self
             .layers
