@@ -74,6 +74,7 @@ use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::FlowTableAddError;
+use crate::engine::flow_table::HoldIncrementError;
 use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
@@ -1536,7 +1537,9 @@ impl<N: NetworkImpl> Port<N> {
         // If the entry is from a prior table configuration, mark it as invalid
         // and demote ourselves to the slowpath.
         let mut decision = match uft_entry {
-            Some(entry) if entry.state().epoch == epoch => {
+            Some(entry)
+                if !entry.is_killed() && entry.state().epoch == epoch =>
+            {
                 // The Fast Path.
                 let xforms = &entry.state().xforms;
                 let out = if !oversize && xforms.compiled.is_some() {
@@ -2557,13 +2560,15 @@ impl<N: NetworkImpl> Port<N> {
                     ),
                 };
 
-                match table.get(ufid_out) {
-                    Some(v) => {
-                        v.add_hold()?;
+                match table.get(ufid_out).map(|v| v.add_hold().map(|_| v)) {
+                    Some(Ok(v)) => {
                         v.hit();
                         Some(v.clone())
                     }
-                    None => {
+                    Some(Err(e @ HoldIncrementError::LivenessFull)) => {
+                        return Err(e.into());
+                    }
+                    None | Some(Err(HoldIncrementError::Dead)) => {
                         drop(read_lock);
 
                         // If we never saw an entry, we need to grab the
@@ -2608,7 +2613,7 @@ impl<N: NetworkImpl> Port<N> {
                                 .tcp_flows
                                 .set(u64::from(table.num_flows()));
                         }
-                        Some(e) => {
+                        Some(e) if !e.is_killed() => {
                             // Someone else has inserted another TCP flow state
                             // entry in the same key slot during our lock upgrade.
                             // Retry, updating and binding ourself to this state
@@ -2616,7 +2621,7 @@ impl<N: NetworkImpl> Port<N> {
                             entry = Some(Arc::clone(e));
                             continue;
                         }
-                        None => {}
+                        _ => {}
                     };
                 }
 
@@ -2739,7 +2744,7 @@ impl<N: NetworkImpl> Port<N> {
         match self.uft_out.read().get(&ufid_out) {
             // If an outbound packet has already created an outbound
             // UFT entry, make sure to pair it to this inbound entry.
-            Some(out_entry) => {
+            Some(out_entry) if !out_entry.is_killed() => {
                 // Remember, the inbound UFID is the flow as seen by
                 // the network, before any processing is done by OPTE.
                 *out_entry.state().pair.lock() = Some(*ufid_in);
@@ -2754,7 +2759,7 @@ impl<N: NetworkImpl> Port<N> {
             // packet is the first one for a given flow (because OPTE
             // cannot assume symmetric UFIDs between inbound and
             // outbound).
-            None => (),
+            _ => {}
         }
 
         // For inbound traffic the TCP flow table must be
@@ -3086,14 +3091,18 @@ impl<N: NetworkImpl> Port<N> {
 
         if let Some(ufid_in) = ufid_in {
             let mut uft = self.uft_in.write();
-            uft.remove_if(*ufid_in, |v| v.state().epoch < epoch);
+            uft.remove_if(*ufid_in, |v| {
+                v.is_killed() || v.state().epoch < epoch
+            });
             self.stats.vals.in_uft_flows.set(u64::from(uft.num_flows()));
             self.uft_invalidate_probe(Direction::In, ufid_in, epoch);
         }
 
         if let Some(ufid_out) = ufid_out {
             let mut uft = self.uft_out.write();
-            uft.remove_if(*ufid_out, |v| v.state().epoch < epoch);
+            uft.remove_if(*ufid_out, |v| {
+                v.is_killed() || v.state().epoch < epoch
+            });
             self.stats.vals.out_uft_flows.set(u64::from(uft.num_flows()));
             self.uft_invalidate_probe(Direction::Out, ufid_out, epoch);
         }

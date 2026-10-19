@@ -67,14 +67,27 @@ use opte_api::RuleTableEntryDump;
 #[derive(Debug)]
 pub enum LayerError {
     BodyTransform(BodyTransformError),
-    FlowTableFull { layer: &'static str, dir: Direction },
+    FlowTableFull {
+        layer: &'static str,
+        dir: Direction,
+    },
     GenDesc(rule::GenDescError),
     GenBodyTransform(GenBtError),
-    GenHdrTransform { layer: &'static str, err: rule::GenHtError },
+    GenHdrTransform {
+        layer: &'static str,
+        err: rule::GenHtError,
+    },
     GenPacket(rule::GenErr),
     HeaderTransform(HdrTransformError),
     ModMeta(String),
+    /// A flow entry had more than the maximum number of parallel slowpath holds.
     EntryTooBusy,
+    /// A flow entry was unexpectedly moved to `Dead`.
+    ///
+    /// This should never occur for a layer -- UFT and TCP entries will never
+    /// mark their parents as killed, and all their cleanup and slowpath
+    /// processing occur under a write lock.
+    UnexpectedlyKilled,
 }
 
 impl From<GenBtError> for LayerError {
@@ -255,7 +268,7 @@ impl LayerFlowTable {
 
     fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
         match self.ft_in.get(flow) {
-            Some(entry) => {
+            Some(entry) if !entry.is_killed() => {
                 entry.hit();
                 if entry.is_dirty() {
                     EntryState::Dirty(entry)
@@ -263,13 +276,13 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 }
             }
-            None => EntryState::None,
+            _ => EntryState::None,
         }
     }
 
     fn get_out(&self, flow: &InnerFlowId) -> EntryState<'_, LftOutEntry> {
         match self.ft_out.get(flow) {
-            Some(entry) => {
+            Some(entry) if !entry.is_killed() => {
                 entry.hit();
                 if entry.is_dirty() {
                     EntryState::Dirty(entry)
@@ -277,7 +290,7 @@ impl LayerFlowTable {
                     EntryState::Clean(entry)
                 }
             }
-            None => EntryState::None,
+            _ => EntryState::None,
         }
     }
 
@@ -1166,9 +1179,9 @@ impl Layer {
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
+                    action.mark_clean();
                     action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
-                    action.mark_clean();
                     Some(ActionDescEntry::Desc(desc))
                 } else {
                     // NoOps are included in this case as we can't ask the actor
@@ -1590,7 +1603,7 @@ impl Layer {
     }
 
     /// Test helper for single-threaded execution to verify that all flows
-    /// in the layer are `Ready` or `Dead`.
+    /// in the layer are `Ready` or `Dead`, with no leftover holds.
     ///
     /// Panics if any flows are `Larval`.
     #[cfg(any(feature = "test-help", test))]

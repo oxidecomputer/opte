@@ -650,7 +650,7 @@ pub struct XdeDev {
     // XXX Ideally the xde driver would be a generic driver which
     // could setup ports for any number of network implementations.
     // However, that's not where things are today.
-    port: KRwLock<Port<VpcNetwork>>, // TODO: shard by CPU?
+    port: KRwLock<Port<VpcNetwork>>,
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
@@ -3535,8 +3535,7 @@ fn new_port(
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork::new(cfg, v2b);
-    let port = pb.create(net, limit, limit)?;
-    Ok(port)
+    pb.create(net, limit, limit).map_err(Into::into)
 }
 
 #[unsafe(no_mangle)]
@@ -4594,7 +4593,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.write().clear_uft()?;
+    dev.port.read().clear_uft()?;
     Ok(NoResp::default())
 }
 
@@ -4607,7 +4606,7 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.write().clear_lft(&req.layer_name)?;
+    dev.port.read().clear_lft(&req.layer_name)?;
     Ok(NoResp::default())
 }
 

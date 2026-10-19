@@ -186,7 +186,8 @@ pub(super) trait FlowEntryInfo: fmt::Debug + Send + Sync {
     /// as being invalid.
     fn mark_dead(&self);
 
-    /// XXX
+    /// Mark this flow entry as having completed slowpath processing, removing
+    /// the existing hold and transitioning its state to `Ready`.
     fn mark_ready(&self);
 }
 
@@ -262,16 +263,13 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     }
 
     fn remove_child(&self, child: &Arc<dyn FlowEntryInfo>) {
-        // TODO(ky): comment on lock safety here.
-        //    (one at a time)
-        //    (only called by non LFTs?)
         let mut children = self.lifetime.children.write();
         children.remove(&ByAddr(Arc::downgrade(child)));
         self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
     }
 
     fn mark_dead(&self) {
-        // Unwrap safety: all stored values must be valid `FlowStateLiveness`.
+        // Unwrap safety: all stored values must be valid `Liveness`.
         let old_state = Liveness::from(
             self.lifetime.state.swap(Liveness::Dead.into(), Ordering::Relaxed),
         );
@@ -299,9 +297,13 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
+/// Errors encountered when trying to add an element to a flow entry.
 #[derive(Copy, Clone, Debug)]
 pub enum FlowTableAddError {
+    /// There is no space in the table to contain a new entry. The table's
+    /// capacity is returned.
     MaxCapacity(u64),
+    /// An entry is already present in the table with the same key.
     Existing,
 }
 
@@ -345,7 +347,7 @@ impl<S: FlowState> FlowTable<S> {
     /// [`Self::find_evictable_entry`] will consider.
     const EVICTION_CACHE_MAX: usize = 512;
 
-    /// Add a new entry to the flow table, returning a shared refrence to
+    /// Add a new entry to the flow table, returning a shared reference to
     /// the entry.
     ///
     /// # Errors
@@ -353,7 +355,8 @@ impl<S: FlowState> FlowTable<S> {
     /// If the table is at max capacity, an error is returned and no
     /// modification is made to the table.
     ///
-    /// If an entry already exists for this flow, it is overwritten.
+    /// If an entry already exists for this flow, an error is returned
+    /// if that flow is in a `Larval` or `Ready` state..
     pub fn add(
         &mut self,
         flow_id: InnerFlowId,
@@ -436,6 +439,8 @@ impl<S: FlowState> FlowTable<S> {
         flows
     }
 
+    /// Remove a flow from the flowtable, firing a flow expiry DTrace
+    /// probe if successful.
     pub(crate) fn expire(&mut self, flowid: &InnerFlowId) {
         if let Some(el) = self.map.remove(flowid) {
             flow_expired_probe(
@@ -480,6 +485,10 @@ impl<S: FlowState> FlowTable<S> {
             // The dangling entries here will have been left by `expire_flows`
             // called on other layers.
             {
+                // Any contention here will come from evictions occurring
+                // on a higher-level table: e.g., datapath evictions happening
+                // in the UFT/TCP tables, while this operation occurs on an
+                // LFT.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
                 entry
@@ -491,7 +500,7 @@ impl<S: FlowState> FlowTable<S> {
                 }
             }
 
-            if liveness == Liveness::Dead || entry.is_expired(now) {
+            if liveness.is_dead() || entry.is_expired(now) {
                 flow_expired_probe(
                     self.port.as_c8_str(),
                     name_c,
@@ -543,6 +552,10 @@ impl<S: FlowState> FlowTable<S> {
             // The dangling entries here will have been left by `expire_flows`
             // called on other layers.
             {
+                // Any contention here will come from evictions occurring
+                // on a higher-level table: e.g., datapath evictions happening
+                // in the UFT/TCP tables, while this operation occurs on an
+                // LFT.
                 let mut children = entry.lifetime.children.write();
                 children.retain(|el| el.0.upgrade().is_some());
                 entry
@@ -565,10 +578,11 @@ impl<S: FlowState> FlowTable<S> {
                 FlowEntry::on_remove(entry);
 
                 // The partner flow is guaranteed to have the same lifetime.
+                // Accordingly, we don't need to call `on_remove` against it.
                 let partner_flow = extractor(entry.state());
                 #[cfg(debug_assertions)]
                 {
-                    if let Some(other) = partner.get(&partner_flow) {
+                    if let Some(other) = partner.map.get(&partner_flow) {
                         assert!(Arc::ptr_eq(&entry.lifetime, &other.lifetime))
                     }
                 }
@@ -705,9 +719,6 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     /// Get a reference to the flow entry for a given flow, if one exists.
-    ///
-    /// This method will not return an entry if the existing entry is marked
-    /// `Dead`, and will return an error if the entry has not been finalised.
     pub fn get(&self, flow_id: &InnerFlowId) -> Option<&Arc<FlowEntry<S>>> {
         self.map.get(flow_id)
     }
@@ -820,35 +831,65 @@ pub(super) trait FlowState: Dump + 'static {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// XXX
+/// The current lifecycle state of a flow entry.
 ///
-/// Valid transitions: Larval -> Ready
-///                         \     /
-///                          v   v
-///                          Dead
+/// This comprises a current state (larval, ready, or dead), and a number of
+/// holds created from the slowpath which are currently using this entry. This
+/// affects when flows can be used, removed, and evicted from the datpath and
+/// cleanup contexts.
+///
+/// Flow entries are created in a `Larval` state with one hold. When
+/// slowpath processing concludes, the flow is moved to `Ready` and this
+/// hold is released. Existing LFTs, when acquired, will begin in a
+/// `Ready` state and should take an additional hold.
+///
+/// A flow may transition:
+///  * `Larval` -> `Ready`,
+///  * `Larval` -> `Dead`,
+///  * `Ready` -> `Dead`.
 enum Liveness {
+    /// This flow entry has been created but has not yet been finalised by
+    /// a packet reaching the end of its processing. It is ineligible for
+    /// eviction or expiry.
+    ///
+    /// This entry is eligible for removal at the end of slowpath processing if
+    /// it has a single hold, and the packet encounters an error or is
+    /// explicitly denied.
     Larval { holds: u8 },
+    /// A packet using this flow entry has made it to the end of its processing
+    /// and the flow is eligible for eviction and/or expiry if it has no holds.
     Ready { holds: u8 },
+    /// This flow entry has been killed, either because one of its parents
+    /// has been evicted or it has itself expired and been removed from the
+    /// flow table.
+    ///
+    /// When detected, such flows should not be used,
     Dead,
 }
 
 impl Liveness {
+    // This type's 3 states require 2 bits to represent the discriminant.
+    // The remaining 6 contain the hold count.
     const MAX_HOLDS: u8 = 0b0011_1111;
 
+    /// Return whether this flow is in a larval state.
     #[cfg(any(feature = "test-help", test))]
     fn is_larval(&self) -> bool {
         matches!(self, Self::Larval { .. })
     }
 
+    /// Return whether this flow has been killed.
     fn is_dead(&self) -> bool {
         matches!(self, Self::Dead)
     }
 
+    /// Return whether this flow has any active slowpath holds.
     #[cfg(any(feature = "test-help", test))]
     fn is_held(&self) -> bool {
         self.holds().is_some_and(|n| n > 0)
     }
 
+    /// Return whether this flow is eligible for eviction/expiry.
     fn is_protected(&self) -> bool {
         match self {
             Self::Larval { .. } => true,
@@ -857,6 +898,7 @@ impl Liveness {
         }
     }
 
+    /// Return whether the number of active slowpath holds.
     #[cfg(any(feature = "test-help", test))]
     fn holds(&self) -> Option<u8> {
         match self {
@@ -866,20 +908,24 @@ impl Liveness {
         }
     }
 
-    fn increment_holds(mut self) -> Result<Self, LivenessFull> {
+    /// Increment the hold count on a state, returning the target state when
+    /// this is a valid transition.
+    fn increment_holds(mut self) -> Result<Self, HoldIncrementError> {
         let slot = match &mut self {
             Liveness::Larval { holds } => holds,
             Liveness::Ready { holds } => holds,
-            Liveness::Dead => return Ok(self),
+            Liveness::Dead => return Err(HoldIncrementError::Dead),
         };
         if *slot < Self::MAX_HOLDS {
             *slot += 1;
             Ok(self)
         } else {
-            Err(LivenessFull)
+            Err(HoldIncrementError::LivenessFull)
         }
     }
 
+    /// Remove one hold from a flow state in a live or larval state, returning
+    /// the target state this flow should have.
     fn decrement_holds(mut self) -> Self {
         let slot = match &mut self {
             Liveness::Larval { holds } => holds,
@@ -892,6 +938,8 @@ impl Liveness {
         self
     }
 
+    /// Move this flow from a larval to ready state at the end of datapath
+    /// processing, removing one hold in either state.
     fn transition_to_ready(self) -> Self {
         match self {
             Liveness::Larval { holds } => Liveness::Ready { holds },
@@ -907,18 +955,26 @@ impl Default for Liveness {
     }
 }
 
-/// A `FlowEntry` has too many threads attempting to hold it parallel.
+/// Errors encountered by [`Liveness::increment_holds`].
 #[derive(Copy, Clone, Debug)]
-pub(crate) struct LivenessFull;
+pub(super) enum HoldIncrementError {
+    /// A `FlowEntry` has too many threads attempting to hold it parallel.
+    LivenessFull,
+    /// The entry has been moved to the `Dead` state by another thread.
+    Dead,
+}
 
-impl From<LivenessFull> for LayerError {
-    fn from(_: LivenessFull) -> Self {
-        LayerError::EntryTooBusy
+impl From<HoldIncrementError> for LayerError {
+    fn from(value: HoldIncrementError) -> Self {
+        match value {
+            HoldIncrementError::LivenessFull => LayerError::EntryTooBusy,
+            HoldIncrementError::Dead => LayerError::UnexpectedlyKilled,
+        }
     }
 }
 
-impl From<LivenessFull> for ProcessError {
-    fn from(value: LivenessFull) -> Self {
+impl From<HoldIncrementError> for ProcessError {
+    fn from(value: HoldIncrementError) -> Self {
         ProcessError::Layer(value.into())
     }
 }
@@ -969,7 +1025,7 @@ struct FlowLifetime {
 
     /// Whether this flow entry has been explicitly removed.
     ///
-    /// Is a [`FlowStateLiveness`].
+    /// Is a [`Liveness`].
     state: AtomicU8,
 
     /// An estimate of the number of elements in [`Self::children`], used
@@ -1153,14 +1209,20 @@ impl<S: FlowState> FlowEntry<S> {
     /// This function *should* be called with a read or write lock on the
     /// `FlowEntry`'s enclosing table to ensure that another thread cannot
     /// see it with a zeroed hold count in the table.
-    pub(super) fn add_hold(&self) -> Result<(), LivenessFull> {
+    pub(super) fn add_hold(&self) -> Result<(), HoldIncrementError> {
+        let mut err = None;
         self.lifetime
             .state
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                 let curr = Liveness::from(v);
-                curr.increment_holds().ok().map(Into::into)
+                curr.increment_holds()
+                    .inspect_err(|v| err = Some(*v))
+                    .ok()
+                    .map(Into::into)
             })
-            .map_err(|_| LivenessFull)
+            .map_err(|_| {
+                err.take().expect("err must have been set in `try_update`")
+            })
             .map(|_| ())
     }
 
@@ -1256,7 +1318,7 @@ fn update_eviction_incumbent<'a, S: FlowState>(
     // We may be visiting this entry before the periodic task is able to reap
     // it. If so, we have a max-priority candidate, due to it losing either the
     // support of a crucial LFT or timer expiry.
-    if liveness == Liveness::Dead
+    if liveness.is_dead()
         || (entry.lifetime.n_children.load(Ordering::Relaxed) > 0
             && entry.is_expired(now))
     {
