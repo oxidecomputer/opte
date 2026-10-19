@@ -228,14 +228,6 @@ pub trait NetworkImpl {
     /// take in regards to the input packet. That response is dictated
     /// by the [`HdlPktAction`] value.
     ///
-    /// XXX WE NO LONGER DO THE BELOW. SHARDING WOULD BREAK THIS.
-    /// XXX IF THIS IS NEEDED WE NEED ANOTHER INTERFACE.
-    ///
-    /// This callback is given access to both the inbound and outbound
-    /// UFT tables. This can be useful for handling certain types of
-    /// traffic, such as ICMP DU, where you may want to match parts of
-    /// the packet body with flow state.
-    ///
     /// # Errors
     ///
     /// As this is a general mechanism, the handler may fail for a
