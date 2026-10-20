@@ -14,7 +14,6 @@ use crate::ddi::sync::KRwLock;
 use crate::ddi::time::MILLIS;
 use crate::ddi::time::Moment;
 use crate::engine::layer::LayerError;
-use crate::engine::port::ProcessError;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::collections::btree_map::Entry;
@@ -305,6 +304,21 @@ pub enum FlowTableAddError {
     MaxCapacity(u64),
     /// An entry is already present in the table with the same key.
     Existing,
+}
+
+/// Errors encountered when trying to add an element to a flow entry.
+#[derive(Copy, Clone, Debug)]
+pub enum FlowTableGetError {
+    /// A `FlowEntry` has too many threads attempting to hold it parallel.
+    LivenessFull,
+}
+
+impl From<FlowTableGetError> for LayerError {
+    fn from(value: FlowTableGetError) -> Self {
+        match value {
+            FlowTableGetError::LivenessFull => LayerError::EntryTooBusy,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -719,8 +733,30 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     /// Get a reference to the flow entry for a given flow, if one exists.
+    ///
+    /// This method will return flows even if they are `Dead`.
     pub fn get(&self, flow_id: &InnerFlowId) -> Option<&Arc<FlowEntry<S>>> {
         self.map.get(flow_id)
+    }
+
+    /// Get a reference to the flow entry for a given flow, if one exists,
+    /// incrementing its hold count while doing so.
+    ///
+    /// This method will return `Ok(None)` if an entry is marked as dead, and
+    /// will only return an error if the flow has too many parallel holds.
+    /// Callers which want to see and handle `Dead` entries  should combine
+    /// [`Self::get`] with [`FlowEntry::is_killed`].
+    pub fn get_and_hold(
+        &self,
+        flow_id: &InnerFlowId,
+    ) -> Result<Option<&Arc<FlowEntry<S>>>, FlowTableGetError> {
+        match self.get(flow_id).map(|v| v.add_hold().map(|_| v)) {
+            Some(Ok(v)) => Ok(Some(v)),
+            Some(Err(HoldIncrementError::LivenessFull)) => {
+                Err(FlowTableGetError::LivenessFull)
+            }
+            None | Some(Err(HoldIncrementError::Dead)) => Ok(None),
+        }
     }
 
     /// Mark all flow table entries as requiring revalidation after a
@@ -962,21 +998,6 @@ pub(super) enum HoldIncrementError {
     LivenessFull,
     /// The entry has been moved to the `Dead` state by another thread.
     Dead,
-}
-
-impl From<HoldIncrementError> for LayerError {
-    fn from(value: HoldIncrementError) -> Self {
-        match value {
-            HoldIncrementError::LivenessFull => LayerError::EntryTooBusy,
-            HoldIncrementError::Dead => LayerError::UnexpectedlyKilled,
-        }
-    }
-}
-
-impl From<HoldIncrementError> for ProcessError {
-    fn from(value: HoldIncrementError) -> Self {
-        ProcessError::Layer(value.into())
-    }
 }
 
 impl From<u8> for Liveness {
