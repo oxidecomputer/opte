@@ -266,31 +266,37 @@ impl LayerFlowTable {
         self.count = self.ft_out.num_flows();
     }
 
-    fn get_in(&self, flow: &InnerFlowId) -> EntryState<'_, ActionDescEntry> {
-        match self.ft_in.get(flow) {
-            Some(entry) if !entry.is_killed() => {
+    fn get_in(
+        &self,
+        flow: &InnerFlowId,
+    ) -> result::Result<EntryState<'_, ActionDescEntry>, LayerError> {
+        match self.ft_in.get_and_hold(flow)? {
+            Some(entry) => {
                 entry.hit();
                 if entry.is_dirty() {
-                    EntryState::Dirty(entry)
+                    Ok(EntryState::Dirty(entry))
                 } else {
-                    EntryState::Clean(entry)
+                    Ok(EntryState::Clean(entry))
                 }
             }
-            _ => EntryState::None,
+            _ => Ok(EntryState::None),
         }
     }
 
-    fn get_out(&self, flow: &InnerFlowId) -> EntryState<'_, LftOutEntry> {
-        match self.ft_out.get(flow) {
-            Some(entry) if !entry.is_killed() => {
+    fn get_out(
+        &self,
+        flow: &InnerFlowId,
+    ) -> result::Result<EntryState<'_, LftOutEntry>, LayerError> {
+        match self.ft_out.get_and_hold(flow)? {
+            Some(entry) => {
                 entry.hit();
                 if entry.is_dirty() {
-                    EntryState::Dirty(entry)
+                    Ok(EntryState::Dirty(entry))
                 } else {
-                    EntryState::Clean(entry)
+                    Ok(EntryState::Clean(entry))
                 }
             }
-            _ => EntryState::None,
+            _ => Ok(EntryState::None),
         }
     }
 
@@ -878,14 +884,13 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow_before = *pkt.flow();
-        let action = match self.ft.get_in(&flow_before) {
+        let action = match self.ft.get_in(&flow_before)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = action.state()
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     action.mark_clean();
-                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
@@ -897,7 +902,6 @@ impl Layer {
                 }
             }
             EntryState::Clean(action) => {
-                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().clone())
             }
@@ -1173,14 +1177,13 @@ impl Layer {
 
         // Do we have a FlowTable entry? If so, use it.
         let flow_before = *pkt.flow();
-        let action = match self.ft.get_out(&flow_before) {
+        let action = match self.ft.get_out(&flow_before)? {
             EntryState::Dirty(action) => {
                 if let ActionDescEntry::Desc(desc) = &action.state().action_desc
                     && desc.is_valid()
                 {
                     let desc = Arc::clone(desc);
                     action.mark_clean();
-                    action.add_hold()?;
                     pkt.record_lft(Arc::clone(action) as _);
                     Some(ActionDescEntry::Desc(desc))
                 } else {
@@ -1192,7 +1195,6 @@ impl Layer {
                 }
             }
             EntryState::Clean(action) => {
-                action.add_hold()?;
                 pkt.record_lft(Arc::clone(action) as _);
                 Some(action.state().action_desc.clone())
             }

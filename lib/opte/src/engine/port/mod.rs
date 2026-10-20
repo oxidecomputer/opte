@@ -74,7 +74,7 @@ use crate::engine::flow_table::FLOW_DEF_TTL;
 use crate::engine::flow_table::FlowEntryInfo;
 use crate::engine::flow_table::FlowState;
 use crate::engine::flow_table::FlowTableAddError;
-use crate::engine::flow_table::HoldIncrementError;
+use crate::engine::flow_table::FlowTableGetError;
 use crate::engine::flow_table::util;
 use crate::engine::headers::Valid;
 use crate::engine::packet::EmitSpec;
@@ -159,6 +159,16 @@ impl From<BodyTransformError> for ProcessError {
 impl From<HdrTransformError> for ProcessError {
     fn from(e: HdrTransformError) -> Self {
         Self::HdrTransform(e)
+    }
+}
+
+impl From<FlowTableGetError> for ProcessError {
+    fn from(value: FlowTableGetError) -> Self {
+        match value {
+            FlowTableGetError::LivenessFull => {
+                ProcessError::Layer(LayerError::EntryTooBusy)
+            }
+        }
     }
 }
 
@@ -2560,15 +2570,12 @@ impl<N: NetworkImpl> Port<N> {
                     ),
                 };
 
-                match table.get(ufid_out).map(|v| v.add_hold().map(|_| v)) {
-                    Some(Ok(v)) => {
+                match table.get_and_hold(ufid_out)? {
+                    Some(v) => {
                         v.hit();
                         Some(v.clone())
                     }
-                    Some(Err(e @ HoldIncrementError::LivenessFull)) => {
-                        return Err(e.into());
-                    }
-                    None | Some(Err(HoldIncrementError::Dead)) => {
+                    None => {
                         drop(read_lock);
 
                         // If we never saw an entry, we need to grab the
