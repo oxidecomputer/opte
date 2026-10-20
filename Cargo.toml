@@ -41,6 +41,7 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
+c8str = { version = "0.2.1", features = ["alloc"] }
 cargo_metadata = "0.23"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }

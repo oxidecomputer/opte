@@ -17,6 +17,7 @@ pub mod pcap;
 pub mod port_state;
 
 // Let's make our lives easier and pub use a bunch of stuff.
+use c8str::C8String;
 pub use opte::ExecCtx;
 pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
@@ -274,14 +275,10 @@ fn oxide_net_builder(
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
     let ectx = Arc::new(ExecCtx { log: Box::new(opte::PrintlnLog {}) });
-    let name_cstr = std::ffi::CString::new(name).unwrap();
-    let mut pb = PortBuilder::new(
-        name,
-        name_cstr,
-        cfg.guest_mac,
-        ectx,
-        NonZeroU32::new(cfg.mtu),
-    );
+    let name =
+        Arc::from(C8String::from_string(name).unwrap().into_boxed_c8_str());
+    let mut pb =
+        PortBuilder::new(name, cfg.guest_mac, ectx, NonZeroU32::new(cfg.mtu));
 
     let fw_limit = flow_table_limits.unwrap_or(NonZeroU32::new(8096).unwrap());
     let snat_limit =

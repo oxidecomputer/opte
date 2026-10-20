@@ -14,6 +14,7 @@ oxide-vpc = { workspace = true, features = ["engine", "kernel"], default-feature
 ingot.workspace = true
 
 bitflags.workspace = true
+c8str.workspace = true
 crc32fast.workspace = true
 heapless.workspace = true
 postcard.workspace = true
