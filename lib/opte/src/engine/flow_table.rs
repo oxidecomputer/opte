@@ -794,10 +794,13 @@ impl<S: FlowState> FlowTable<S> {
         self.map.len() as u32
     }
 
+    /// Remove an entry from this table using a given key, `flow`.
     pub fn remove(&mut self, flow: &InnerFlowId) -> Option<Arc<FlowEntry<S>>> {
         self.map.remove(flow).inspect(FlowEntry::on_remove)
     }
 
+    /// Remove an entry from this table using a given key, `flow` if it
+    /// satisfies a given predicate `f`.
     pub fn remove_if(
         &mut self,
         flow: InnerFlowId,
