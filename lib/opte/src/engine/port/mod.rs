@@ -2177,9 +2177,9 @@ impl fmt::Debug for Transforms {
 // organization.
 impl<N: NetworkImpl> Port<N> {
     // Process the packet against each layer in turn. If `Allow` is
-    // returned, then `meta` contains the updated metadata, and `hts`
-    // contains the list of header transformations to run against the
-    // metadata.
+    // returned, then `meta` contains the updated metadata, and `xforms`
+    // contains the list of all transformations to run against the
+    // packet, including header and body transformations.
     //
     // Processing may return early for several reasons.
     //
@@ -2187,6 +2187,10 @@ impl<N: NetworkImpl> Port<N> {
     // packet is dropped and no further processing is done.
     //
     // * Hairpin: A layer has generated a hairpin packet.
+    //
+    // * HandlePkt: The network impl decided to handle the packet directly,
+    // rather than going through the usual layer actions. This results in
+    // calling `NetworkImpl::handle_pkt()` on the packet.
     //
     // * Error: An error has ocurred and processing cannot continue.
     fn layers_process(
@@ -2551,6 +2555,12 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    /// Process an inbound packet which does not have a UFT entry.
+    ///
+    /// This is called when we miss a lookup into the UFT for a packet. It
+    /// applies the transformations from each individual layer flow table, and
+    /// then possibly compiles the resulting transformation into a new UFT
+    /// entry.
     fn process_in_miss(
         &self,
         data: &mut PortData,
@@ -2784,6 +2794,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    /// Process an outbound packet which does not have a UFT entry.
     fn process_out_miss(
         &self,
         data: &mut PortData,

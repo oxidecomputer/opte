@@ -145,6 +145,35 @@ pub trait FiniteResource: Resource {
         })
     }
 
+    /// Try to reclaim a specific entry for a key.
+    ///
+    /// This is used when exporting / importing state between ports, and used to
+    /// try to obtain a _specific_ claim from the resource.
+    ///
+    /// # Errors
+    ///
+    /// This returns an error if the requested mapping is outside the bounds of
+    /// the resource, or if it's already in use.
+    fn reclaim_raw(
+        &self,
+        key: &Self::Key,
+        entry: Self::Entry,
+    ) -> Result<(), ResourceError>;
+
+    /// Construct a handle by reclaiming a previously-allocated resource.
+    fn reclaim(
+        self: &Arc<Self>,
+        key: &Self::Key,
+        entry: Self::Entry,
+    ) -> Result<FiniteHandle<Self>, ResourceError>
+    where
+        Self: Sized,
+        Self::Entry: Copy,
+    {
+        self.reclaim_raw(key, entry)?;
+        Ok(FiniteHandle { key: key.clone(), entry, pool: self.clone() })
+    }
+
     /// Release the entry back to the available resources.
     fn release(&self, key: &Self::Key, br: Self::Entry);
 }
@@ -728,10 +757,15 @@ pub enum HdrTransformError {
     MalformedExtension(&'static str),
 }
 
+/// An error allocating a handle to a finite resource.
 #[derive(Debug)]
 pub enum ResourceError {
+    /// The resource pool is exhausted.
     Exhausted,
+    /// The provided key or requested entry doesn't match the resource pool.
     NoMatch(String),
+    /// During a restore, the requested resource is already in use.
+    InUse(String),
 }
 
 #[derive(Clone, Debug)]
@@ -743,7 +777,7 @@ pub enum GenDescError {
 pub type GenDescResult = ActionResult<Arc<dyn ActionDesc>, GenDescError>;
 
 pub trait StatefulAction: Display + Send + Sync {
-    /// Generate a an [`ActionDesc`] based on the [`InnerFlowId`] and
+    /// Generate an [`ActionDesc`] based on the [`InnerFlowId`] and
     /// [`ActionMeta`]. This action may also add, remove, or modify
     /// metadata to communicate data to downstream actions.
     ///
@@ -867,6 +901,7 @@ pub enum AllowOrDeny<T> {
 
 pub type ActionResult<T, E> = Result<AllowOrDeny<T>, E>;
 
+/// The action taken in response to a single packet.
 #[derive(Clone)]
 pub enum Action {
     /// Allow the packet to pass.
