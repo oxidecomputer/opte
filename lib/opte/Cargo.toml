@@ -66,6 +66,7 @@ features = ["alloc", "medium-ethernet", "proto-ipv4", "proto-ipv6", "proto-dhcpv
 version_check.workspace = true
 
 [dev-dependencies]
+itertools = { workspace = true, features = ["use_std"] }
 # Enable usdt probes for testing.
 opte = { workspace = true, features = ["engine", "usdt"] }
-itertools = { workspace = true, features = ["use_std"] }
+proptest.workspace = true
