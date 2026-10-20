@@ -175,7 +175,7 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
         }
     }
 
-    fn restore_raw(
+    fn reclaim_raw(
         &self,
         priv_ip: &T,
         entry: NatPoolEntry<T>,
@@ -835,7 +835,7 @@ mod test {
             ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap()
         );
         let restored_handle =
-            ctx.restore_pool.restore(&handle1.key, handle1.entry).expect(
+            ctx.restore_pool.reclaim(&handle1.key, handle1.entry).expect(
                 "should be able to restore previous entry in an empty pool",
             );
         assert_eq!(
@@ -846,7 +846,7 @@ mod test {
         assert_eq!(handle1.entry, restored_handle.entry);
 
         // But we shouldn't be able to restore it a second time
-        let Err(err) = ctx.restore_pool.restore(&handle1.key, handle1.entry)
+        let Err(err) = ctx.restore_pool.reclaim(&handle1.key, handle1.entry)
         else {
             panic!("unexpected success restoring handle a second time");
         };
@@ -869,7 +869,7 @@ mod test {
 
         // The new pool doesn't have this private IP at all.
         let Err(err) =
-            ctx.restore_pool.restore(&unrestorable.key, unrestorable.entry)
+            ctx.restore_pool.reclaim(&unrestorable.key, unrestorable.entry)
         else {
             panic!("unexpected success restoring missing mapping");
         };
@@ -880,7 +880,7 @@ mod test {
         let key = ctx.private_ips[0];
         let Err(err) = ctx
             .restore_pool
-            .restore(&key, NatPoolEntry { ip: ctx.external_ip, port: 12000 })
+            .reclaim(&key, NatPoolEntry { ip: ctx.external_ip, port: 12000 })
         else {
             panic!(
                 "unexpected success restoring handle with out of range port"
@@ -893,7 +893,7 @@ mod test {
         let bad_ip = "1.1.1.1".parse().unwrap();
         let Err(err) = ctx
             .restore_pool
-            .restore(&key, NatPoolEntry { ip: bad_ip, port: 2000 })
+            .reclaim(&key, NatPoolEntry { ip: bad_ip, port: 2000 })
         else {
             panic!("unexpected success restoring handle with bad external IP");
         };
@@ -911,7 +911,7 @@ mod test {
         };
         let Ok(restored_handle) = ctx
             .restore_pool
-            .restore(&ctx.private_ips[0], original_handle.entry)
+            .reclaim(&ctx.private_ips[0], original_handle.entry)
         else {
             panic!("should be able to restore handle from new pool");
         };
@@ -947,7 +947,7 @@ mod test {
         // Restore the last handle in the new pool.
         let Ok(restored_handle) = ctx
             .restore_pool
-            .restore(&ctx.private_ips[0], original_handle.entry)
+            .reclaim(&ctx.private_ips[0], original_handle.entry)
         else {
             panic!("should be able to restore handle from restore pool");
         };

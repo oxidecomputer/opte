@@ -146,7 +146,7 @@ pub trait FiniteResource: Resource {
         })
     }
 
-    /// Try to restore a specific entry for a key.
+    /// Try to reclaim a specific entry for a key.
     ///
     /// This is used when exporting / importing state between ports, and used to
     /// try to obtain a _specific_ claim from the resource.
@@ -155,14 +155,14 @@ pub trait FiniteResource: Resource {
     ///
     /// This returns an error if the requested mapping is outside the bounds of
     /// the resource, or if it's already in use.
-    fn restore_raw(
+    fn reclaim_raw(
         &self,
         key: &Self::Key,
         entry: Self::Entry,
     ) -> Result<(), ResourceError>;
 
-    /// Construct a handle by restoring a resource.
-    fn restore(
+    /// Construct a handle by reclaiming a previously-allocated resource.
+    fn reclaim(
         self: &Arc<Self>,
         key: &Self::Key,
         entry: Self::Entry,
@@ -171,7 +171,7 @@ pub trait FiniteResource: Resource {
         Self: Sized,
         Self::Entry: Copy,
     {
-        self.restore_raw(key, entry)?;
+        self.reclaim_raw(key, entry)?;
         Ok(FiniteHandle { key: key.clone(), entry, pool: self.clone() })
     }
 
