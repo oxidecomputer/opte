@@ -41,7 +41,6 @@ use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use crate::ddi::mblk::MsgBlk;
 use alloc::boxed::Box;
-use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
@@ -604,7 +603,7 @@ pub struct ht_run_sdt_arg {
 }
 
 pub fn ht_probe(
-    port: &CString,
+    port: &CStr,
     loc: &CStr,
     dir: Direction,
     flow_id_before: &InnerFlowId,

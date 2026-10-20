@@ -176,7 +176,7 @@ use opte::engine::rule::Rule;
 use opte::engine::rule::StaticAction;
 use poptrie::Poptrie;
 
-pub const OVERLAY_LAYER_NAME: &str = "overlay";
+pub const OVERLAY_LAYER_NAME: &c8str::C8Str = c8str::c8!("overlay");
 
 pub fn setup(
     pb: &PortBuilder,
@@ -208,8 +208,12 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer =
-        Layer::new(OVERLAY_LAYER_NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(
+        OVERLAY_LAYER_NAME,
+        Arc::clone(pb.name()),
+        actions,
+        ft_limit,
+    );
 
     // Outbound: encapsulation (priority 1)
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
