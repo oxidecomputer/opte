@@ -141,11 +141,10 @@ pub enum ProcessError {
     /// Another packet with the same flow ID and direction created a UFT entry
     /// whilst this packet was traversing the slowpath.
     ///
-    /// This indicates a misbehaving NIC or guest which is placing packets from
-    /// a single flow on several queues.
-    FlowRace {
-        kind: &'static str,
-    },
+    /// This indicates a misbehaving NIC or guest, which is placing packets
+    /// from a single flow on several queues such that several may
+    /// simultaneously receive slowpath processing.
+    FlowRace,
 }
 
 impl From<super::HdlPktError> for ProcessError {
@@ -2818,7 +2817,7 @@ impl<N: NetworkImpl> Port<N> {
                             })
                         }
                         Err(FlowTableAddError::Existing) => {
-                            Err(ProcessError::FlowRace { kind: "UFT" })
+                            Err(ProcessError::FlowRace)
                         }
                     }
                 }
@@ -2864,9 +2863,7 @@ impl<N: NetworkImpl> Port<N> {
                 Err(FlowTableAddError::MaxCapacity(limit)) => {
                     Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                 }
-                Err(FlowTableAddError::Existing) => {
-                    Err(ProcessError::FlowRace { kind: "UFT" })
-                }
+                Err(FlowTableAddError::Existing) => Err(ProcessError::FlowRace),
             }
         }
     }
@@ -3032,7 +3029,7 @@ impl<N: NetworkImpl> Port<N> {
                         Err(ProcessError::FlowTableFull { kind: "UFT", limit })
                     }
                     Err(FlowTableAddError::Existing) => {
-                        Err(ProcessError::FlowRace { kind: "UFT" })
+                        Err(ProcessError::FlowRace)
                     }
                 }
             }

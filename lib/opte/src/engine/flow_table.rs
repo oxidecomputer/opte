@@ -289,7 +289,9 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     fn mark_ready(&self) {
         self.lifetime.state.update(Ordering::Relaxed, Ordering::Relaxed, |v| {
             let curr = Liveness::from(v);
-            u8::from(curr.transition_to_ready())
+            u8::from(curr.transition_to_ready().expect(
+                "every increment should correspond to exactly one decrement",
+            ))
         });
     }
 }
@@ -297,7 +299,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 pub type FlowTableDump<T> = Vec<(InnerFlowId, T)>;
 
 /// Errors encountered when trying to add an element to a flow entry.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FlowTableAddError {
     /// There is no space in the table to contain a new entry. The table's
     /// capacity is returned.
@@ -307,7 +309,7 @@ pub enum FlowTableAddError {
 }
 
 /// Errors encountered when trying to add an element to a flow entry.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FlowTableGetError {
     /// A `FlowEntry` has too many threads attempting to hold it parallel.
     LivenessFull,
@@ -894,10 +896,10 @@ enum Liveness {
     /// This entry is eligible for removal at the end of slowpath processing if
     /// it has a single hold, and the packet encounters an error or is
     /// explicitly denied.
-    Larval { holds: u8 },
+    Larval { holds: Holds },
     /// A packet using this flow entry has made it to the end of its processing
     /// and the flow is eligible for eviction and/or expiry if it has no holds.
-    Ready { holds: u8 },
+    Ready { holds: Holds },
     /// This flow entry has been killed, either because one of its parents
     /// has been evicted or it has itself expired and been removed from the
     /// flow table.
@@ -909,7 +911,7 @@ enum Liveness {
 impl Liveness {
     // This type's 3 states require 2 bits to represent the discriminant.
     // The remaining 6 contain the hold count.
-    const MAX_HOLDS: u8 = 0b0011_1111;
+    const MAX_HOLDS: u8 = u8::MAX >> 2;
 
     /// Return whether this flow is in a larval state.
     #[cfg(any(feature = "test-help", test))]
@@ -932,17 +934,27 @@ impl Liveness {
     fn is_protected(&self) -> bool {
         match self {
             Self::Larval { .. } => true,
-            Self::Ready { holds } => *holds >= 1,
+            Self::Ready { holds } => holds.get() >= 1,
             _ => false,
         }
     }
 
-    /// Return whether the number of active slowpath holds.
+    /// Set the number of active slowpath holds.
+    #[cfg(test)]
+    fn with_holds(self, holds: Holds) -> Result<Self, HoldIncrementError> {
+        match self {
+            Liveness::Larval { .. } => Ok(Liveness::Larval { holds }),
+            Liveness::Ready { .. } => Ok(Liveness::Ready { holds }),
+            Liveness::Dead => Err(HoldIncrementError::Dead),
+        }
+    }
+
+    /// Return the number of active slowpath holds.
     #[cfg(any(feature = "test-help", test))]
     fn holds(&self) -> Option<u8> {
         match self {
-            Liveness::Larval { holds } => Some(*holds),
-            Liveness::Ready { holds } => Some(*holds),
+            Liveness::Larval { holds } => Some(holds.get()),
+            Liveness::Ready { holds } => Some(holds.get()),
             Liveness::Dead => None,
         }
     }
@@ -955,31 +967,34 @@ impl Liveness {
             Liveness::Ready { holds } => holds,
             Liveness::Dead => return Err(HoldIncrementError::Dead),
         };
-        if *slot < Self::MAX_HOLDS {
-            *slot += 1;
-            Ok(self)
-        } else {
-            Err(HoldIncrementError::LivenessFull)
-        }
+
+        *slot = slot.increment()?;
+
+        Ok(self)
     }
 
     /// Remove one hold from a flow state in a live or larval state, returning
-    /// the target state this flow should have.
-    fn decrement_holds(mut self) -> Self {
+    /// the target state this flow should have. Removing a hold from a dead flow
+    /// is a NO-OP.
+    ///
+    /// Returns an error if the flow is alive and has no holds.
+    fn decrement_holds(mut self) -> Result<Self, HoldDecrementError> {
         let slot = match &mut self {
             Liveness::Larval { holds } => holds,
             Liveness::Ready { holds } => holds,
-            Liveness::Dead => return self,
+            Liveness::Dead => return Ok(self),
         };
-        *slot = slot.checked_sub(1).expect(
-            "every increment should correspond to exactly one decrement",
-        );
-        self
+
+        *slot = slot.decrement()?;
+
+        Ok(self)
     }
 
     /// Move this flow from a larval to ready state at the end of datapath
     /// processing, removing one hold in either state.
-    fn transition_to_ready(self) -> Self {
+    ///
+    /// Returns an error if the flow is alive and has no holds.
+    fn transition_to_ready(self) -> Result<Self, HoldDecrementError> {
         match self {
             Liveness::Larval { holds } => Liveness::Ready { holds },
             val => val,
@@ -990,12 +1005,12 @@ impl Liveness {
 
 impl Default for Liveness {
     fn default() -> Self {
-        Self::Larval { holds: 1 }
+        Self::Larval { holds: Holds::ONE }
     }
 }
 
 /// Errors encountered by [`Liveness::increment_holds`].
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) enum HoldIncrementError {
     /// A `FlowEntry` has too many threads attempting to hold it parallel.
     LivenessFull,
@@ -1003,15 +1018,32 @@ pub(super) enum HoldIncrementError {
     Dead,
 }
 
+/// Errors encountered by [`Liveness::increment_holds`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum HoldDecrementError {
+    /// The flow entry is live and has no recorded holds.
+    NoHolds,
+}
+
 impl From<u8> for Liveness {
     fn from(value: u8) -> Self {
         let tag = value & 0b11;
-        let holds = value >> 2;
+        let holds = Holds::new(value >> 2).expect("maximum is u8::MAX >> 2");
 
         match tag {
             0 => Self::Larval { holds },
             1 => Self::Ready { holds },
-            2 => Self::Dead,
+            2 => {
+                // This is a purely internal type. If we have a non-zero hold
+                // counter, we've made a serious programming error with our
+                // atomic handling and cannot reason about a flow's state.
+                assert_eq!(
+                    holds.get(),
+                    0,
+                    "Dead flows cannot have holds, saw {holds:?}"
+                );
+                Self::Dead
+            }
             v => unreachable!("illegal flowstate tag {v}"),
         }
     }
@@ -1020,13 +1052,13 @@ impl From<u8> for Liveness {
 impl From<Liveness> for u8 {
     fn from(value: Liveness) -> u8 {
         let (tag, holds) = match value {
-            Liveness::Larval { holds } => (0, holds),
-            Liveness::Ready { holds } => (1, holds),
+            Liveness::Larval { holds } => (0, holds.get()),
+            Liveness::Ready { holds } => (1, holds.get()),
             Liveness::Dead => (2, 0),
         };
 
         if holds > Liveness::MAX_HOLDS {
-            unreachable!("increment_holds ensures hold count is in-bounds")
+            unreachable!("`Holds` ensures hold count is in-bounds")
         }
 
         holds << 2 | tag
@@ -1393,6 +1425,70 @@ fn update_eviction_incumbent<'a, S: FlowState>(
     ControlFlow::Continue(prio)
 }
 
+// We use a private submodule here to ensure that all uses of `Holds` are
+// validated.
+use holds::*;
+mod holds {
+    use super::Liveness;
+
+    /// Tried to construct a [`Holds`] with more than
+    /// [`super::Liveness::MAX_HOLDS`].
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+    pub struct TooManyHolds;
+
+    impl From<TooManyHolds> for super::HoldIncrementError {
+        fn from(_: TooManyHolds) -> Self {
+            Self::LivenessFull
+        }
+    }
+
+    /// Tried to remove a hold when there are none.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+    pub struct NoHolds;
+
+    impl From<NoHolds> for super::HoldDecrementError {
+        fn from(_: NoHolds) -> Self {
+            Self::NoHolds
+        }
+    }
+
+    /// A validated, sufficiently-small hold count for flow liveness state.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Default)]
+    pub(super) struct Holds(u8);
+
+    impl Holds {
+        #[cfg(test)]
+        pub const ZERO: Self = Self(0);
+        pub const ONE: Self = Self(1);
+        #[cfg(test)]
+        pub const MAX: Self = Self(Liveness::MAX_HOLDS);
+
+        pub const fn new(value: u8) -> Result<Self, TooManyHolds> {
+            if value <= Liveness::MAX_HOLDS {
+                Ok(Self(value))
+            } else {
+                Err(TooManyHolds)
+            }
+        }
+
+        pub const fn get(self) -> u8 {
+            self.0
+        }
+
+        pub const fn increment(self) -> Result<Self, TooManyHolds> {
+            Self::new(self.get() + 1)
+        }
+
+        pub const fn decrement(self) -> Result<Self, NoHolds> {
+            if let Some(new) = self.0.checked_sub(1) {
+                Ok(Self(new))
+            } else {
+                Err(NoHolds)
+            }
+        }
+    }
+}
+
 pub mod util {
     use core::num::NonZeroU16;
 
@@ -1459,6 +1555,7 @@ mod test {
     use crate::engine::ip::v4::Protocol;
     use crate::engine::packet::AddrPair;
     use c8str::c8;
+    use core::assert_matches;
     use core::time::Duration;
 
     fn dummy_port_name() -> Arc<C8Str> {
@@ -2042,5 +2139,171 @@ mod test {
             ),
             None
         );
+    }
+
+    #[test]
+    fn liveness_roundtrips_u8() {
+        let families = [
+            (Liveness::Larval { holds: Holds::default() }),
+            (Liveness::Ready { holds: Holds::default() }),
+        ];
+
+        let roundtrip = |v| assert_eq!(v, Liveness::from(u8::from(v)));
+
+        for base in families {
+            for i in 0..Liveness::MAX_HOLDS {
+                let val = base.with_holds(Holds::new(i).unwrap()).unwrap();
+                roundtrip(val);
+            }
+        }
+
+        roundtrip(Liveness::Dead);
+    }
+
+    #[test]
+    fn liveness_state_transitions() {
+        // In standard operation, we'll typically either create a new entry,
+        // or retrieve one which was present (and increment its hold.
+        let ready_lft = Liveness::Ready { holds: Holds::ZERO };
+        assert_eq!(
+            Liveness::Larval { holds: Holds::ONE }.transition_to_ready(),
+            Ok(ready_lft)
+        );
+
+        assert_eq!(
+            Liveness::Ready { holds: Holds::ZERO }
+                .increment_holds()
+                .unwrap()
+                .transition_to_ready(),
+            Ok(ready_lft)
+        );
+
+        // And we can't remove holds if there are none left.
+        assert_eq!(
+            Liveness::Larval { holds: Holds::ZERO }.transition_to_ready(),
+            Err(HoldDecrementError::NoHolds)
+        );
+        assert_eq!(
+            ready_lft.transition_to_ready(),
+            Err(HoldDecrementError::NoHolds)
+        );
+
+        // If we have a full set of holds, we can free them but not permit
+        // any more.
+        for full in [
+            Liveness::Larval { holds: Holds::MAX },
+            Liveness::Ready { holds: Holds::MAX },
+        ] {
+            assert_eq!(
+                full.increment_holds(),
+                Err(HoldIncrementError::LivenessFull)
+            );
+            assert_eq!(
+                full.transition_to_ready(),
+                Ok(Liveness::Ready { holds: Holds::MAX.decrement().unwrap() })
+            );
+        }
+
+        // If we picked up an LFT which was already valid (return path traffic,
+        // loss of a UFT, and/or parallel execution) then we expect to
+        // remain Ready with an altered hold count.
+        let holds = Holds::new(2).unwrap();
+        assert_eq!(
+            Liveness::Ready { holds }.transition_to_ready(),
+            Ok(Liveness::Ready { holds: holds.decrement().unwrap() })
+        );
+
+        // TCP flow entries can be marked as dead at any time, because their
+        // state is driven by their own FSM logic in addition to the standard
+        // expiry & eviction mechanics.
+        assert_eq!(Liveness::Dead.transition_to_ready(), Ok(Liveness::Dead));
+
+        // If a flow entry is dead when we try to make use of it, we prevent a
+        // hold from being taken. The main use of this is to prevent ourselves
+        // from making use of an entry which is `Dead` but still in the map.
+        assert_eq!(
+            Liveness::Dead.increment_holds(),
+            Err(HoldIncrementError::Dead)
+        );
+    }
+
+    #[test]
+    fn get_and_hold_must_be_alive() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let mut ft =
+            FlowTable::new(dummy_port_name(), "test-table", FT_SIZE, None);
+        let my_entry = ft.add_ready(flowid, ()).unwrap();
+
+        // Mark the entry as dead -- e.g., TCP state invalidation or we
+        // evicted an LFT underpinning a UFT. That entry remains in the table
+        // so that we don't need to lock-and-remove from arbitrarily many
+        // tables.
+        my_entry.mark_dead();
+
+        // We can still see it, it's just dead. `get` assumes the caller is
+        // guarding against this case to perform its own removals etc.
+        assert_matches!(ft.get(&flowid), Some(e) if e.is_killed());
+
+        // If we *need* a valid entry, then we cannot see it at all.
+        assert_matches!(ft.get_and_hold(&flowid), Ok(None));
+    }
+
+    #[test]
+    fn flow_entry_transitions() {
+        let flowid = InnerFlowId {
+            proto: Protocol::TCP.into(),
+            addrs: AddrPair::V4 {
+                src: "192.168.2.10".parse().unwrap(),
+                dst: "76.76.21.21".parse().unwrap(),
+            },
+            proto_info: PortInfo { src_port: 37890, dst_port: 443 }.into(),
+        };
+
+        let mut ft =
+            FlowTable::new(dummy_port_name(), "test-table", FT_SIZE, None);
+
+        // An entry is initialised as `Larval`. While held, it must be immune
+        // to eviction and expiry.
+        let my_entry = ft.add(flowid, ()).unwrap();
+        let t0 = my_entry.last_hit();
+        my_entry.hit_at(t0 - Duration::from_secs(61));
+
+        for is_ready in [false, true] {
+            if is_ready {
+                assert!(!my_entry.liveness().is_protected());
+                my_entry.add_hold().unwrap();
+            } else {
+                assert!(my_entry.liveness().is_larval());
+            }
+
+            assert!(my_entry.liveness().is_protected());
+
+            assert!(ft.find_evictable_entry().is_none());
+            ft.expire_flows(t0);
+            assert_eq!(ft.num_flows(), 1);
+            assert!(!my_entry.is_killed());
+
+            my_entry.mark_ready();
+
+            assert!(!my_entry.liveness().is_protected());
+        }
+
+        // Removing the entry marks it as dead.
+        ft.remove(&flowid).unwrap();
+        assert!(my_entry.is_killed());
+
+        // As does clearing the map.
+        let my_entry = ft.add_ready(flowid, ()).unwrap();
+        assert_matches!(my_entry.liveness(), Liveness::Ready { .. });
+        ft.clear();
+        assert!(my_entry.is_killed());
     }
 }
