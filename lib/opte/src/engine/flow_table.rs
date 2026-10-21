@@ -28,6 +28,7 @@ use core::fmt;
 use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::ops::ControlFlow;
+use core::ops::RangeBounds;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU8;
 use core::sync::atomic::AtomicU64;
@@ -481,63 +482,48 @@ impl<S: FlowState> FlowTable<S> {
         }
     }
 
+    /// Find the first ID of a flow which can be expired from the table.
+    pub fn find_expired(&self, now: Moment) -> Option<InnerFlowId> {
+        self.map
+            .iter()
+            .find(|(_, entry)| entry.is_expired(now))
+            .map(|(key, _)| *key)
+    }
+
     /// Remove all flows from `self` which are past their expiry time.
+    #[cfg(test)]
     pub fn expire_flows(&mut self, now: Moment) {
+        self.expire_flows_in(now, ..);
+    }
+
+    /// Remove all flows from `self` in the range `from` which are past
+    /// their expiry time.
+    pub fn expire_flows_in(
+        &mut self,
+        now: Moment,
+        from: impl RangeBounds<InnerFlowId>,
+    ) {
         let name_c = &self.name_c;
 
-        self.map.retain(|flowid, entry| {
-            // If this element is in use by a current slow-path walk, we
-            // need to leave it in place until the thread operating on it
-            // determines that it's ready.
-            let liveness = entry.liveness();
-            if liveness.is_protected() {
-                return true;
-            }
-
-            // A flow cannot be expired by the timer while it still has children
-            // relying upon its existence. Check whether any remain, and remove
-            // dangling references to child entries which have expired.
-            //
-            // The dangling entries here will have been left by `expire_flows`
-            // called on other layers.
-            {
-                // Any contention here will come from evictions occurring
-                // on a higher-level table: e.g., datapath evictions happening
-                // in the UFT/TCP tables, while this operation occurs on an
-                // LFT.
-                let mut children = entry.lifetime.children.write();
-                children.retain(|el| el.0.upgrade().is_some());
-                entry
-                    .lifetime
-                    .n_children
-                    .store(children.len(), Ordering::Relaxed);
-                if !children.is_empty() {
-                    return true;
-                }
-            }
-
-            if liveness.is_dead() || entry.is_expired(now) {
+        self.map.extract_if(from, |_, entry| entry.is_expired(now)).for_each(
+            |(flowid, entry)| {
                 flow_expired_probe(
                     self.port.as_c8_str(),
                     name_c,
-                    flowid,
+                    &flowid,
                     entry.last_hit(),
                     Some(now),
                 );
-                FlowEntry::on_remove(entry);
-
-                return false;
-            }
-
-            true
-        });
+                FlowEntry::on_remove(&entry);
+            },
+        );
 
         self.cleanup_eviction_cache(now);
     }
 
-    /// Remove all flows from `self` which are past their expiry time,
-    /// identifying the partner flow `extractor(&flow_state)` of each and
-    /// removing it from `partner`.
+    /// Remove all flows from `self` in the range `from` which are past their
+    /// expiry time, identifying the partner flow `extractor(&flow_state)` of
+    /// each and removing it from `partner`.
     ///
     /// Flows identified by `extractor` in `partner` *MUST* share the same
     /// `FlowLifetime` as the entry removed from `self`.
@@ -546,52 +532,23 @@ impl<S: FlowState> FlowTable<S> {
         partner: &mut FlowTable<T>,
         extractor: F,
         now: Moment,
+        from: impl RangeBounds<InnerFlowId>,
     ) where
         F: Fn(&S) -> InnerFlowId,
         T: FlowState,
     {
         let name_c = &self.name_c;
 
-        self.map.retain(|flowid, entry| {
-            // If this element is in use by a current slow-path walk, we
-            // need to leave it in place until the thread operating on it
-            // determines that it's ready.
-            let liveness = entry.liveness();
-            if liveness.is_protected() {
-                return true;
-            }
-
-            // A flow cannot be expired by the timer while it still has children
-            // relying upon its existence. Check whether any remain, and remove
-            // dangling references to child entries which have expired.
-            //
-            // The dangling entries here will have been left by `expire_flows`
-            // called on other layers.
-            {
-                // Any contention here will come from evictions occurring
-                // on a higher-level table: e.g., datapath evictions happening
-                // in the UFT/TCP tables, while this operation occurs on an
-                // LFT.
-                let mut children = entry.lifetime.children.write();
-                children.retain(|el| el.0.upgrade().is_some());
-                entry
-                    .lifetime
-                    .n_children
-                    .store(children.len(), Ordering::Relaxed);
-                if !children.is_empty() {
-                    return true;
-                }
-            }
-
-            if liveness.is_dead() || entry.is_expired(now) {
+        self.map.extract_if(from, |_, entry| entry.is_expired(now)).for_each(
+            |(flowid, entry)| {
                 flow_expired_probe(
                     self.port.as_c8_str(),
                     name_c,
-                    flowid,
+                    &flowid,
                     entry.last_hit(),
                     Some(now),
                 );
-                FlowEntry::on_remove(entry);
+                FlowEntry::on_remove(&entry);
 
                 // The partner flow is guaranteed to have the same lifetime.
                 // Accordingly, we don't need to call `on_remove` against it.
@@ -603,12 +560,8 @@ impl<S: FlowState> FlowTable<S> {
                     }
                 }
                 partner.expire_at(&partner_flow, now);
-
-                return false;
-            }
-
-            true
-        });
+            },
+        );
 
         self.cleanup_eviction_cache(now);
     }
@@ -1223,8 +1176,41 @@ impl<S: FlowState> FlowEntry<S> {
         self.liveness() == Liveness::Dead
     }
 
-    /// Returns whether this flow entry is past its policy's expiry time.
+    /// Returns whether this flow entry can be removed from the table.
+    ///
+    /// This modifies an entry's set of `children` to remove any dead entries.
     fn is_expired(&self, now: Moment) -> bool {
+        // If this element is in use by a current slow-path walk, we
+        // need to leave it in place until the thread operating on it
+        // determines that it's ready.
+        let liveness = self.liveness();
+        if liveness.is_protected() {
+            return false;
+        }
+
+        // A flow cannot be expired by the timer while it still has children
+        // relying upon its existence. Check whether any remain, and remove
+        // dangling references to child entries which have expired.
+        //
+        // The dangling entries here will have been left by `expire_flows`
+        // called on other layers.
+        let not_relied_on = {
+            // Any contention here will come from evictions occurring
+            // on a higher-level table: e.g., datapath evictions happening
+            // in the UFT/TCP tables, while this operation occurs on an
+            // LFT.
+            let mut children = self.lifetime.children.write();
+            children.retain(|el| el.0.upgrade().is_some());
+            self.lifetime.n_children.store(children.len(), Ordering::Relaxed);
+
+            children.is_empty()
+        };
+
+        liveness.is_dead() || (not_relied_on && self.is_ttl_expired(now))
+    }
+
+    /// Returns whether this flow entry is past its policy's expiry time.
+    fn is_ttl_expired(&self, now: Moment) -> bool {
         self.policy.is_expired(self, now)
     }
 
@@ -1376,7 +1362,7 @@ fn update_eviction_incumbent<'a, S: FlowState>(
     // support of a crucial LFT or timer expiry.
     if liveness.is_dead()
         || (entry.lifetime.n_children.load(Ordering::Relaxed) > 0
-            && entry.is_expired(now))
+            && entry.is_ttl_expired(now))
     {
         *versus =
             Some(Candidate { key: EvictionKey::Dead, id: *id, entry, source });
