@@ -1015,6 +1015,11 @@ impl Virt2Boundary {
         vip: IpCidr,
         tep: I,
     ) -> Option<BTreeSet<TunnelEndpoint>> {
+        // A prefix in the table always has at least one TEP.
+        let tep: BTreeSet<TunnelEndpoint> = tep.into_iter().collect();
+        if tep.is_empty() {
+            return None;
+        }
         match vip {
             IpCidr::Ip4(ip4) => {
                 let mut tbl = self.ip4.lock();
@@ -1024,7 +1029,7 @@ impl Virt2Boundary {
                         entry.extend(tep);
                         Some(orig)
                     }
-                    None => tbl.insert(ip4, tep.into_iter().collect()),
+                    None => tbl.insert(ip4, tep),
                 };
                 self.update_poptrie_v4(&tbl);
                 result
@@ -1037,7 +1042,7 @@ impl Virt2Boundary {
                         entry.extend(tep);
                         Some(orig)
                     }
-                    None => tbl.insert(ip6, tep.into_iter().collect()),
+                    None => tbl.insert(ip6, tep),
                 };
                 self.update_poptrie_v6(&tbl);
                 result
@@ -1188,5 +1193,70 @@ impl MappingResource for Mcast2Phys {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::BOUNDARY_SERVICES_VNI;
+
+    fn tep(n: u16) -> TunnelEndpoint {
+        TunnelEndpoint {
+            ip: format!("fd00::{n}").parse().unwrap(),
+            vni: Vni::new(BOUNDARY_SERVICES_VNI).unwrap(),
+        }
+    }
+
+    #[test]
+    fn set_adds_to_existing_prefix() {
+        let v2b = Virt2Boundary::new();
+        let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
+        let addr: IpAddr = "10.0.0.1".parse().unwrap();
+
+        assert_eq!(v2b.set(prefix, [tep(1)]), None);
+        assert_eq!(v2b.set(prefix, [tep(2)]), Some(BTreeSet::from([tep(1)])));
+        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1), tep(2)])));
+    }
+
+    #[test]
+    fn partial_remove_keeps_prefix() {
+        let v2b = Virt2Boundary::new();
+        let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
+        let addr: IpAddr = "10.0.0.1".parse().unwrap();
+
+        v2b.set(prefix, [tep(1), tep(2)]);
+        assert_eq!(
+            v2b.remove(prefix, [tep(1)]),
+            Some(BTreeSet::from([tep(1), tep(2)]))
+        );
+        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(2)])));
+    }
+
+    #[test]
+    fn removing_last_tep_removes_prefix() {
+        let v2b = Virt2Boundary::new();
+        let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
+        let addr: IpAddr = "10.0.0.1".parse().unwrap();
+
+        v2b.set(prefix, [tep(1)]);
+        v2b.remove(prefix, [tep(1)]);
+        assert_eq!(v2b.get(&addr), None);
+        assert!(v2b.dump_ip4().is_empty());
+    }
+
+    #[test]
+    fn empty_set_is_noop() {
+        let v2b = Virt2Boundary::new();
+        let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
+        let addr: IpAddr = "10.0.0.1".parse().unwrap();
+
+        assert_eq!(v2b.set(prefix, []), None);
+        assert_eq!(v2b.get(&addr), None);
+        assert!(v2b.dump_ip4().is_empty());
+
+        v2b.set(prefix, [tep(1)]);
+        assert_eq!(v2b.set(prefix, []), None);
+        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1)])));
     }
 }
