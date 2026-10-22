@@ -82,8 +82,8 @@ impl Freelist {
         self_
     }
 
-    // Build an array of 64-bit words storing `n_bits` ones and masking the
-    // rest.
+    /// Build an array of 64-bit words storing `n_bits` ones and masking the
+    /// rest.
     fn build_words_for_bits(n_bits: usize) -> Vec<u64> {
         // We might have some bits at the end of the array that are not in the
         // allowed range at all, if the number of bits isn't a multiple of the
@@ -149,9 +149,9 @@ impl Freelist {
         Ok(Self::word_and_mask(i))
     }
 
-    // Given a `bit`, return the word it resides in and a mask selecting it in
-    // that word. This is used both for going from "is free" bits to words, and
-    // from "word bits" to summaries.
+    /// Given a `bit`, return the word it resides in and a mask selecting it in
+    /// that word. This is used both for going from "is free" bits to words, and
+    /// from "word bits" to summaries.
     fn word_and_mask(bit: usize) -> (usize, u64) {
         (bit / Self::BITS, 1_u64 << (bit % Self::BITS))
     }
@@ -168,22 +168,22 @@ impl Freelist {
             .find(|(_, summary)| **summary != 0)
             .ok_or(ResourceError::Exhausted)?;
 
-        // Use `ilog2()` to compute the index of the word itself.
-        let bit_in_summary = usize::try_from(summary.ilog2()).unwrap();
+        // Compute the index of the word itself, which is the highest one bit.
+        let bit_in_summary =
+            usize::try_from(summary.highest_one().expect("summary != 0"))
+                .unwrap();
         let word_i = sum_i * Self::BITS + bit_in_summary;
         let word = self
             .free
             .get_mut(word_i)
             .expect("summary bit is set, word must exist");
 
-        // Use `ilog2()` again to compute the index of the highest set bit in
-        // that word, and clear the bit.
-        debug_assert!(
-            *word != 0,
-            "word should have at least one bit set, since its summary bit \
-            was also set"
-        );
-        let bit_in_word = usize::try_from(word.ilog2()).unwrap();
+        // Again compute the index of the highest set bit in that word, and clear it.
+        let bit_in_word = usize::try_from(word.highest_one().expect(
+            "word should have at least one bit set, \
+                since its summary bit was also set",
+        ))
+        .unwrap();
         *word &= !(1 << bit_in_word);
         self.n_free -= 1;
 
@@ -344,7 +344,9 @@ mod tests {
             // 20% select a boundary
             2 => prop::sample::select(vec![start, end]),
             // 10% right outside the boundary
-            1 => prop::sample::select(vec![start.wrapping_sub(1), end.wrapping_add(1)]),
+            1 => prop::sample::select(vec![
+                start.wrapping_sub(1), end.wrapping_add(1)
+            ]),
             // And 10% completely arbitrary.
             1 => any::<u16>(),
         ]
