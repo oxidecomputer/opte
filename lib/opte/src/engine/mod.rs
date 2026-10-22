@@ -11,6 +11,7 @@ pub mod arp;
 pub mod checksum;
 pub mod dhcp;
 pub mod dhcpv6;
+mod freelist;
 #[macro_use]
 pub mod ether;
 pub mod flow_table;

@@ -32,6 +32,7 @@ use crate::api::IcmpInfo;
 use crate::api::L4Info;
 use crate::api::PortInfo;
 use crate::ddi::sync::KMutex;
+use crate::engine::freelist::Freelist;
 use crate::engine::icmp::QueryEcho;
 use crate::engine::nat::ExternalIpTag;
 use alloc::collections::btree_map::BTreeMap;
@@ -58,17 +59,14 @@ pub struct NatPoolEntry<T: ConcreteIpAddr> {
     ip: T,
     port: u16,
 }
-
 // A public IP and port range for NAT. Includes the list of all possible ports
 // and those that are free.
 #[derive(Debug, Clone)]
 struct PortList<T: ConcreteIpAddr> {
     // The public IP address to which a private IP is mapped
     ip: T,
-    // The list of all possible ports available in the NAT pool
-    ports: RangeInclusive<u16>,
-    // The list of unused / free ports in the pool.
-    free_ports: Vec<u16>,
+    // The freelist of ports.
+    free_ports: Freelist,
 }
 
 impl<T: ConcreteIpAddr> ResourceEntry for NatPoolEntry<T> {}
@@ -114,25 +112,24 @@ impl<T: Copy + Clone + Display + Ord> ConcreteIpAddr for T where T: private::Ip 
 impl<T: ConcreteIpAddr> NatPool<T> {
     /// Add a new mapping from private IP to public IP and ports.
     pub fn add(&self, priv_ip: T, pub_ip: T, pub_ports: RangeInclusive<u16>) {
-        let free_ports = pub_ports.clone().collect();
-        let entry = PortList { ip: pub_ip, ports: pub_ports, free_ports };
+        let free_ports = Freelist::new(pub_ports);
+        let entry = PortList { ip: pub_ip, free_ports };
         self.free_list.lock().insert(priv_ip, entry);
     }
 
     /// Return the number of available ports for a given private IP address.
     pub fn num_avail(&self, priv_ip: T) -> Result<usize, ResourceError> {
         match self.free_list.lock().get(&priv_ip) {
-            Some(PortList { free_ports, .. }) => Ok(free_ports.len()),
+            Some(PortList { free_ports, .. }) => Ok(free_ports.n_free()),
             _ => Err(ResourceError::NoMatch(priv_ip.to_string())),
         }
     }
 
     /// Return the mapping from a private IP to the public IP and port range.
     pub fn mapping(&self, priv_ip: T) -> Option<(T, RangeInclusive<u16>)> {
-        self.free_list
-            .lock()
-            .get(&priv_ip)
-            .map(|PortList { ip, ports, .. }| (*ip, ports.clone()))
+        self.free_list.lock().get(&priv_ip).map(
+            |PortList { ip, free_ports }| (*ip, free_ports.ports().clone()),
+        )
     }
 
     /// Create a new NAT pool, with no entries.
@@ -144,11 +141,11 @@ impl<T: ConcreteIpAddr> NatPool<T> {
     #[cfg(test)]
     fn verify_available(&self, priv_ip: T, pub_ip: T, pub_port: u16) -> bool {
         match self.free_list.lock().get(&priv_ip) {
-            Some(PortList { ip, free_ports, .. }) => {
+            Some(PortList { ip, free_ports }) => {
                 if pub_ip != *ip {
                     return false;
                 }
-                free_ports.contains(&pub_port)
+                free_ports.is_free(pub_port)
             }
             None => false,
         }
@@ -164,11 +161,8 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
     fn obtain_raw(&self, priv_ip: &T) -> Result<Self::Entry, ResourceError> {
         match self.free_list.lock().get_mut(priv_ip) {
             Some(PortList { ip, free_ports, .. }) => {
-                if let Some(port) = free_ports.pop() {
-                    Ok(Self::Entry { ip: *ip, port })
-                } else {
-                    Err(ResourceError::Exhausted)
-                }
+                let port = free_ports.take_next()?;
+                Ok(Self::Entry { ip: *ip, port })
             }
 
             None => Err(ResourceError::NoMatch(priv_ip.to_string())),
@@ -180,34 +174,15 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
         priv_ip: &T,
         entry: NatPoolEntry<T>,
     ) -> Result<(), ResourceError> {
-        // TODO-performance: This is a linear scan over the full range of ports.
-        // We could be smarter about storing this (e.g., a b-tree, sorted array,
-        // or set of optional "slots"). But restoring isn't a hot-path today,
-        // and we'd rather not pay any penalty on the currently O(1) call to
-        // `Self::obtain()`.
         match self.free_list.lock().get_mut(priv_ip) {
-            Some(PortList { ip, free_ports, ports }) => {
+            Some(PortList { ip, free_ports }) => {
                 if *ip != entry.ip {
                     return Err(ResourceError::NoMatch(format!(
                         "IP: {}",
                         entry.ip
                     )));
                 }
-                if !ports.contains(&entry.port) {
-                    return Err(ResourceError::NoMatch(format!(
-                        "Port: {}",
-                        entry.port
-                    )));
-                }
-                free_ports
-                    .iter()
-                    .position(|p| *p == entry.port)
-                    .map(|i| {
-                        let _ = free_ports.swap_remove(i);
-                    })
-                    .ok_or_else(|| {
-                        ResourceError::InUse(format!("Port: {}", entry.port))
-                    })
+                free_ports.take(entry.port)
             }
             None => Err(ResourceError::NoMatch(format!("IP: {}", priv_ip))),
         }
@@ -216,7 +191,13 @@ impl<T: ConcreteIpAddr> FiniteResource for NatPool<T> {
     fn release(&self, priv_ip: &T, entry: Self::Entry) {
         match self.free_list.lock().get_mut(priv_ip) {
             Some(PortList { free_ports, .. }) => {
-                free_ports.push(entry.port);
+                let was_freed =
+                    free_ports.free(entry.port).expect("a port in range");
+                debug_assert!(
+                    was_freed,
+                    "port {} was double-freed",
+                    entry.port
+                );
             }
 
             None => {
@@ -523,20 +504,18 @@ impl<T: ConcreteIpAddr> ActionDesc for SNatIcmpEchoDesc<T> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use crate::ddi::mblk::MsgBlk;
+    use crate::engine::ether::Ethernet;
+    use crate::engine::ether::EthernetRef;
+    use crate::engine::ip::v4::Ipv4;
+    use crate::engine::ip::v4::Ipv4Ref;
     use ingot::ethernet::Ethertype;
     use ingot::ip::IpProtocol;
     use ingot::tcp::Tcp;
     use ingot::tcp::TcpFlags;
     use ingot::tcp::TcpRef;
     use ingot::types::HeaderLen;
-
-    use crate::ddi::mblk::MsgBlk;
-    use crate::engine::ether::Ethernet;
-    use crate::engine::ether::EthernetRef;
-    use crate::engine::ip::v4::Ipv4;
-    use crate::engine::ip::v4::Ipv4Ref;
-
-    use super::*;
 
     #[test]
     fn test_nat_pool_different_ip_types() {
@@ -969,15 +948,19 @@ mod test {
             ctx.original_pool.num_avail(ctx.private_ips[0]).unwrap(),
             n_original_avail,
         );
-        let new = ctx
-            .restore_pool
-            .obtain(&ctx.private_ips[0])
-            .expect("able to obtain restored handle after releasing it back");
-        assert_eq!(
-            ctx.restore_pool.num_avail(ctx.private_ips[0]).unwrap(),
-            n_restored_avail
-        );
-        assert_eq!(new.key, original_handle.key);
-        assert_eq!(new.entry, original_handle.entry);
+
+        // We should need to obtain `n_to_take` items before we get to the one
+        // we released.
+        let mut held = Vec::with_capacity(n_to_take);
+        for _ in 0..n_to_take {
+            let newest = ctx
+                .restore_pool
+                .obtain(&ctx.private_ips[0])
+                .expect("able to obtain entry");
+            held.push(newest);
+        }
+        let newest = held.last().unwrap();
+        assert_eq!(newest.key, original_handle.key);
+        assert_eq!(newest.entry, original_handle.entry);
     }
 }
