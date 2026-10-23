@@ -1321,6 +1321,7 @@ dependencies = [
  "serde",
  "tabwriter",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
