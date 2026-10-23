@@ -15,6 +15,7 @@ illumos-sys-hdrs.workspace = true
 
 ingot.workspace = true
 ipnetwork = { workspace = true, optional = true }
+poptrie.workspace = true
 postcard.workspace = true
 serde.workspace = true
 
