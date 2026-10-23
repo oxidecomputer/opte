@@ -1183,6 +1183,23 @@ impl<N: NetworkImpl> Port<N> {
         let now = now.unwrap_or_else(Moment::now);
         check_state!(self.state, [PortState::Running])?;
 
+        fn optimistic_expire<S: FlowState>(
+            now: Moment,
+            lock: &KRwLock<FlowTable<S>>,
+            stat: &KStatU64,
+        ) {
+            let removable = {
+                let ft = lock.read();
+                ft.find_expired(now)
+            };
+
+            if let Some(first_id) = removable {
+                let mut ft = lock.write();
+                ft.expire_flows_in(now, first_id..);
+                stat.set(ft.num_flows() as u64);
+            }
+        }
+
         // Run expiry in reverse order of dependencies here.
         //
         // The presence of a higher-level entry prevents us from using the timer
@@ -1192,23 +1209,9 @@ impl<N: NetworkImpl> Port<N> {
         // A TCP state entry or UFT may in turn reference any number of LFT
         // hits, so we visit those first to maximise the likelihood that we can
         // clear up as many entries as possible.
-        {
-            let mut tcp = self.tcp_flows.write();
-            tcp.expire_flows(now);
-            self.stats.vals.tcp_flows.set(u64::from(tcp.num_flows()));
-        }
-
-        {
-            let mut uft = self.uft_in.write();
-            uft.expire_flows(now);
-            self.stats.vals.in_uft_flows.set(u64::from(uft.num_flows()));
-        }
-
-        {
-            let mut uft = self.uft_out.write();
-            uft.expire_flows(now);
-            self.stats.vals.out_uft_flows.set(u64::from(uft.num_flows()));
-        }
+        optimistic_expire(now, &self.tcp_flows, &self.stats.vals.tcp_flows);
+        optimistic_expire(now, &self.uft_in, &self.stats.vals.in_uft_flows);
+        optimistic_expire(now, &self.uft_out, &self.stats.vals.out_uft_flows);
 
         for layer in &self.layers {
             layer.expire_flows(now);

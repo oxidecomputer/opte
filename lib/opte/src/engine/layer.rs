@@ -260,15 +260,21 @@ impl LayerFlowTable {
         LftDump { ft_in: self.ft_in.dump(), ft_out: self.ft_out.dump() }
     }
 
-    fn expire_flows(&mut self, now: Moment) {
+    fn expire_flows(&mut self, now: Moment, from: InnerFlowId) {
         // Flow table in/out entries share a lifetime struct, so it's irrelevant
         // which of these tables we check first.
         self.ft_out.expire_flows_partner(
             &mut self.ft_in,
             LftOutEntry::extract_pair,
             now,
+            from..,
         );
         self.count = self.ft_out.num_flows();
+    }
+
+    /// Find the first ID of a flow which can be expired from the table.
+    fn find_expired(&self, now: Moment) -> Option<InnerFlowId> {
+        self.ft_out.find_expired(now)
     }
 
     fn get_in(
@@ -845,9 +851,16 @@ impl Layer {
         match &self.ft {
             LayerState::Stateless => {}
             LayerState::Stateful { ft, .. } => {
-                let mut ft = ft.write();
-                ft.expire_flows(now);
-                self.stats.vals.flows.set(ft.num_flows() as u64);
+                let removable = {
+                    let ft = ft.read();
+                    ft.find_expired(now)
+                };
+
+                if let Some(first_id) = removable {
+                    let mut ft = ft.write();
+                    ft.expire_flows(now, first_id);
+                    self.stats.vals.flows.set(ft.num_flows() as u64);
+                }
             }
         }
     }
