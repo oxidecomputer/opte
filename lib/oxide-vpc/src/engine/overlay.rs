@@ -108,6 +108,8 @@ use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
 use crate::api::PhysNet;
 use crate::api::Replication;
+use crate::api::RouterId;
+use crate::api::RouterList;
 use crate::api::TunnelEndpoint;
 use crate::api::V2bMapResp;
 use crate::api::VpcMapResp;
@@ -183,7 +185,7 @@ pub fn setup(
     cfg: &VpcCfg,
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
-    v2b: Arc<Virt2Boundary>,
+    routers: Arc<KRwLock<PortRouters>>,
     ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
@@ -192,7 +194,7 @@ pub fn setup(
         cfg.vni,
         v2p,
         m2p,
-        v2b,
+        routers,
     )));
 
     // Action Index 1
@@ -304,7 +306,8 @@ pub struct EncapAction {
     vni: Vni,
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
-    v2b: Arc<Virt2Boundary>,
+    // The port's routers, for boundary TEP selection.
+    routers: Arc<KRwLock<PortRouters>>,
 }
 
 impl EncapAction {
@@ -313,9 +316,9 @@ impl EncapAction {
         vni: Vni,
         v2p: Arc<Virt2Phys>,
         m2p: Arc<Mcast2Phys>,
-        v2b: Arc<Virt2Boundary>,
+        routers: Arc<KRwLock<PortRouters>>,
     ) -> Self {
-        Self { phys_ip_src, vni, v2p, m2p, v2b }
+        Self { phys_ip_src, vni, v2p, m2p, routers }
     }
 }
 
@@ -410,7 +413,8 @@ impl StaticAction for EncapAction {
                 //
                 // It's a possible optimisation, but it'd need more thought.
                 RouterTargetInternal::InternetGateway(_) => {
-                    match self.v2b.get(&recipient) {
+                    let teps = self.routers.read().lookup_best(&recipient);
+                    match teps {
                         Some(phys) if sent_from_eip => {
                             // Hash the packet onto a route target. This is a very
                             // rudimentary mechanism. Should level-up to an ECMP
@@ -878,27 +882,35 @@ pub struct Virt2Phys {
     ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
-/// A mapping from virtual IPs to boundary services addresses.
+/// A mapping from virtual IPs to boundary services addresses,
+/// partitioned by router.
 pub struct Virt2Boundary {
+    routers: KRwLock<BTreeMap<RouterId, Arc<RouterV2b>>>,
+}
+
+/// A single router's mapping from IP prefixes to boundary TEPs.
+pub struct RouterV2b {
+    // The router's control-plane UUID.
+    id: RouterId,
+
     // The BTreeMap-based representation of the v2b table is a representation
     // that is easily updated.
     ip4: KMutex<BTreeMap<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
     ip6: KMutex<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
 
     // The Poptrie-based representation of the v2b table is a data structure
-    // optimized for fast query times. An update changes a copy of it and swaps
-    // the copy in. The heuristic being applied here is we expect table churn to
-    // be highly-infrequent compared to lookups.
-    // Lookups may happen millions of times per second and and we want those to
-    // be as fast as possible. At the time of writing, poptrie is the fastest
-    // LPM lookup data structure known to the author.
-    //
-    // The poptrie is under an read-write lock to allow multiple concurrent
-    // readers. When we update we hold the lock just long enough to do a swap
-    // with a poptrie that was pre-built out of band.
+    // optimized for fast query times. It's under an read-write lock to allow
+    // multiple concurrent readers. When we update we hold the lock just long
+    // enough to swap the entry with one that was pre-built out of band.
     pt4: KRwLock<Poptrie<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
     pt6: KRwLock<Poptrie<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
 }
+
+/// A port's routers, by priority.
+///
+/// A realized mapping of routers is kept so that lookups can contend only on
+/// the inner `pt` locks.
+pub struct PortRouters(BTreeMap<u16, Arc<RouterV2b>>);
 
 /// A mapping from inner multicast destination IPs to underlay multicast groups.
 ///
@@ -912,35 +924,98 @@ pub struct Mcast2Phys {
 pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
 
 impl Virt2Boundary {
-    pub fn dump_ip4(&self) -> Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)> {
-        self.ip4
-            .lock()
-            .iter()
-            .map(|(vip, baddr)| (*vip, baddr.clone()))
-            .collect()
+    pub fn new() -> Self {
+        let mut routers = BTreeMap::new();
+        // Start with the default router.
+        routers.insert(None, Arc::new(RouterV2b::new(None)));
+        Virt2Boundary { routers: KRwLock::new(routers) }
     }
 
-    pub fn dump_ip6(&self) -> Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)> {
-        self.ip6
-            .lock()
-            .iter()
-            .map(|(vip, baddr)| (*vip, baddr.clone()))
-            .collect()
-    }
-
+    /// Dump every router's mappings.
     pub fn dump(&self) -> DumpVirt2BoundaryResp {
         DumpVirt2BoundaryResp {
-            mappings: V2bMapResp { ip4: self.dump_ip4(), ip6: self.dump_ip6() },
+            routers: self
+                .routers
+                .read()
+                .iter()
+                .map(|(id, rtr)| {
+                    (
+                        *id,
+                        V2bMapResp { ip4: rtr.dump_ip4(), ip6: rtr.dump_ip6() },
+                    )
+                })
+                .collect(),
         }
     }
 
-    pub fn new() -> Self {
-        Virt2Boundary {
-            ip4: KMutex::new(BTreeMap::new()),
-            ip6: KMutex::new(BTreeMap::new()),
-            pt4: KRwLock::new(Poptrie::default()),
-            pt6: KRwLock::new(Poptrie::default()),
+    fn router(&self, id: &RouterId) -> Option<Arc<RouterV2b>> {
+        self.routers.read().get(id).cloned()
+    }
+
+    /// Set a prefix's TEPs in the given router's table, creating the
+    /// router's table if it does not yet exist.
+    pub fn set<I: IntoIterator<Item = TunnelEndpoint>>(
+        &self,
+        router: RouterId,
+        vip: IpCidr,
+        tep: I,
+    ) -> Option<BTreeSet<TunnelEndpoint>> {
+        self.table(router).set(vip, tep)
+    }
+
+    /// Remove TEPs from a prefix in the given router's table.
+    pub fn remove<I: IntoIterator<Item = TunnelEndpoint>>(
+        &self,
+        router: RouterId,
+        vip: IpCidr,
+        tep: I,
+    ) -> Option<BTreeSet<TunnelEndpoint>> {
+        self.router(&router)?.remove(vip, tep)
+    }
+
+    /// Resolve a port's router list to the routers' tables, creating
+    /// the tables of listed routers that have none yet.
+    pub fn port_routers(&self, list: RouterList) -> PortRouters {
+        PortRouters(
+            list.entries().map(|(prio, id)| (prio, self.table(id))).collect(),
+        )
+    }
+
+    /// Get a router's table, creating it if it doesn't exist.
+    fn table(&self, router: RouterId) -> Arc<RouterV2b> {
+        self.routers
+            .write()
+            .entry(router)
+            .or_insert_with(|| Arc::new(RouterV2b::new(router)))
+            .clone()
+    }
+}
+
+impl PortRouters {
+    /// The prioritized list of routers for this port.
+    pub fn list(&self) -> RouterList {
+        RouterList(self.0.iter().map(|(prio, rtr)| (*prio, rtr.id)).collect())
+    }
+
+    /// Find the best TEP set for `vip` across the port's routers.
+    ///
+    /// Routers are consulted in priority order, the longest matching
+    /// prefix wins, and equal-length matches are won by the earliest
+    /// (highest-priority) router.
+    pub fn lookup_best(
+        &self,
+        vip: &IpAddr,
+    ) -> Option<BTreeSet<TunnelEndpoint>> {
+        let mut best: Option<(u8, BTreeSet<TunnelEndpoint>)> = None;
+        for rtr in self.0.values() {
+            let Some((len, teps)) = rtr.get_with_len(vip) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|(blen, _)| len > *blen) {
+                best = Some((len, teps));
+            }
         }
+        best.map(|(_, teps)| teps)
     }
 }
 
@@ -957,15 +1032,54 @@ impl ResourceEntry for PhysNet {}
 // different type than the query argument. Keys are prefixes and query arguments
 // are IPs. The mapping resource trait requires that the keys and query
 // arguments be of the same type.
-impl Virt2Boundary {
+impl RouterV2b {
+    pub fn new(id: RouterId) -> Self {
+        RouterV2b {
+            id,
+            ip4: KMutex::new(BTreeMap::new()),
+            ip6: KMutex::new(BTreeMap::new()),
+            pt4: KRwLock::new(Poptrie::default()),
+            pt6: KRwLock::new(Poptrie::default()),
+        }
+    }
+
+    pub fn dump_ip4(&self) -> Vec<(Ipv4Cidr, BTreeSet<TunnelEndpoint>)> {
+        self.ip4
+            .lock()
+            .iter()
+            .map(|(vip, baddr)| (*vip, baddr.clone()))
+            .collect()
+    }
+
+    pub fn dump_ip6(&self) -> Vec<(Ipv6Cidr, BTreeSet<TunnelEndpoint>)> {
+        self.ip6
+            .lock()
+            .iter()
+            .map(|(vip, baddr)| (*vip, baddr.clone()))
+            .collect()
+    }
+
     pub fn get(&self, vip: &IpAddr) -> Option<BTreeSet<TunnelEndpoint>> {
+        self.get_with_len(vip).map(|(_, teps)| teps)
+    }
+
+    /// Longest-prefix match returning the TEP set along with the matching
+    /// prefix length.
+    pub fn get_with_len(
+        &self,
+        vip: &IpAddr,
+    ) -> Option<(u8, BTreeSet<TunnelEndpoint>)> {
         match vip {
-            IpAddr::Ip4(ip4) => {
-                self.pt4.read().lookup(u32::from(*ip4)).cloned()
-            }
-            IpAddr::Ip6(ip6) => {
-                self.pt6.read().lookup(u128::from(*ip6)).cloned()
-            }
+            IpAddr::Ip4(ip4) => self
+                .pt4
+                .read()
+                .lookup_with_prefix(u32::from(*ip4))
+                .map(|(cidr, teps)| (cidr.prefix_len(), teps.clone())),
+            IpAddr::Ip6(ip6) => self
+                .pt6
+                .read()
+                .lookup_with_prefix(u128::from(*ip6))
+                .map(|(cidr, teps)| (cidr.prefix_len(), teps.clone())),
         }
     }
 
@@ -1208,6 +1322,7 @@ impl MappingResource for Mcast2Phys {
 mod tests {
     use super::*;
     use crate::api::BOUNDARY_SERVICES_VNI;
+    use uuid::Uuid;
 
     fn tep(n: u16) -> TunnelEndpoint {
         TunnelEndpoint {
@@ -1218,53 +1333,148 @@ mod tests {
 
     #[test]
     fn set_adds_to_existing_prefix() {
-        let v2b = Virt2Boundary::new();
+        let rv2b = RouterV2b::new(None);
         let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
         let addr: IpAddr = "10.0.0.1".parse().unwrap();
 
-        assert_eq!(v2b.set(prefix, [tep(1)]), None);
-        assert_eq!(v2b.set(prefix, [tep(2)]), Some(BTreeSet::from([tep(1)])));
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1), tep(2)])));
+        assert_eq!(rv2b.set(prefix, [tep(1)]), None);
+        assert_eq!(rv2b.set(prefix, [tep(2)]), Some(BTreeSet::from([tep(1)])));
+        assert_eq!(rv2b.get(&addr), Some(BTreeSet::from([tep(1), tep(2)])));
     }
 
     #[test]
     fn partial_remove_keeps_prefix() {
-        let v2b = Virt2Boundary::new();
+        let rv2b = RouterV2b::new(None);
         let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
         let addr: IpAddr = "10.0.0.1".parse().unwrap();
 
-        v2b.set(prefix, [tep(1), tep(2)]);
+        rv2b.set(prefix, [tep(1), tep(2)]);
         assert_eq!(
-            v2b.remove(prefix, [tep(1)]),
+            rv2b.remove(prefix, [tep(1)]),
             Some(BTreeSet::from([tep(1), tep(2)]))
         );
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(2)])));
+        assert_eq!(rv2b.get(&addr), Some(BTreeSet::from([tep(2)])));
     }
 
     #[test]
     fn removing_last_tep_removes_prefix() {
-        let v2b = Virt2Boundary::new();
+        let rv2b = RouterV2b::new(None);
         let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
         let addr: IpAddr = "10.0.0.1".parse().unwrap();
 
-        v2b.set(prefix, [tep(1)]);
-        v2b.remove(prefix, [tep(1)]);
-        assert_eq!(v2b.get(&addr), None);
-        assert!(v2b.dump_ip4().is_empty());
+        rv2b.set(prefix, [tep(1)]);
+        rv2b.remove(prefix, [tep(1)]);
+        assert_eq!(rv2b.get(&addr), None);
+        assert!(rv2b.dump_ip4().is_empty());
     }
 
     #[test]
     fn empty_set_is_noop() {
-        let v2b = Virt2Boundary::new();
+        let rv2b = RouterV2b::new(None);
         let prefix: IpCidr = "10.0.0.0/8".parse().unwrap();
         let addr: IpAddr = "10.0.0.1".parse().unwrap();
 
-        assert_eq!(v2b.set(prefix, []), None);
-        assert_eq!(v2b.get(&addr), None);
-        assert!(v2b.dump_ip4().is_empty());
+        assert_eq!(rv2b.set(prefix, []), None);
+        assert_eq!(rv2b.get(&addr), None);
+        assert!(rv2b.dump_ip4().is_empty());
 
-        v2b.set(prefix, [tep(1)]);
-        assert_eq!(v2b.set(prefix, []), None);
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1)])));
+        rv2b.set(prefix, [tep(1)]);
+        assert_eq!(rv2b.set(prefix, []), None);
+        assert_eq!(rv2b.get(&addr), Some(BTreeSet::from([tep(1)])));
+    }
+
+    fn v4(ip: &str) -> IpAddr {
+        IpAddr::Ip4(ip.parse().unwrap())
+    }
+
+    #[test]
+    fn lpm_wins_across_routers() {
+        let v2b = Virt2Boundary::new();
+        let r1 = Some(Uuid::from_u128(1));
+        let r2 = Some(Uuid::from_u128(2));
+
+        v2b.set(r1, "10.0.0.0/8".parse().unwrap(), [tep(1)]);
+        v2b.set(r2, "10.1.0.0/16".parse().unwrap(), [tep(2)]);
+
+        let list = RouterList::new([(10, r1), (20, r2)]).unwrap();
+        let port = v2b.port_routers(list);
+        let best = port.lookup_best(&v4("10.1.2.3")).unwrap();
+        assert_eq!(best, BTreeSet::from([tep(2)]));
+
+        let best = port.lookup_best(&v4("10.2.0.1")).unwrap();
+        assert_eq!(best, BTreeSet::from([tep(1)]));
+    }
+
+    #[test]
+    fn priority_breaks_lpm_ties() {
+        let v2b = Virt2Boundary::new();
+        let r1 = Some(Uuid::from_u128(1));
+        let r2 = Some(Uuid::from_u128(2));
+        v2b.set(r1, "10.0.0.0/8".parse().unwrap(), [tep(1)]);
+        v2b.set(r2, "10.0.0.0/8".parse().unwrap(), [tep(2)]);
+
+        let list = RouterList::new([(20, r2), (10, r1)]).unwrap();
+        let best = v2b.port_routers(list).lookup_best(&v4("10.1.2.3")).unwrap();
+        assert_eq!(best, BTreeSet::from([tep(1)]));
+    }
+
+    #[test]
+    fn unassigned_routers_are_ignored() {
+        let v2b = Virt2Boundary::new();
+        let r1 = Some(Uuid::from_u128(1));
+        let unassigned = Some(Uuid::from_u128(2));
+
+        v2b.set(r1, "10.0.0.0/8".parse().unwrap(), [tep(1)]);
+        v2b.set(unassigned, "10.1.0.0/16".parse().unwrap(), [tep(2)]);
+
+        let list = RouterList::new([(10, r1)]).unwrap();
+        let best = v2b.port_routers(list).lookup_best(&v4("10.1.2.3")).unwrap();
+        assert_eq!(best, BTreeSet::from([tep(1)]));
+    }
+
+    #[test]
+    fn empty_router_list_matches_nothing() {
+        let v2b = Virt2Boundary::new();
+        v2b.set(None, "0.0.0.0/0".parse().unwrap(), [tep(1)]);
+
+        let list = RouterList::new([]).unwrap();
+        assert_eq!(v2b.port_routers(list).lookup_best(&v4("10.1.2.3")), None);
+    }
+
+    #[test]
+    fn router_list_rejects_duplicate_priorities() {
+        let r1 = Some(Uuid::from_u128(1));
+        let r2 = Some(Uuid::from_u128(2));
+        assert!(RouterList::new([(10, r1), (10, r2)]).is_err());
+
+        let list = RouterList::new([(20, r2), (10, r1)]).unwrap();
+        assert_eq!(list.entries().collect::<Vec<_>>(), &[(10, r1), (20, r2)]);
+    }
+
+    #[test]
+    fn router_list_rejects_duplicate_routers() {
+        let r1 = Some(Uuid::from_u128(1));
+
+        let err = RouterList::new([(10, r1), (20, r1)]).unwrap_err();
+        assert!(err.contains("duplicate router"), "{err}");
+
+        let err = RouterList::new([(10, None), (20, None)]).unwrap_err();
+        assert!(err.contains("duplicate default router"), "{err}");
+    }
+
+    #[test]
+    fn port_sees_route_changes() {
+        let v2b = Virt2Boundary::new();
+        let r1 = Some(Uuid::from_u128(1));
+        let pfx = "10.0.0.0/8".parse().unwrap();
+        let addr = v4("10.1.2.3");
+
+        v2b.set(r1, pfx, [tep(1)]);
+        let port = v2b.port_routers(RouterList::new([(10, r1)]).unwrap());
+        assert_eq!(port.lookup_best(&addr), Some(BTreeSet::from([tep(1)])));
+
+        v2b.set(r1, pfx, [tep(2)]);
+        v2b.remove(r1, pfx, [tep(1)]);
+        assert_eq!(port.lookup_best(&addr), Some(BTreeSet::from([tep(2)])));
     }
 }

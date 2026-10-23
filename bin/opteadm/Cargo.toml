@@ -23,6 +23,7 @@ postcard.workspace = true
 serde.workspace = true
 tabwriter.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true
