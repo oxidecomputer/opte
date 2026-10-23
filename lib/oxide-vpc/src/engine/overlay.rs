@@ -886,9 +886,9 @@ pub struct Virt2Boundary {
     ip6: KMutex<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
 
     // The Poptrie-based representation of the v2b table is a data structure
-    // optimized for fast query times. It's not easily updated in-place. It's
-    // rebuilt each time an update is made. The heuristic being applied here is
-    // we expect table churn to be highly-infrequent compared to lookups.
+    // optimized for fast query times. An update changes a copy of it and swaps
+    // the copy in. The heuristic being applied here is we expect table churn to
+    // be highly-infrequent compared to lookups.
     // Lookups may happen millions of times per second and and we want those to
     // be as fast as possible. At the time of writing, poptrie is the fastest
     // LPM lookup data structure known to the author.
@@ -896,8 +896,8 @@ pub struct Virt2Boundary {
     // The poptrie is under an read-write lock to allow multiple concurrent
     // readers. When we update we hold the lock just long enough to do a swap
     // with a poptrie that was pre-built out of band.
-    pt4: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
-    pt6: KRwLock<Poptrie<BTreeSet<TunnelEndpoint>>>,
+    pt4: KRwLock<Poptrie<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
+    pt6: KRwLock<Poptrie<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
 }
 
 /// A mapping from inner multicast destination IPs to underlay multicast groups.
@@ -960,8 +960,12 @@ impl ResourceEntry for PhysNet {}
 impl Virt2Boundary {
     pub fn get(&self, vip: &IpAddr) -> Option<BTreeSet<TunnelEndpoint>> {
         match vip {
-            IpAddr::Ip4(ip4) => self.pt4.read().match_v4(u32::from(*ip4)),
-            IpAddr::Ip6(ip6) => self.pt6.read().match_v6(u128::from(*ip6)),
+            IpAddr::Ip4(ip4) => {
+                self.pt4.read().lookup(u32::from(*ip4)).cloned()
+            }
+            IpAddr::Ip6(ip6) => {
+                self.pt6.read().lookup(u128::from(*ip6)).cloned()
+            }
         }
     }
 
@@ -986,7 +990,7 @@ impl Virt2Boundary {
                 if clear {
                     tbl.remove(&ip4);
                 }
-                self.update_poptrie_v4(&tbl);
+                self.update_poptrie_v4(&tbl, ip4);
                 orig
             }
             IpCidr::Ip6(ip6) => {
@@ -1004,7 +1008,7 @@ impl Virt2Boundary {
                 if clear {
                     tbl.remove(&ip6);
                 }
-                self.update_poptrie_v6(&tbl);
+                self.update_poptrie_v6(&tbl, ip6);
                 orig
             }
         }
@@ -1031,7 +1035,7 @@ impl Virt2Boundary {
                     }
                     None => tbl.insert(ip4, tep),
                 };
-                self.update_poptrie_v4(&tbl);
+                self.update_poptrie_v4(&tbl, ip4);
                 result
             }
             IpCidr::Ip6(ip6) => {
@@ -1044,34 +1048,38 @@ impl Virt2Boundary {
                     }
                     None => tbl.insert(ip6, tep),
                 };
-                self.update_poptrie_v6(&tbl);
+                self.update_poptrie_v6(&tbl, ip6);
                 result
             }
         }
     }
 
+    /// Updates the poptrie for the given prefix.
     fn update_poptrie_v4(
         &self,
         tree: &KMutexGuard<BTreeMap<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
+        prefix: Ipv4Cidr,
     ) {
-        let table = poptrie::Ipv4RoutingTable(
-            tree.iter()
-                .map(|(k, v)| ((k.ip().bytes(), k.prefix_len()), v.clone()))
-                .collect(),
-        );
-        *self.pt4.write() = poptrie::Poptrie::from(table);
+        let mut pt = self.pt4.read().clone();
+        match tree.get(&prefix) {
+            Some(teps) => pt.insert(prefix, teps.clone()),
+            None => pt.remove(prefix),
+        };
+        *self.pt4.write() = pt;
     }
 
+    /// Updates the poptrie for the given prefix.
     fn update_poptrie_v6(
         &self,
         tree: &KMutexGuard<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
+        prefix: Ipv6Cidr,
     ) {
-        let table = poptrie::Ipv6RoutingTable(
-            tree.iter()
-                .map(|(k, v)| ((k.ip().bytes(), k.prefix_len()), v.clone()))
-                .collect(),
-        );
-        *self.pt6.write() = poptrie::Poptrie::from(table);
+        let mut pt = self.pt6.read().clone();
+        match tree.get(&prefix) {
+            Some(teps) => pt.insert(prefix, teps.clone()),
+            None => pt.remove(prefix),
+        };
+        *self.pt6.write() = pt;
     }
 }
 

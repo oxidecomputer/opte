@@ -1244,6 +1244,7 @@ dependencies = [
  "illumos-sys-hdrs",
  "ingot",
  "ipnetwork",
+ "poptrie",
  "postcard",
  "serde",
  "smoltcp",
@@ -1457,8 +1458,9 @@ dependencies = [
 
 [[package]]
 name = "poptrie"
-version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/poptrie?branch=main#5bf62f6b889c61e0608d8463ed11da28e130cb34"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ba316f62b8c533e3e40a318466a7aa4ac8be6beae5c358a564675d36a8d84c2"
 
 [[package]]
 name = "postcard"
