@@ -458,7 +458,7 @@ impl<S: FlowState> FlowTable<S> {
     /// Remove a flow from the flowtable, firing a flow expiry DTrace
     /// probe if successful.
     pub(crate) fn expire(&mut self, flowid: &InnerFlowId) {
-        if let Some(el) = self.map.remove(flowid) {
+        if let Some(el) = self.remove(flowid) {
             flow_expired_probe(
                 self.port.as_c8_str(),
                 &self.name_c,
@@ -470,7 +470,7 @@ impl<S: FlowState> FlowTable<S> {
     }
 
     fn expire_at(&mut self, flowid: &InnerFlowId, now: Moment) {
-        if let Some(el) = self.map.remove(flowid) {
+        if let Some(el) = self.remove(flowid) {
             flow_expired_probe(
                 self.port.as_c8_str(),
                 &self.name_c,
