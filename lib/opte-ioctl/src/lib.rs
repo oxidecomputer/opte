@@ -42,6 +42,8 @@ use oxide_vpc::api::DetachSubnetResp;
 use oxide_vpc::api::DumpMcast2PhysResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
+use oxide_vpc::api::DumpRouterListReq;
+use oxide_vpc::api::DumpRouterListResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::IpCidr;
@@ -56,6 +58,7 @@ use oxide_vpc::api::SetExternalIpsReq;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
+use oxide_vpc::api::SetRouterListReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::VpcCfg;
@@ -250,6 +253,24 @@ impl OpteHdl {
     pub fn dump_v2b(&self) -> Result<DumpVirt2BoundaryResp, Error> {
         let cmd = OpteCmd::DumpVirt2Boundary;
         run_cmd_ioctl(self.device.as_raw_fd(), cmd, None::<&()>)
+    }
+
+    /// Replace a port's prioritized router list.
+    pub fn set_router_list(
+        &self,
+        req: &SetRouterListReq,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::SetRouterList;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
+    }
+
+    /// Read a port's prioritized router list.
+    pub fn dump_router_list(
+        &self,
+        req: &DumpRouterListReq,
+    ) -> Result<DumpRouterListResp, Error> {
+        let cmd = OpteCmd::DumpRouterList;
+        run_cmd_ioctl(self.device.as_raw_fd(), cmd, Some(&req))
     }
 
     /// Set a multicast forwarding entry.

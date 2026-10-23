@@ -16,8 +16,8 @@ use crate::api::BOUNDARY_SERVICES_VNI;
 use crate::cfg::VpcCfg;
 use crate::engine::geneve::OxideOptions;
 use crate::engine::geneve::ValidOxideOption;
+use crate::engine::overlay::PortRouters;
 use crate::engine::overlay::TUNNEL_ENDPOINT_MAC;
-use crate::engine::overlay::Virt2Boundary;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Deref;
@@ -38,6 +38,7 @@ use opte::api::Ipv6Addr;
 use opte::api::RouterAdvertisement;
 use opte::api::Vni;
 use opte::ddi::mblk::MsgBlk;
+use opte::ddi::sync::KRwLock;
 use opte::ddi::time::Moment;
 use opte::ddi::time::NANOS;
 use opte::engine::Direction;
@@ -122,7 +123,9 @@ impl VpcParser {
 /// The Oxide VPC network implementation.
 pub struct VpcNetwork {
     pub cfg: VpcCfg,
-    pub v2b: Arc<Virt2Boundary>,
+    /// The port's routers for boundary TEP selection. Shared with the
+    /// overlay layer's `EncapAction`.
+    pub routers: Arc<KRwLock<PortRouters>>,
     last_unsolicited_ra: Option<UnsolicitedRa>,
 }
 
@@ -130,7 +133,7 @@ impl core::fmt::Debug for VpcNetwork {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("VpcNetwork")
             .field("cfg", &self.cfg)
-            .field("v2b", &"<opaque>")
+            .field("routers", &"<opaque>")
             .field("last_unsolicited_ra", &"<opaque>")
             .finish()
     }
@@ -286,13 +289,13 @@ fn is_arp_req_for_tpa(tpa: Ipv4Addr, arp: &impl ArpEthIpv4Ref) -> bool {
 }
 
 impl VpcNetwork {
-    pub fn new(cfg: VpcCfg, v2b: Arc<Virt2Boundary>) -> Self {
+    pub fn new(cfg: VpcCfg, routers: Arc<KRwLock<PortRouters>>) -> Self {
         let last_unsolicited_ra = if cfg.has_ipv6_cfg() {
             Some(UnsolicitedRa::new(&cfg))
         } else {
             None
         };
-        Self { cfg, v2b, last_unsolicited_ra }
+        Self { cfg, routers, last_unsolicited_ra }
     }
 
     fn handle_arp_out<'a, T: Read + Pullup + 'a>(
@@ -720,7 +723,8 @@ impl NetworkImpl for VpcNetwork {
                         ));
                     }
 
-                    let Some(nh) = self.v2b.get(&recipient, pkt.l4_hash())
+                    let Some(nh) =
+                        self.routers.read().get(&recipient, pkt.l4_hash())
                     else {
                         return Err(HdlPktError(
                             "no external nexthop for ICMP reply",
@@ -869,6 +873,7 @@ mod tests {
     use super::VpcCfg;
     use super::VpcNetwork;
     use crate::api::ExternalIpCfg;
+    use crate::api::RouterList;
     use crate::cfg::IpCfg;
     use crate::cfg::Ipv4Cfg;
     use crate::cfg::Ipv6Cfg;
@@ -893,6 +898,7 @@ mod tests {
     use opte::api::Ipv6PrefixLen;
     use opte::api::MacAddr;
     use opte::api::Vni;
+    use opte::ddi::sync::KRwLock;
     use opte::ddi::time::Moment;
     use opte::dynamic::Dynamic;
     use opte::engine::NetworkImpl as _;
@@ -925,7 +931,13 @@ mod tests {
             dhcp: DhcpCfg::default(),
             mtu: 9_000,
         };
-        let net = VpcNetwork::new(cfg, Arc::new(Virt2Boundary::new()));
+        let v2b = Virt2Boundary::new();
+        let net = VpcNetwork::new(
+            cfg,
+            Arc::new(KRwLock::new(
+                v2b.port_routers(RouterList::default_only()),
+            )),
+        );
 
         // Even after we've reached the max timeout, we should not generate a
         // packet.
@@ -974,7 +986,13 @@ mod tests {
             dhcp: DhcpCfg::default(),
             mtu: 9_000,
         };
-        let net = VpcNetwork::new(cfg.clone(), Arc::new(Virt2Boundary::new()));
+        let v2b = Virt2Boundary::new();
+        let net = VpcNetwork::new(
+            cfg.clone(),
+            Arc::new(KRwLock::new(
+                v2b.port_routers(RouterList::default_only()),
+            )),
+        );
 
         let timeout_at = net
             .last_unsolicited_ra
