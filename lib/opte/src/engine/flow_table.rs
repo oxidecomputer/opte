@@ -1453,7 +1453,7 @@ mod holds {
     }
 
     /// A validated, sufficiently-small hold count for flow liveness state.
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Default)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
     pub(super) struct Holds(u8);
 
     impl Holds {
