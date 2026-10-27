@@ -556,6 +556,8 @@ enum SpaceCreated {
     Evict { in_key: InnerFlowId, out_key: InnerFlowId },
 }
 
+/// An inbound/outbound pair of match-action tables, specified when creating
+/// a new port.
 pub struct LayerSpec {
     name: &'static C8Str,
     actions: LayerActions,
@@ -565,10 +567,13 @@ pub struct LayerSpec {
 }
 
 impl LayerSpec {
+    /// Returns the `idx`th entry of the [`LayerActions::actions`] this
+    /// layer was built from, if that entry exists.
     pub fn action(&self, idx: usize) -> Option<Action> {
         self.actions.actions.get(idx).cloned()
     }
 
+    /// Insert a rule into either the in- or outbound match-action table.
     pub fn add_rule(&mut self, dir: Direction, rule: Rule<Finalized>) {
         match dir {
             Direction::Out => {
@@ -581,10 +586,12 @@ impl LayerSpec {
         }
     }
 
+    /// Return the name of this layer.
     pub fn name(&self) -> &str {
         self.name
     }
 
+    /// Define a new layer with a given name, actions, and flow table.
     pub fn new(
         name: &'static C8Str,
         actions: LayerActions,
@@ -608,6 +615,8 @@ impl LayerSpec {
         }
     }
 
+    /// Convert this specification into a full `Layer` as part of creating
+    /// a `Port`.
     pub(crate) fn into_layer(self, port: Arc<C8Str>) -> Layer {
         let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
 
@@ -1709,14 +1718,16 @@ impl From<&RuleTableEntry> for RuleTableEntryDump {
     }
 }
 
+/// A match-action table with extra metadata for DTrace probes.
 #[derive(Debug)]
-pub(crate) struct RuleTable {
+struct RuleTable {
     port: Arc<C8Str>,
     layer_c: CString,
     dir: Direction,
     rules: RuleTableCore,
 }
 
+/// A match-action table.
 #[derive(Debug, Default)]
 struct RuleTableCore {
     rules: Vec<RuleTableEntry>,
@@ -1735,10 +1746,12 @@ pub enum RuleRemoveErr {
 }
 
 impl RuleTable {
+    /// Install a new rule into this table.
     fn add(&mut self, rule: Rule<rule::Finalized>) {
         self.rules.add(rule);
     }
 
+    /// Return a serialised snapshot of this table's state.
     fn dump(&self) -> Vec<RuleTableEntryDump> {
         let mut dump = Vec::new();
         for rte in self.rules.iter() {
@@ -1747,6 +1760,7 @@ impl RuleTable {
         dump
     }
 
+    /// Identify which rule, if any, matches a given packet.
     fn find_match(
         &self,
         ifid: &InnerFlowId,
@@ -1781,7 +1795,7 @@ impl RuleTable {
     /// Search for a matching rule that has the same predicates as the
     /// specified rule. If no matching rule is found, then `None` is
     /// returned.
-    pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
+    fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
         self.rules.find_rule(query_rule)
     }
 
@@ -1795,6 +1809,7 @@ impl RuleTable {
         }
     }
 
+    /// Return the number of rules installed in this table.
     fn num_rules(&self) -> usize {
         self.rules.num_rules()
     }
@@ -1804,7 +1819,7 @@ impl RuleTable {
         self.rules.remove(id)
     }
 
-    pub fn rule_no_match_probe(
+    fn rule_no_match_probe(
         port: &CStr,
         layer: &CStr,
         dir: Direction,
@@ -1872,12 +1887,16 @@ impl RuleTable {
         }
     }
 
-    pub fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
+    /// Replace all rules in this table with a new set.
+    ///
+    /// These will be sorted into priority order.
+    fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
         self.rules.set_rules(new_rules);
     }
 }
 
 impl RuleTableCore {
+    /// Install a new rule into this table.
     fn add(&mut self, rule: Rule<rule::Finalized>) {
         match self.find_pos(&rule) {
             RulePlace::End => {
@@ -1895,6 +1914,8 @@ impl RuleTableCore {
         self.next_id += 1;
     }
 
+    /// Find the index that `rule` should be inserted within the table based
+    /// on its priority.
     fn find_pos(&self, rule: &Rule<rule::Finalized>) -> RulePlace {
         for (i, rte) in self.rules.iter().enumerate() {
             if rule.priority() < rte.rule.priority() {
@@ -1921,10 +1942,12 @@ impl RuleTableCore {
     /// Search for a matching rule that has the same predicates as the
     /// specified rule. If no matching rule is found, then `None` is
     /// returned.
-    pub fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
+    fn find_rule(&self, query_rule: &Rule<Finalized>) -> Option<RuleId> {
         self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
     }
 
+    /// Combine this table with additional DTrace probe helper state,
+    /// provided by a `Layer`.
     fn into_table(
         self,
         port: Arc<C8Str>,
@@ -1939,14 +1962,17 @@ impl RuleTableCore {
         }
     }
 
+    /// Return an iterator over all rue sin the table.
     fn iter(&self) -> impl Iterator<Item = &RuleTableEntry> {
         self.rules.iter()
     }
 
+    /// Return the number of rules installed in this table.
     fn num_rules(&self) -> usize {
         self.rules.len()
     }
 
+    // Remove the rule with the given `id`. Otherwise, return not found.
     fn remove(&mut self, id: RuleId) -> Result<()> {
         for (rule_idx, rte) in self.rules.iter().enumerate() {
             if id == rte.id {
@@ -1958,6 +1984,9 @@ impl RuleTableCore {
         Err(Error::RuleNotFound { id })
     }
 
+    /// Replace all rules in this table with a new set.
+    ///
+    /// These will be sorted into priority order.
     fn set_rules(&mut self, new_rules: Vec<Rule<rule::Finalized>>) {
         self.rules.clear();
         for r in new_rules {
