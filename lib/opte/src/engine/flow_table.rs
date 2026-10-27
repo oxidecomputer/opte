@@ -2144,8 +2144,8 @@ mod test {
     #[test]
     fn liveness_roundtrips_u8() {
         let families = [
-            (Liveness::Larval { holds: Holds::default() }),
-            (Liveness::Ready { holds: Holds::default() }),
+            (Liveness::Larval { holds: Holds::ZERO }),
+            (Liveness::Ready { holds: Holds::ZERO }),
         ];
 
         let roundtrip = |v| assert_eq!(v, Liveness::from(u8::from(v)));
