@@ -398,7 +398,7 @@ impl PortBuilder {
     }
 
     /// Return a clone of the [`Action`] defined in the given
-    /// [`Layer`] at the given index. If the layer does not exist, or
+    /// `Layer` at the given index. If the layer does not exist, or
     /// has no action at that index, then `None` is returned.
     pub fn layer_action(&self, layer: &str, idx: usize) -> Option<Action> {
         for l in &self.layers {
@@ -424,7 +424,7 @@ impl PortBuilder {
         PortBuilder { name, mac, ectx, layers: Vec::new(), mtu }
     }
 
-    /// Remove the [`Layer`] registered under `name`, if such a layer
+    /// Remove the `Layer` registered under `name`, if such a layer
     /// exists.
     pub fn remove_layer(&mut self, name: &str) {
         for (i, layer) in self.layers.iter().enumerate() {
@@ -1202,7 +1202,7 @@ impl<N: NetworkImpl> Port<N> {
     }
 
     /// Return a reference to the [`Action`] defined in the given
-    /// [`Layer`] at the given index. If the layer does not exist, or
+    /// `Layer` at the given index. If the layer does not exist, or
     /// has no action at that index, then `None` is returned.
     ///
     /// # States
@@ -1244,7 +1244,7 @@ impl<N: NetworkImpl> Port<N> {
         None
     }
 
-    /// List each [`Layer`] under this port.
+    /// List each `Layer` under this port.
     ///
     /// # States
     ///
