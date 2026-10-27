@@ -410,27 +410,16 @@ impl StaticAction for EncapAction {
                 //
                 // It's a possible optimisation, but it'd need more thought.
                 RouterTargetInternal::InternetGateway(_) => {
-                    match self.v2b.get(&recipient) {
-                        Some(phys) if sent_from_eip => {
-                            // Hash the packet onto a route target. This is a very
-                            // rudimentary mechanism. Should level-up to an ECMP
-                            // algorithm with well known statistical properties.
-                            let hash = f_hash as usize;
-                            let target =
-                                match phys.iter().nth(hash % phys.len()) {
-                                    Some(target) => target,
-                                    None => return Ok(AllowOrDeny::Deny),
-                                };
-                            (
-                                false,
-                                PhysNet {
-                                    ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
-                                    ip: target.ip,
-                                    vni: target.vni,
-                                },
-                                false,
-                            )
-                        }
+                    match self.v2b.get(&recipient, f_hash) {
+                        Some(target) if sent_from_eip => (
+                            false,
+                            PhysNet {
+                                ether: MacAddr::from(TUNNEL_ENDPOINT_MAC),
+                                ip: target.ip,
+                                vni: target.vni,
+                            },
+                            false,
+                        ),
 
                         // Sending traffic to boundary services *requires* that
                         // it is originated from an external IP.
@@ -958,11 +947,22 @@ impl ResourceEntry for PhysNet {}
 // are IPs. The mapping resource trait requires that the keys and query
 // arguments be of the same type.
 impl Virt2Boundary {
-    pub fn get(&self, vip: &IpAddr) -> Option<BTreeSet<TunnelEndpoint>> {
+    pub fn get_teps(&self, vip: &IpAddr) -> Option<BTreeSet<TunnelEndpoint>> {
         match vip {
             IpAddr::Ip4(ip4) => self.pt4.read().match_v4(u32::from(*ip4)),
             IpAddr::Ip6(ip6) => self.pt6.read().match_v6(u128::from(*ip6)),
         }
+    }
+
+    /// Selects one of the TEPs for `vip`, using `hash` to spread flows across
+    /// them. Returns `None` if there are no TEPs for `vip`.
+    ///
+    /// This is a very rudimentary mechanism. Should level-up to an ECMP
+    /// algorithm with well known statistical properties.
+    pub fn get(&self, vip: &IpAddr, hash: u32) -> Option<TunnelEndpoint> {
+        let teps = self.get_teps(vip)?;
+        let hash = usize::try_from(hash).ok()?;
+        teps.iter().nth(hash.checked_rem(teps.len())?).copied()
     }
 
     pub fn remove<I: IntoIterator<Item = TunnelEndpoint>>(
@@ -1216,7 +1216,7 @@ mod tests {
 
         assert_eq!(v2b.set(prefix, [tep(1)]), None);
         assert_eq!(v2b.set(prefix, [tep(2)]), Some(BTreeSet::from([tep(1)])));
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1), tep(2)])));
+        assert_eq!(v2b.get_teps(&addr), Some(BTreeSet::from([tep(1), tep(2)])));
     }
 
     #[test]
@@ -1230,7 +1230,7 @@ mod tests {
             v2b.remove(prefix, [tep(1)]),
             Some(BTreeSet::from([tep(1), tep(2)]))
         );
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(2)])));
+        assert_eq!(v2b.get_teps(&addr), Some(BTreeSet::from([tep(2)])));
     }
 
     #[test]
@@ -1241,7 +1241,7 @@ mod tests {
 
         v2b.set(prefix, [tep(1)]);
         v2b.remove(prefix, [tep(1)]);
-        assert_eq!(v2b.get(&addr), None);
+        assert_eq!(v2b.get_teps(&addr), None);
         assert!(v2b.dump_ip4().is_empty());
     }
 
@@ -1252,11 +1252,11 @@ mod tests {
         let addr: IpAddr = "10.0.0.1".parse().unwrap();
 
         assert_eq!(v2b.set(prefix, []), None);
-        assert_eq!(v2b.get(&addr), None);
+        assert_eq!(v2b.get_teps(&addr), None);
         assert!(v2b.dump_ip4().is_empty());
 
         v2b.set(prefix, [tep(1)]);
         assert_eq!(v2b.set(prefix, []), None);
-        assert_eq!(v2b.get(&addr), Some(BTreeSet::from([tep(1)])));
+        assert_eq!(v2b.get_teps(&addr), Some(BTreeSet::from([tep(1)])));
     }
 }

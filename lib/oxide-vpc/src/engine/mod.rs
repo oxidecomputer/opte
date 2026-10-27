@@ -718,19 +718,12 @@ impl NetworkImpl for VpcNetwork {
                         ));
                     }
 
-                    let Some(nhs) =
-                        self.v2b.get(&recipient).filter(|v| !v.is_empty())
+                    let Some(nh) = self.v2b.get(&recipient, pkt.l4_hash())
                     else {
                         return Err(HdlPktError(
                             "no external nexthop for ICMP reply",
                         ));
                     };
-
-                    let hash = pkt.l4_hash() as usize;
-                    let nh = nhs
-                        .iter()
-                        .nth(hash % nhs.len())
-                        .expect("nhs nonempty, index is always less than len");
 
                     let EncapMeta::Geneve(gv) = gv;
                     gv.vni = nh.vni;
