@@ -985,7 +985,7 @@ impl<N: NetworkImpl> Port<N> {
     //
     fn tcp_err(
         &self,
-        data: &FlowTable<TcpFlowEntryState>,
+        _data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
         pkt: &mut Packet<MblkFullParsed>,
