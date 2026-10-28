@@ -985,20 +985,12 @@ impl<N: NetworkImpl> Port<N> {
     //
     fn tcp_err(
         &self,
-        data: &FlowTable<TcpFlowEntryState>,
+        _data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
         pkt: &mut Packet<MblkFullParsed>,
     ) {
-        if unsafe { super::opte_panic_debug != 0 } {
-            super::err!("mblk: {}", pkt.mblk_addr());
-            super::err!("flow: {}", pkt.flow());
-            super::err!("meta: {:?}", pkt.meta());
-            super::err!("flows: {:?}", data);
-            todo!("bad packet: {}", msg);
-        } else {
-            self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
-        }
+        self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
     }
 
     fn tcp_err_probe(
