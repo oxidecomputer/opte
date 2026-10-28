@@ -1168,6 +1168,9 @@ impl<N: NetworkImpl> Port<N> {
         let now = now.unwrap_or_else(Moment::now);
         check_state!(self.state, [PortState::Running])?;
 
+        // We prevent ourselves from taking a writelock on any of our tables
+        // for expiry *unless* we find at least one entry that we need to
+        // remove.
         fn optimistic_expire<S: FlowState>(
             now: Moment,
             lock: &KRwLock<FlowTable<S>>,
