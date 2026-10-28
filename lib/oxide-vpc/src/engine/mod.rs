@@ -194,9 +194,11 @@ impl UnsolicitedRa {
         }
         not(test) => {
             const MIN_RTR_ADV_INTERVAL: u64 = 450;
-            const MIN_RTR_ADV_INTERVAL_NANOS: u64 = Self::MIN_RTR_ADV_INTERVAL * NANOS;
+            const MIN_RTR_ADV_INTERVAL_NANOS: u64 =
+                Self::MIN_RTR_ADV_INTERVAL * NANOS;
             const MAX_RTR_ADV_INTERVAL: u64 = 600;
-            const MAX_RTR_ADV_INTERVAL_NANOS: u64 = Self::MAX_RTR_ADV_INTERVAL * NANOS;
+            const MAX_RTR_ADV_INTERVAL_NANOS: u64 =
+                Self::MAX_RTR_ADV_INTERVAL * NANOS;
         }
     }
 
