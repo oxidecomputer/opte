@@ -62,6 +62,7 @@ use illumos_sys_hdrs::c_char;
 use illumos_sys_hdrs::uintptr_t;
 use opte_api::ActionDescEntryDump;
 use opte_api::Direction;
+use opte_api::OpteError;
 use opte_api::RuleDump;
 use opte_api::RuleId;
 use opte_api::RuleTableEntryDump;
@@ -173,6 +174,14 @@ impl Display for LayerResult {
 
 pub enum Error {
     RuleNotFound { id: RuleId },
+}
+
+impl From<Error> for OpteError {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::RuleNotFound { id } => OpteError::RuleNotFound(id),
+        }
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -561,8 +570,21 @@ enum SpaceCreated {
     Evict { in_key: InnerFlowId, out_key: InnerFlowId },
 }
 
+/// The flow table configuration for a given layer.
 pub enum LayerKind {
+    /// A layer without a flow table. Packets are processed at this layer
+    /// without any locking.
+    ///
+    /// Rules may produce any action *except* [`Action::StatefulAllow`]. If
+    /// this action is observed, the packet will be dropped with an error
+    /// condition.
     Stateless,
+
+    /// A layer with in/out flow tables, used to hold
+    /// [`Action::StatefulAllow`] decisions for a pair of 5-tuples. Accessing
+    /// these tables may require locking.
+    ///
+    /// Rules may produce any action.
     Stateful { capacity: NonZeroU32 },
 }
 
@@ -699,8 +721,12 @@ impl LayerSpec {
     }
 }
 
+/// State specific to a `Layer`'s kind.
 enum LayerState {
+    /// This layer is stateless, and holds no additional flow tables.
     Stateless,
+
+    /// The flow tables for a stateful layer.
     Stateful { ft: Box<KRwLock<LayerFlowTable>>, name: CString },
 }
 
@@ -1346,7 +1372,7 @@ impl Layer {
         };
 
         // See `process_in` on why this is held as a write lock here, even
-        // if some tables could benefit from taking just a readlock.
+        // if some tables could benefit from taking just a read.
         let mut ft = ft.write();
 
         // We have no FlowId, thus there can be no FlowTable entry.
@@ -1440,7 +1466,6 @@ impl Layer {
     ) -> result::Result<LayerResult, LayerError> {
         use Direction::Out;
 
-        self.stats.vals.out_lft_miss.incr(1);
         let rule = self.rules_out.find_match(pkt.flow(), pkt.meta(), ameta);
 
         let action = if let Some(rule) = rule {
