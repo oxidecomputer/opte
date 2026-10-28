@@ -51,12 +51,6 @@ use rule::CompiledTransform;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
 
-/// When set to 1 we will panic in some situations instead of just
-/// flagging in error. This can be useful for debugging certain
-/// scenarios in development.
-#[unsafe(no_mangle)]
-pub static mut opte_panic_debug: i32 = 0;
-
 cfg_if! {
     if #[cfg(feature = "std")] {
         #[macro_export]
