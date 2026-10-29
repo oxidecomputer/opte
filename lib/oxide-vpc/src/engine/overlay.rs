@@ -1065,7 +1065,9 @@ impl Virt2Boundary {
             Some(teps) => pt.insert(prefix, teps.clone()),
             None => pt.remove(prefix),
         };
-        *self.pt4.write() = pt;
+        // Drop the old poptrie after releasing the write lock.
+        let old = core::mem::replace(&mut *self.pt4.write(), pt);
+        drop(old);
     }
 
     /// Updates the poptrie for the given prefix.
@@ -1079,7 +1081,9 @@ impl Virt2Boundary {
             Some(teps) => pt.insert(prefix, teps.clone()),
             None => pt.remove(prefix),
         };
-        *self.pt6.write() = pt;
+        // Drop the old poptrie after releasing the write lock.
+        let old = core::mem::replace(&mut *self.pt6.write(), pt);
+        drop(old);
     }
 }
 
