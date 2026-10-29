@@ -41,7 +41,6 @@ use super::predicate::DataPredicate;
 use super::predicate::Predicate;
 use crate::ddi::mblk::MsgBlk;
 use crate::engine::export::ActionDescKind;
-use crate::engine::layer::LayerError;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -261,8 +260,6 @@ pub enum ImportError {
     ExternalIpNotFound(IpAddr),
     /// The layer into which we're importing data isn't empty.
     LayerNotEmpty(&'static str),
-    /// Error importing at a layer
-    Layer(LayerError),
     /// The flows could not be imported because they appear malformed.
     ///
     /// This could happen if the flow protocols on the in / out don't match, or
@@ -282,6 +279,34 @@ pub enum ImportError {
         flow_in: InnerFlowId,
         flow_out: InnerFlowId,
     },
+}
+
+impl ImportError {
+    pub fn report_str(&self) -> String {
+        match self {
+            ImportError::Resource(res) => {
+                format!("Resource error: {}", res.report_str())
+            }
+            ImportError::ExternalIpNotFound(ip) => {
+                format!("External IP not found: {ip}")
+            }
+            ImportError::LayerNotEmpty(layer) => {
+                format!("Layer '{layer}' is not empty")
+            }
+            ImportError::MalformedPair { kind, .. } => {
+                format!("Cannot import malformed LFT {kind:?} pair")
+            }
+            ImportError::TooManyFlows { layer, needed, limit } => {
+                format!(
+                    "Needed flow count {needed} exceeds limit \
+                    {limit} for layer '{layer}'"
+                )
+            }
+            ImportError::NotAccepted { layer, kind, .. } => {
+                format!("No rule in layer '{layer}' accepted {kind:?} pair")
+            }
+        }
+    }
 }
 
 impl From<ResourceError> for ImportError {
@@ -814,6 +839,20 @@ pub enum ResourceError {
     NoMatch(String),
     /// During a restore, the requested resource is already in use.
     InUse(String),
+}
+
+impl ResourceError {
+    pub fn report_str(&self) -> String {
+        match self {
+            ResourceError::Exhausted => String::from("Resource exhausted"),
+            ResourceError::NoMatch(item) => {
+                format!("No match for resource {item}")
+            }
+            ResourceError::InUse(item) => {
+                format!("Resource {item} is in use")
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

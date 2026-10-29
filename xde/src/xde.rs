@@ -240,6 +240,8 @@ use opte::api::DumpTcpFlowsReq;
 use opte::api::DumpTcpFlowsResp;
 use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
+use opte::api::ExportLftReq;
+use opte::api::ImportLftReq;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
 use opte::api::MacAddr;
@@ -248,6 +250,9 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
+use opte::api::PausePortReq;
+use opte::api::PortLftExport;
+use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
@@ -1156,6 +1161,26 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::DumpMcast2Phys => {
             let resp = dump_m2p_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::PausePort => {
+            let resp = pause_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResumePort => {
+            let resp = resume_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ImportLft => {
+            let resp = import_lft_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ExportLft => {
+            let resp = export_lft_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
     }
@@ -4764,6 +4789,75 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     }
 
     Ok(resp)
+}
+
+// TODO-correctness: Pausing the port doesn't clear it's LFTs. So we can't
+// really use this as a way to prep a port for import. What we need is a flag to
+// the create ioctl which says what to do when the MAC driver starts the device,
+// i.e., calls `xde_mc_start()`.
+//
+// The flag could be something like:
+//
+// enum StartPolicy {
+//     OnMac, // Start when MAC calls `xde_mc_start()`
+//     Explicit, // Only when an ioctl asks
+// }
+//
+// In the latter case, creating the device leaves it in the `Ready` state until
+// we explicitly ask.
+//
+// Then we can have the destination sled-agent create the port with `Explicit`,
+// Propolis imports the state it needs from the source; and then issue the ioctl
+// to resume it after that completes, but before starting the destination vCPUs.
+#[unsafe(no_mangle)]
+fn pause_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let PausePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.pause()?;
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn resume_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResumePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.start();
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn export_lft_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<PortLftExport, OpteError> {
+    let ExportLftReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.export_lfts()
+}
+
+#[unsafe(no_mangle)]
+fn import_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ImportLftReq { port_name, export } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port
+        .import_lfts(export)
+        .map_err(|e| OpteError::Import(e.report_str()))
+        .map(|_| NoResp::default())
 }
 
 impl From<&crate::ip::in6_addr> for Ipv6Addr {

@@ -14,6 +14,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt::Debug;
+use core::time::Duration;
 use illumos_sys_hdrs::c_int;
 use illumos_sys_hdrs::size_t;
 use serde::Deserialize;
@@ -116,6 +117,15 @@ pub enum OpteCmd {
     McastUnsubscribeAll = 108,
     /// Read out all M2P (multicast group -> underlay multicast) mappings.
     DumpMcast2Phys = 109,
+
+    /// Pause a port.
+    PausePort = 120,
+    /// Resume a port.
+    ResumePort = 121,
+    /// Export the LFT state of a port.
+    ExportLft = 122,
+    /// Import exported LFT state into a port.
+    ImportLft = 123,
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -158,6 +168,10 @@ impl TryFrom<c_int> for OpteCmd {
             107 => Ok(Self::DumpMcastSubscriptions),
             108 => Ok(Self::McastUnsubscribeAll),
             109 => Ok(Self::DumpMcast2Phys),
+            120 => Ok(Self::PausePort),
+            121 => Ok(Self::ResumePort),
+            122 => Ok(Self::ExportLft),
+            123 => Ok(Self::ImportLft),
             _ => Err(()),
         }
     }
@@ -283,6 +297,7 @@ pub enum OpteError {
     },
     /// The provided `IpCfg` is not valid, such as an empty port range.
     InvalidIpCfg,
+    Import(String),
 }
 
 impl OpteError {
@@ -321,6 +336,8 @@ impl OpteError {
             Self::SerCmdResp(_) => ENOMSG,
             Self::System { errno, .. } => *errno,
             Self::InvalidIpCfg => EINVAL,
+            // TODO-correctness: This isn't really accurate.
+            Self::Import(_) => EINVAL,
         }
     }
 }
@@ -487,4 +504,76 @@ pub struct RuleDump {
     pub predicates: Vec<String>,
     pub data_predicates: Vec<String>,
     pub action: String,
+}
+
+/// The kind of an exported LFT pair.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub enum ActionDescKind {
+    /// There is no real action, its existence indicates an LFT entry.
+    ///
+    /// This is used for firewall rules, which only need to insert an entry into
+    /// the in / out flow tables, but don't have any real action associated
+    /// with them.
+    NoOp,
+    /// An SNAT action, translating a private to public IP within a specific
+    /// port range.
+    SNat,
+    /// An SNAT-based echo action, using the echo identifier as the port
+    /// number.
+    SNatIcmpEcho,
+    /// A NAT action, translating a private to public IP.
+    Nat,
+}
+
+/// A single in-out pair exported by an LFT.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LftPairExport<Flow> {
+    /// Flow ID on the inbound LFT.
+    pub flow_in: Flow,
+    /// Flow ID on the outbound LFT.
+    pub flow_out: Flow,
+    /// Age of the flow.
+    pub age: Duration,
+    /// The number of inbound hits for this flow at `age`.
+    pub hits_in: u64,
+    /// The number of outbound hits for this flow at `age`.
+    pub hits_out: u64,
+    /// The kind of action this pair represents.
+    pub kind: ActionDescKind,
+}
+
+/// The exported data from a single Layer in a port.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LayerExport<Flow> {
+    pub layer: String,
+    pub pairs: Vec<LftPairExport<Flow>>,
+}
+
+/// A full LFT exported for all layers in a port.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PortLftExport<Flow> {
+    pub layers: Vec<LayerExport<Flow>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExportLftReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ImportLftReq<Flow> {
+    pub port_name: String,
+    pub export: PortLftExport<Flow>,
+}
+
+impl<T: Debug + Serialize> CmdOk for PortLftExport<T> {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PausePortReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResumePortReq {
+    pub port_name: String,
 }

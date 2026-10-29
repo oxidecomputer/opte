@@ -15,6 +15,9 @@ use opte::api::DumpTcpFlowsReq;
 use opte::api::DumpTcpFlowsResp;
 use opte::api::DumpUftReq;
 use opte::api::DumpUftResp;
+use opte::api::ExportLftReq;
+use opte::api::ExportLftResp;
+use opte::api::ImportLftReq;
 pub use opte::api::InnerFlowId;
 use opte::api::ListLayersReq;
 use opte::api::ListLayersResp;
@@ -22,6 +25,9 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
+use opte::api::PausePortReq;
+use opte::api::PortLftExport;
+use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddFwRuleReq;
@@ -482,6 +488,54 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&DumpUftReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Pause a port.
+    pub fn pause(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::PausePort;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&PausePortReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Resume a port, setting it running.
+    pub fn resume(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ResumePort;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ResumePortReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Export the LFT data from a port.
+    ///
+    /// The port must be paused.
+    pub fn export_lfts(&self, port_name: &str) -> Result<ExportLftResp, Error> {
+        let cmd = OpteCmd::ExportLft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ExportLftReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Import exported LFT data into a port.
+    ///
+    /// The port must be ready, but not running.
+    pub fn import_lfts(
+        &self,
+        port_name: &str,
+        export: PortLftExport,
+    ) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ImportLft;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ImportLftReq { port_name: port_name.to_string(), export }),
         )
     }
 }

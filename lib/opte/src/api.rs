@@ -304,3 +304,10 @@ pub type TcpFlowEntryDump = opte_api::TcpFlowEntryDump<InnerFlowId>;
 // Mcast2Phys table (see oxide-vpc/engine/overlay.rs).
 #[cfg(feature = "engine")]
 impl crate::engine::rule::ResourceEntry for MulticastUnderlay {}
+
+// Type aliases for importing and exporting port state.
+pub type LftPairExport = opte_api::LftPairExport<InnerFlowId>;
+pub type LayerExport = opte_api::LayerExport<InnerFlowId>;
+pub type PortLftExport = opte_api::PortLftExport<InnerFlowId>;
+pub type ExportLftResp = PortLftExport;
+pub type ImportLftReq = opte_api::ImportLftReq<InnerFlowId>;
