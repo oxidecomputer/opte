@@ -494,8 +494,8 @@ struct LayerStats {
     /// resulting in the default action being applied.
     in_rule_nomatch: KStatU64,
 
-    /// The number of inbound packets denied by this layer,
-    /// either explicitly or due to the default action.
+    /// The number of inbound packets for which this layer returned Deny,
+    /// whether from a rule, the default action, or an action's decision.
     in_deny: KStatU64,
 
     /// The current number of inbound rules.
@@ -519,8 +519,8 @@ struct LayerStats {
     /// resulting in the default action being applied.
     out_rule_nomatch: KStatU64,
 
-    /// The number of outbound packets denied by this layer,
-    /// either explicitly or due to the default action.
+    /// The number of outbound packets for which this layer returned Deny,
+    /// whether from a rule, the default action, or an action's decision.
     out_deny: KStatU64,
 
     /// The current number of outbound rules.
@@ -870,6 +870,12 @@ impl Layer {
             Out => self.process_out(ectx, pkt, xforms, ameta),
             In => self.process_in(ectx, pkt, xforms, ameta),
         };
+        if matches!(&res, Ok(LayerResult::Deny { .. })) {
+            match dir {
+                In => self.stats.vals.in_deny += 1,
+                Out => self.stats.vals.out_deny += 1,
+            }
+        }
         self.layer_process_return_probe(dir, &flow_before, pkt.flow(), &res);
         res
     }
@@ -998,7 +1004,6 @@ impl Layer {
             }
 
             Action::Deny => {
-                self.stats.vals.in_deny += 1;
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(In, pkt.flow());
                     DenyReason::Rule
@@ -1298,7 +1303,6 @@ impl Layer {
             }
 
             Action::Deny => {
-                self.stats.vals.out_deny += 1;
                 let reason = if rule.is_some() {
                     self.rule_deny_probe(Out, pkt.flow());
                     DenyReason::Rule

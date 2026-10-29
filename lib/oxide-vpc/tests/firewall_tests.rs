@@ -205,7 +205,23 @@ fn firewall_vni_inbound() {
     // VPC firewall rules dictate that only inbound traffic from the
     // same VPC should be allowed.
     // ================================================================
+    let denies_before = VPC_LAYERS.map(|name| {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        (stats.in_deny, stats.out_deny)
+    });
     let res = g1.port.process(In, pkt1);
+    for (name, (in_before, out_before)) in
+        VPC_LAYERS.into_iter().zip(denies_before)
+    {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        assert_eq!(
+            stats.in_deny - in_before,
+            u64::from(name == "firewall"),
+            "{name} in_deny"
+        );
+        assert_eq!(stats.out_deny - out_before, 0, "{name} out_deny");
+    }
+
     assert_drop!(
         res,
         DropReason::Layer { name: "firewall", reason: DenyReason::Default }
@@ -241,7 +257,19 @@ fn firewall_vni_inbound() {
     );
     pkt2_m = encap(pkt2_m, phys_src, phys_dst);
     let pkt2 = parse_inbound(&mut pkt2_m, VpcParser {}).unwrap();
+    let denies_before = VPC_LAYERS.map(|name| {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        (stats.in_deny, stats.out_deny)
+    });
     let res = g1.port.process(In, pkt2);
+    for (name, (in_before, out_before)) in
+        VPC_LAYERS.into_iter().zip(denies_before)
+    {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        assert_eq!(stats.in_deny - in_before, 0, "{name} in_deny");
+        assert_eq!(stats.out_deny - out_before, 0, "{name} out_deny");
+    }
+
     expect_modified!(res, pkt2_m);
     incr!(
         g1,
