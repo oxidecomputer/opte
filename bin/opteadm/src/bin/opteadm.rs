@@ -240,7 +240,11 @@ enum Command {
     },
 
     /// Set a virtual-to-boundary mapping
-    SetV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
+    SetV2B {
+        prefix: IpCidr,
+        #[arg(required = true)]
+        tunnel_endpoint: Vec<Ipv6Addr>,
+    },
 
     /// Clear a virtual-to-boundary mapping
     ClearV2B { prefix: IpCidr, tunnel_endpoint: Vec<Ipv6Addr> },
