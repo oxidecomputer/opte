@@ -10,6 +10,7 @@ use super::TcpState;
 use super::encap::Vni;
 use super::ip::IpCidr;
 use super::mac::MacAddr;
+use crate::PortState;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -27,6 +28,14 @@ pub const XDE_IOC_OPTE_CMD: i32 = XDE_IOC as i32 | 0x01;
 pub enum OpteCmd {
     /// List all ports.
     ListPorts = 1,
+    /// Get the state of a port.
+    State = 2,
+    /// Pause a port.
+    PausePort = 3,
+    /// Resume a port.
+    ResumePort = 4,
+    /// Reset a port.
+    ResetPort = 5,
 
     /// Add a firewall rule.
     AddFwRule = 20,
@@ -124,6 +133,10 @@ impl TryFrom<c_int> for OpteCmd {
     fn try_from(num: c_int) -> Result<Self, Self::Error> {
         match num {
             1 => Ok(Self::ListPorts),
+            2 => Ok(Self::State),
+            3 => Ok(Self::PausePort),
+            4 => Ok(Self::ResumePort),
+            5 => Ok(Self::ResetPort),
             20 => Ok(Self::AddFwRule),
             21 => Ok(Self::RemFwRule),
             22 => Ok(Self::SetFwRules),
@@ -488,3 +501,30 @@ pub struct RuleDump {
     pub data_predicates: Vec<String>,
     pub action: String,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PausePortReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResumePortReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResetPortReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StateReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StateResp {
+    pub state: PortState,
+}
+
+impl CmdOk for StateResp {}

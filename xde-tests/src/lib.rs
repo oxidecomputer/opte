@@ -279,11 +279,12 @@ impl OpteZone {
         &self,
         src_ip: Ipv4Addr,
         dst_ip: Ipv4Addr,
-        port: u16,
+        dst_port: u16,
         payload: &str,
     ) -> Result<()> {
-        let cmd =
-            format!("echo '{payload}' | nc -u -s {src_ip} -w1 {dst_ip} {port}");
+        let cmd = format!(
+            "echo '{payload}' | nc -u -s {src_ip} -w1 {dst_ip} {dst_port}"
+        );
         self.zone.zexec(&cmd)?;
         Ok(())
     }
@@ -1040,7 +1041,7 @@ pub struct Topology {
 /// address of 10.0.0.2. This means that OPTE will encap/decap packets to
 /// and from the vopte devices, the underlying routes on the host will lead
 /// xde to select the correct simnet device. Then the simnet setup will
-/// forward the packet to it's adjacent peer, which then makes it's way back
+/// forward the packet to its adjacent peer, which then makes its way back
 /// to OPTE and then to the adjacent vopte device. This is a nice little
 /// sanity checker to make sure basic opte/xde functionality is working - and
 /// that we're not hitting things like debug asserts in the OS.
@@ -1070,7 +1071,7 @@ pub fn two_node_topology() -> Result<Topology> {
     // preventing us from cleaning them up after this test.
     let xde = Xde {};
 
-    // Set up the virtual to physical mapptings for this test run.
+    // Set up the virtual to physical mappings for this test run.
     Xde::set_v2p("10.0.0.1", "a8:40:25:ff:00:01", "fd44::1")?;
     Xde::set_v2p("10.0.0.2", "a8:40:25:ff:00:02", "fd77::1")?;
 
