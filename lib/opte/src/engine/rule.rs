@@ -768,6 +768,20 @@ pub enum ResourceError {
     InUse(String),
 }
 
+impl ResourceError {
+    pub fn report_str(&self) -> String {
+        match self {
+            ResourceError::Exhausted => String::from("Resource exhausted"),
+            ResourceError::NoMatch(item) => {
+                format!("No match for resource {item}")
+            }
+            ResourceError::InUse(item) => {
+                format!("Resource {item} is in use")
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum GenDescError {
     ResourceExhausted { name: String },
