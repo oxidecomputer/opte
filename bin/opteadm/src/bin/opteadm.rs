@@ -20,6 +20,7 @@ use opte::api::MulticastUnderlay;
 use opte::api::Vni;
 use opte::print::print_layer;
 use opte::print::print_list_layers;
+use opte::print::print_port_state;
 use opte::print::print_tcp_flows;
 use opte::print::print_uft;
 use opte_ioctl::OpteHdl;
@@ -442,6 +443,45 @@ enum Command {
 
         /// The subnet to detach.
         prefix: IpCidr,
+    },
+
+    /// Get the current state of a port.
+    State {
+        /// The OPTE port to get the state of.
+        port: String,
+    },
+
+    /// Pause a port.
+    ///
+    /// A port in the paused state drops all traffic and does not update any of
+    /// its internal dynamic state like counters or flow tables. This is most
+    /// useful in preparation for exporting the dynamic state of a port, for
+    /// import elsewhere.
+    ///
+    /// A port can only be paused if it is currently running.
+    Pause {
+        /// The OPTE port to pause.
+        port: String,
+    },
+
+    /// Resume a port, setting it running.
+    ///
+    /// Ports can be paused, in which case they drop all traffic and remain
+    /// inert. This command sets the port into the running state, so that it
+    /// will start processing traffic again.
+    ///
+    /// A port can be resumed from any state.
+    Resume {
+        /// The OPTE port to resume.
+        port: String,
+    },
+
+    /// Reset a port, clearing all state and returning it to the "ready" state.
+    ///
+    /// A port can be reset from any state.
+    Reset {
+        /// The OPTE port to reset.
+        port: String,
     },
 }
 
@@ -1118,6 +1158,24 @@ fn main() -> anyhow::Result<()> {
 
         Command::DetachSubnet { port, prefix } => {
             hdl.detach_subnet(&port, prefix)?;
+        }
+        Command::State { port } => {
+            print_port_state(&port, hdl.state(&port)?)?;
+        }
+        Command::Pause { port } => {
+            if let Err(e) = hdl.pause(&port) {
+                eprintln!("Failed to pause port: {e}");
+            }
+        }
+        Command::Resume { port } => {
+            if let Err(e) = hdl.resume(&port) {
+                eprintln!("Failed to resume port: {e}");
+            }
+        }
+        Command::Reset { port } => {
+            if let Err(e) = hdl.reset(&port) {
+                eprintln!("Failed to reset port: {e}");
+            }
         }
     }
 
