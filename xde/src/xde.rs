@@ -211,6 +211,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use c8str::C8Str;
 use c8str::C8String;
+use opte::api::ResetPortReq;
 use core::ffi::CStr;
 use core::num::NonZeroU32;
 use core::num::NonZeroUsize;
@@ -1172,6 +1173,11 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
         OpteCmd::ResumePort => {
             let resp = resume_port_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResetPort => {
+            let resp = reset_port_hdrl(&mut env);
+            hdlr_resp(&mut env, resp);
         }
 
         OpteCmd::ImportLft => {
@@ -4830,6 +4836,18 @@ fn resume_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         return Err(OpteError::PortNotFound(port_name));
     };
     dev.port.start();
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn reset_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResetPortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.reset();
     Ok(NoResp::default())
 }
 

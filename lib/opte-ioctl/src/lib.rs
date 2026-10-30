@@ -27,8 +27,11 @@ use opte::api::OpteCmdIoctl;
 pub use opte::api::OpteError;
 use opte::api::PausePortReq;
 use opte::api::PortLftExport;
+use opte::api::ResetPortReq;
 use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
+use opte::api::StateReq;
+use opte::api::StateResp;
 use opte::api::XDE_IOC_OPTE_CMD;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
@@ -508,6 +511,26 @@ impl OpteHdl {
             self.device.as_raw_fd(),
             cmd,
             Some(&ResumePortReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Reset a port, deleting all state and setting it to the "ready" state.
+    pub fn reset(&self, port_name: &str) -> Result<NoResp, Error> {
+        let cmd = OpteCmd::ResetPort;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&ResetPortReq { port_name: port_name.to_string() }),
+        )
+    }
+
+    /// Fetch the state of an OPTE port.
+    pub fn state(&self, port_name: &str) -> Result<StateResp, Error> {
+        let cmd = OpteCmd::State;
+        run_cmd_ioctl(
+            self.device.as_raw_fd(),
+            cmd,
+            Some(&StateReq { port_name: port_name.to_string() }),
         )
     }
 

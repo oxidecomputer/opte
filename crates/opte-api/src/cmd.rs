@@ -118,14 +118,19 @@ pub enum OpteCmd {
     /// Read out all M2P (multicast group -> underlay multicast) mappings.
     DumpMcast2Phys = 109,
 
+    /// Get the state of a port.
+    State = 120,
     /// Pause a port.
-    PausePort = 120,
+    PausePort = 121,
     /// Resume a port.
-    ResumePort = 121,
+    ResumePort = 122,
+    /// Reset a port.
+    ResetPort = 123,
+
     /// Export the LFT state of a port.
-    ExportLft = 122,
+    ExportLft = 130,
     /// Import exported LFT state into a port.
-    ImportLft = 123,
+    ImportLft = 131,
 }
 
 impl TryFrom<c_int> for OpteCmd {
@@ -168,10 +173,12 @@ impl TryFrom<c_int> for OpteCmd {
             107 => Ok(Self::DumpMcastSubscriptions),
             108 => Ok(Self::McastUnsubscribeAll),
             109 => Ok(Self::DumpMcast2Phys),
-            120 => Ok(Self::PausePort),
-            121 => Ok(Self::ResumePort),
-            122 => Ok(Self::ExportLft),
-            123 => Ok(Self::ImportLft),
+            120 => Ok(Self::State),
+            121 => Ok(Self::PausePort),
+            122 => Ok(Self::ResumePort),
+            123 => Ok(Self::ResetPort),
+            130 => Ok(Self::ExportLft),
+            131 => Ok(Self::ImportLft),
             _ => Err(()),
         }
     }
@@ -577,3 +584,20 @@ pub struct PausePortReq {
 pub struct ResumePortReq {
     pub port_name: String,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResetPortReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StateReq {
+    pub port_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct StateResp {
+    pub state: String,
+}
+
+impl CmdOk for StateResp {}
