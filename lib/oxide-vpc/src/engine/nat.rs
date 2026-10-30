@@ -308,11 +308,7 @@ fn setup_ipv4_nat(
         };
 
         let snat = SNat::new(ip_cfg.private_ip);
-        snat.add(
-            ip_cfg.private_ip,
-            snat_cfg.external_ip,
-            snat_cfg.ports.clone(),
-        );
+        snat.add(snat_cfg.external_ip, snat_cfg.ports.clone());
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
@@ -494,11 +490,7 @@ fn setup_ipv6_nat(
         };
 
         let snat = SNat::new(ip_cfg.private_ip);
-        snat.add(
-            ip_cfg.private_ip,
-            snat_cfg.external_ip,
-            snat_cfg.ports.clone(),
-        );
+        snat.add(snat_cfg.external_ip, snat_cfg.ports.clone());
         let snat = Arc::new(snat);
 
         for igw_id in igw_matches {
