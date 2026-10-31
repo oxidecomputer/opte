@@ -24,14 +24,11 @@ fn firewall_replace_rules() {
 
     // Allow incoming TCP connection on g2 from anyone.
     let rule = "dir=in action=allow priority=10 protocol=TCP";
-    firewall::add_fw_rule(
-        &g2.port,
-        &AddFwRuleReq {
-            port_name: g2.port.name().to_string(),
-            rule: rule.parse().unwrap(),
-        },
-    )
-    .unwrap();
+    let req = AddFwRuleReq {
+        port_name: g2.port.name().to_string(),
+        rule: rule.parse().unwrap(),
+    };
+    firewall::add_fw_rule(&mut g2.port, &req).unwrap();
     incr!(g2, ["epoch", "firewall.rules.in"]);
 
     // ================================================================
@@ -61,14 +58,11 @@ fn firewall_replace_rules() {
     // ================================================================
     let any_out = "dir=out action=deny priority=65535 protocol=any";
     let tcp_out = "dir=out action=allow priority=1000 protocol=TCP";
-    firewall::set_fw_rules(
-        &g1.port,
-        &SetFwRulesReq {
-            port_name: g1.port.name().to_string(),
-            rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
-        },
-    )
-    .unwrap();
+    let req = SetFwRulesReq {
+        port_name: g1.port.name().to_string(),
+        rules: vec![any_out.parse().unwrap(), tcp_out.parse().unwrap()],
+    };
+    firewall::set_fw_rules(&mut g1.port, &req).unwrap();
     update!(
         g1,
         [
@@ -121,14 +115,11 @@ fn firewall_replace_rules() {
     // g2_pkt, but this time it should be dropped.
     // ================================================================
     let new_rule = "dir=in action=deny priority=1000 protocol=TCP";
-    firewall::set_fw_rules(
-        &g2.port,
-        &SetFwRulesReq {
-            port_name: g2.port.name().to_string(),
-            rules: vec![new_rule.parse().unwrap()],
-        },
-    )
-    .unwrap();
+    let req = SetFwRulesReq {
+        port_name: g2.port.name().to_string(),
+        rules: vec![new_rule.parse().unwrap()],
+    };
+    firewall::set_fw_rules(&mut g2.port, &req).unwrap();
     update!(
         g2,
         [
@@ -279,14 +270,11 @@ fn firewall_vni_outbound() {
     let any_out = "dir=out action=deny priority=65535 protocol=any";
     let vni_out =
         format!("dir=out action=allow priority=1000 hosts=vni={}", g1_cfg.vni);
-    firewall::set_fw_rules(
-        &g1.port,
-        &SetFwRulesReq {
-            port_name: g1.port.name().to_string(),
-            rules: vec![any_out.parse().unwrap(), vni_out.parse().unwrap()],
-        },
-    )
-    .unwrap();
+    let req = SetFwRulesReq {
+        port_name: g1.port.name().to_string(),
+        rules: vec![any_out.parse().unwrap(), vni_out.parse().unwrap()],
+    };
+    firewall::set_fw_rules(&mut g1.port, &req).unwrap();
     update!(
         g1,
         ["incr:epoch", "set:firewall.rules.out=2, firewall.rules.in=0",]

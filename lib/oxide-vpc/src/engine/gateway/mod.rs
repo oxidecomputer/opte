@@ -164,7 +164,7 @@ pub fn setup(
 // Recreates the full set of gateway rules on a given port in response to a
 // change to the set of transit IPs or overall `IpCfg`.
 pub fn set_gateway_rules(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     vpc_mappings: Arc<VpcMappings>,
 ) -> Result<NoResp, OpteError> {
     let mut ctx = BuildCtx {
