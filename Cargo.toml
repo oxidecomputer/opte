@@ -6,6 +6,7 @@ members = [
   "fuzz",
   "lib/*",
   "xde",
+  "xde/policy-test",
   "xde/xde-link",
   "xde-tests",
   "xtask",

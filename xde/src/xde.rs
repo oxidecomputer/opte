@@ -195,6 +195,7 @@ use crate::postbox::TxPostbox;
 use crate::route::Route;
 use crate::route::RouteCache;
 use crate::route::RouteKey;
+use crate::route::release_ecmp_hold;
 use crate::secpolicy;
 use crate::stats::XdeStats;
 use crate::sys::current_cpu;
@@ -792,6 +793,7 @@ unsafe extern "C" fn _fini() -> c_int {
         match mod_remove(&xde_linkage) {
             0 => {
                 mac::mac_fini_ops(addr_of_mut!(xde_devops));
+                release_ecmp_hold();
                 0
             }
             err => {
@@ -1169,7 +1171,7 @@ fn shared_periodic_expire(_: &mut ()) {
     let devs = state.devs.read();
     for dev in devs.iter() {
         let _ = dev.port.expire_flows();
-        dev.routes.remove_routes();
+        dev.routes.remove_routes(dev);
     }
 }
 
@@ -3318,17 +3320,9 @@ fn xde_mc_tx_one<'a>(
                 opte::engine::err!("failed to set offload info: {}", e);
             }
 
-            // Currently the overlay layer leaves the outer frame
-            // destination and source zero'd. Ask IRE for the route
-            // associated with the underlay destination. Then ask NCE
-            // for the mac associated with the IRE next hop to fill in
-            // the outer frame of the packet. Also return the underlay
-            // device associated with the next hop
-            //
-            // As route lookups are fairly expensive, we can cache their
-            // results for a given dst + entropy. These have a fairly tight
-            // expiry so that we can actually react to new reachability/load
-            // info from DDM.
+            // The overlay leaves the outer Ethernet addresses zeroed. The
+            // route cache keeps the prefix's resolved MACs and picks the hop
+            // with the same round-robin as illumos, without asking IP again.
             let my_key = RouteKey { dst: ip6_dst, l4_hash: Some(l4_hash) };
             let Route { src, dst, underlay_idx } =
                 src_dev.routes.next_hop(my_key, src_dev);
