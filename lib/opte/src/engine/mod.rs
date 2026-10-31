@@ -184,11 +184,10 @@ pub enum HdlErrAction {
 /// network implementation built atop of OPTE. The network
 /// implementation does this is two ways.
 ///
-/// 1. It provides its own unique stack of [`layer::Layer`]
-///    definitions; each made up of its unique set of [`rule::Rule`] &
-///    [`rule::Action`] pairings. Furthermore, the actions themselves may
-///    be built atop generic OPTE actions or may be provided in whole by
-///    the network implementation.
+/// 1. It provides its own unique stack of layer definitions; each made up
+///    of its unique set of [`rule::Rule`] & [`rule::Action`] pairings.
+///    Furthermore, the actions themselves may be built atop generic OPTE
+///    actions or may be provided in whole by the network implementation.
 ///
 /// 2. It uses this trait to provide hooks into the parsing of packets
 ///    as well as single packet processing (non-flow processing).
