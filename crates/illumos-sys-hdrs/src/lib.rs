@@ -50,6 +50,7 @@ pub type ssize_t = isize;
 // uts/common/sys/errno.h
 // ======================================================================
 pub const ENOENT: c_int = 2;
+pub const EINTR: c_int = 4;
 pub const ENXIO: c_int = 6;
 pub const EAGAIN: c_int = 11;
 pub const ENOMEM: c_int = 12;

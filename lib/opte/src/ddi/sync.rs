@@ -10,6 +10,7 @@
 //! crate. But for now just let it live here.
 use core::cell::UnsafeCell;
 use core::fmt;
+use core::marker::PhantomData;
 use core::ops::Deref;
 use core::ops::DerefMut;
 use core::time::Duration;
@@ -26,6 +27,8 @@ cfg_if! {
             rw_enter, rw_exit, rw_init, rw_destroy, threadp, time_res_t
         };
     } else {
+        #[cfg(test)]
+        use std::cell::Cell;
         use std::sync::Condvar;
         use std::sync::Mutex;
         use std::thread::ThreadId;
@@ -610,6 +613,12 @@ impl KCondvar {
         &self,
         lock: KMutexGuard<'a, T>,
     ) -> (KMutexGuard<'a, T>, WaitSigCause) {
+        // The std backend cannot observe signals. Tests inject the
+        // kernel's `cv_wait_sig() == 0` result without sleeping.
+        #[cfg(test)]
+        if take_injected_wait_sig() {
+            return (lock, WaitSigCause::Signal);
+        }
         (self.wait(lock), WaitSigCause::Notify)
     }
 
@@ -668,6 +677,33 @@ pub enum WaitSigCause {
     Signal,
 }
 
+// Next `wait_sig` calls on this thread that should report
+// `WaitSigCause::Signal` without sleeping. Zero means a normal wait.
+#[cfg(test)]
+thread_local! {
+    static WAIT_SIG_SIGNAL_BUDGET: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Arrange for the next `count` [`KCondvar::wait_sig`] calls on this
+/// thread to return [`WaitSigCause::Signal`] without sleeping.
+#[cfg(test)]
+fn inject_wait_sig_signals(count: u32) {
+    WAIT_SIG_SIGNAL_BUDGET.with(|budget| budget.set(count));
+}
+
+#[cfg(test)]
+fn take_injected_wait_sig() -> bool {
+    WAIT_SIG_SIGNAL_BUDGET.with(|budget| {
+        let left = budget.get();
+        if left == 0 {
+            false
+        } else {
+            budget.set(left - 1);
+            true
+        }
+    })
+}
+
 pub enum TimedWaitCause {
     Notify,
     Timeout,
@@ -699,6 +735,22 @@ pub struct TokenLock<T> {
     cv: KCondvar,
     inner: UnsafeCell<T>,
 }
+
+// SAFETY: `holder` is a `KMutex` and admits one owner at a time.
+// `inner` is reached only through that owner's `TokenGuard`.
+// `T: Send` because the thread that acquires the token may not be the
+// thread that created the lock. `T: Sync` is required as well:
+// `TokenGuard` holds `&TokenLock<T>` and derefs to `&T`, so a `Sync`
+// lock of a `Send + !Sync` value such as `Cell<u32>` would make the
+// guard `Sync`.
+unsafe impl<T: Send + Sync> Sync for TokenLock<T> {}
+
+/// [`TokenLock::lock_sig`] observed a signal before it acquired the token.
+///
+/// The token is still owned by whoever held it. The caller did not
+/// become the owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TokenLockInterrupted;
 
 impl<T> TokenLock<T> {
     pub fn new(token: T) -> Self {
@@ -732,12 +784,65 @@ impl<T> TokenLock<T> {
 
         *thread_lock = Some(curthread);
 
-        TokenGuard { lock: self }
+        TokenGuard { lock: self, _same_thread: SameThread::new() }
+    }
+
+    /// Acquire the token, or return if the wait is interrupted by a signal.
+    ///
+    /// `cv_wait_sig(9F)` returns 0 when a catchable or terminating signal
+    /// is pending. This method then drops the holder mutex and leaves
+    /// `holder` unchanged, so the caller can return `EINTR` without
+    /// owning the critical section. A `SIGSTOP` is consumed inside
+    /// `cv_wait_sig` and reported as [`WaitSigCause::Notify`]; that
+    /// wakeup retries while the token is still held.
+    ///
+    /// [`TokenLock::lock`] ignores this signal return and keeps waiting.
+    /// Detach uses that path.
+    pub fn lock_sig(&self) -> Result<TokenGuard<'_, T>, TokenLockInterrupted> {
+        let mut thread_lock = self.holder.lock();
+
+        while thread_lock.is_some() {
+            let (guard, cause) = self.cv.wait_sig(thread_lock);
+            if matches!(cause, WaitSigCause::Signal) {
+                drop(guard);
+                return Err(TokenLockInterrupted);
+            }
+            thread_lock = guard;
+        }
+
+        #[cfg(all(not(feature = "std"), not(test)))]
+        let curthread = unsafe {
+            NonNull::new(threadp())
+                .expect("current thread *must* be a valid pointer")
+        };
+
+        #[cfg(any(feature = "std", test))]
+        let curthread = std::thread::current().id();
+
+        *thread_lock = Some(curthread);
+
+        Ok(TokenGuard { lock: self, _same_thread: SameThread::new() })
     }
 }
 
+/// `Sync`, but not `Send`. [`TokenGuard`] must be dropped by the thread
+/// that acquired it.
+struct SameThread(PhantomData<*const ()>);
+
+impl SameThread {
+    fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+// SAFETY: the marker stores no pointer. Sharing `&SameThread` does not
+// move a guard onto another thread.
+unsafe impl Sync for SameThread {}
+
 pub struct TokenGuard<'a, T: 'a> {
     lock: &'a TokenLock<T>,
+    // `Drop` compares the current thread with `holder`.
+    _same_thread: SameThread,
 }
 
 impl<T> Deref for TokenGuard<'_, T> {
@@ -778,5 +883,159 @@ impl<T> Drop for TokenGuard<'_, T> {
         #[cfg(any(feature = "std", test))]
         let curthread = std::thread::current().id();
         assert_eq!(Some(curthread), lock_thread);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TokenGuard;
+    use super::TokenLock;
+    use super::TokenLockInterrupted;
+    use super::inject_wait_sig_signals;
+    use std::cell::Cell;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU8;
+    use std::sync::atomic::Ordering;
+    use std::thread;
+    use std::time::Duration;
+
+    fn reset_signals() {
+        inject_wait_sig_signals(0);
+    }
+
+    // Fails to compile when `$ty` implements `$trait`: both blanket impls
+    // apply and `_` cannot be inferred.
+    macro_rules! assert_not_impl {
+        ($ty:ty: $trait:path) => {
+            const _: fn() = || {
+                trait AmbiguousIfImpl<A> {
+                    fn some_item() {}
+                }
+                impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+                #[allow(dead_code)]
+                struct Invalid;
+                impl<T: ?Sized + $trait> AmbiguousIfImpl<Invalid> for T {}
+                let _ = <$ty as AmbiguousIfImpl<_>>::some_item;
+            };
+        };
+    }
+
+    assert_not_impl!(TokenGuard<'static, u32>: Send);
+    assert_not_impl!(TokenLock<Cell<u32>>: Sync);
+
+    #[test]
+    fn lock_sig_acquires_when_free() {
+        reset_signals();
+        let lock = TokenLock::new(5u32);
+        let guard = lock.lock_sig().expect("uncontended acquisition");
+        assert_eq!(*guard, 5);
+    }
+
+    #[test]
+    fn lock_acquires_when_free() {
+        reset_signals();
+        let lock = TokenLock::new(5u32);
+        let guard = lock.lock();
+        assert_eq!(*guard, 5);
+    }
+
+    #[test]
+    fn lock_sig_excludes_until_release_then_acquires() {
+        reset_signals();
+        let lock = Arc::new(TokenLock::new(1u32));
+        let mut owner = lock.lock_sig().expect("owner");
+        let phase = Arc::new(AtomicU8::new(0));
+        let waiter_lock = Arc::clone(&lock);
+        let waiter_phase = Arc::clone(&phase);
+
+        let waiter = thread::spawn(move || {
+            reset_signals();
+            waiter_phase.store(1, Ordering::Release);
+            let guard = waiter_lock.lock_sig().expect("acquire after release");
+            assert_eq!(*guard, 9);
+            waiter_phase.store(2, Ordering::Release);
+        });
+
+        while phase.load(Ordering::Acquire) == 0 {
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            phase.load(Ordering::Acquire),
+            1,
+            "waiter acquired while the token was still held"
+        );
+
+        *owner = 9;
+        drop(owner);
+        waiter.join().unwrap();
+        assert_eq!(phase.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn lock_sig_signal_does_not_acquire_and_retry_does() {
+        reset_signals();
+        let lock = Arc::new(TokenLock::new(11u32));
+        let owner = lock.lock();
+        let waiter_lock = Arc::clone(&lock);
+
+        let waiter = thread::spawn(move || {
+            inject_wait_sig_signals(1);
+            match waiter_lock.lock_sig() {
+                Ok(guard) => {
+                    // Keep the stolen holder intact so the owner drop
+                    // below is not the thing that fails the test.
+                    std::mem::forget(guard);
+                    true
+                }
+                Err(TokenLockInterrupted) => false,
+            }
+        });
+
+        let acquired = waiter.join().unwrap();
+        if acquired {
+            std::mem::forget(owner);
+            panic!("signal woke the waiter into acquiring the token");
+        }
+        // The owner's drop checks that this thread is still the holder.
+        assert_eq!(*owner, 11);
+        drop(owner);
+
+        reset_signals();
+        let guard = lock.lock_sig().expect("retry after the owner releases");
+        assert_eq!(*guard, 11);
+    }
+
+    #[test]
+    fn lock_keeps_waiting_across_signals_until_release() {
+        reset_signals();
+        let lock = Arc::new(TokenLock::new(0u8));
+        let mut owner = lock.lock();
+        let phase = Arc::new(AtomicU8::new(0));
+        let waiter_lock = Arc::clone(&lock);
+        let waiter_phase = Arc::clone(&phase);
+
+        let waiter = thread::spawn(move || {
+            inject_wait_sig_signals(3);
+            waiter_phase.store(1, Ordering::Release);
+            let guard = waiter_lock.lock();
+            assert_eq!(*guard, 9);
+            waiter_phase.store(2, Ordering::Release);
+        });
+
+        while phase.load(Ordering::Acquire) == 0 {
+            thread::yield_now();
+        }
+        thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            phase.load(Ordering::Acquire),
+            1,
+            "lock() returned because of a signal"
+        );
+
+        *owner = 9;
+        drop(owner);
+        waiter.join().unwrap();
+        assert_eq!(phase.load(Ordering::Acquire), 2);
     }
 }

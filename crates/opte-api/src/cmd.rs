@@ -339,6 +339,26 @@ pub struct NoResp {
 
 impl CmdOk for NoResp {}
 
+#[cfg(test)]
+mod tests {
+    use super::OpteError;
+    use alloc::string::ToString;
+    use illumos_sys_hdrs::EINTR;
+
+    #[test]
+    fn system_errno_is_returned_to_the_ioctl_caller() {
+        // `IoctlEnvelope::copy_out_resp` returns `OpteError::to_errno()`
+        // from the handler, and the driver's `ioctl(9E)` entry returns
+        // that value. illumos reports it to userland as `errno`.
+        let err = OpteError::System {
+            errno: EINTR,
+            msg: "management operation interrupted by signal".to_string(),
+        };
+        assert_eq!(err.to_errno(), EINTR);
+        assert_ne!(err.to_errno(), 0);
+    }
+}
+
 /// Dump various information about a layer, for use in debugging or
 /// administrative purposes.
 #[derive(Debug, Deserialize, Serialize)]
