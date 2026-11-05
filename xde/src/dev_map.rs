@@ -9,6 +9,7 @@ use crate::xde::XdeDev;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::btree_map::Entry;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use opte::api::MacAddr;
@@ -64,12 +65,15 @@ pub struct DevMap {
     names: BTreeMap<String, Dev>,
     /// Subscriptions keyed by underlay IPv6 multicast group (admin-scoped ff04::/16).
     /// Each port has its own source filter for per-member filtering.
-    /// This table is sled-local and independent of any per-VPC VNI. VNI validation
-    /// and VPC isolation are enforced during inbound overlay decapsulation on the
-    /// destination port, not here.
     ///
-    /// Rationale: multicast groups are fleet-wide; ports opt-in to receive a given
-    /// underlay group, and the overlay layer subsequently filters by VNI as appropriate.
+    /// The outer group key carries no VNI, as all multicast traffic currently
+    /// uses `oxide_vpc::api::DEFAULT_MULTICAST_VNI`, so a VNI component would
+    /// be constant. The per-member `VniMac` keys still carry each port's VPC
+    /// VNI. Both outbound encapsulation and the forwarding ioctls require
+    /// that value. Delivery is gated by the subscription itself and by the
+    /// per-member source filter. There is no VPC-level isolation for
+    /// multicast right now, as the inbound overlay layer's VNI validator
+    /// accepts either the fleet VNI or the port's own VPC VNI.
     mcast_groups: BTreeMap<MulticastUnderlay, BTreeMap<VniMac, SourceFilter>>,
 }
 
@@ -92,8 +96,8 @@ impl DevMap {
     ///
     /// Returns an existing port, if one exists.
     pub fn insert(&mut self, val: Dev) -> Option<Dev> {
-        let key = get_key(&val);
-        _ = self.names.insert(val.devname.clone(), val.clone());
+        let key = val.postbox_key;
+        _ = self.names.insert(val.devname.to_string(), val.clone());
         self.devs.insert(key, val)
     }
 
@@ -101,14 +105,14 @@ impl DevMap {
     ///
     /// This also cleans up all multicast subscriptions for the removed port.
     pub fn remove(&mut self, name: &str) -> Option<Dev> {
-        let key = get_key(&self.names.remove(name)?);
+        let key = &self.names.remove(name)?.postbox_key;
 
         self.mcast_groups.retain(|_group, members| {
-            members.remove(&key);
+            members.remove(key);
             !members.is_empty()
         });
 
-        self.devs.remove(&key)
+        self.devs.remove(key)
     }
 
     /// Allow a port to receive on a given multicast group with source filtering.
@@ -132,7 +136,7 @@ impl DevMap {
             .names
             .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
-        let key = get_key(port);
+        let key = port.postbox_key;
 
         self.mcast_groups
             .entry(mcast_underlay)
@@ -152,7 +156,7 @@ impl DevMap {
             .names
             .get(name)
             .ok_or_else(|| OpteError::PortNotFound(name.into()))?;
-        let key = get_key(port);
+        let key = port.postbox_key;
 
         if let Entry::Occupied(mut entry) =
             self.mcast_groups.entry(mcast_underlay)
@@ -221,7 +225,7 @@ impl DevMap {
     ///
     /// Safety: Callers must hold a read lock on this `DevMap` for the duration
     /// of delivery. This prevents port removal from tearing down DLS/MAC
-    /// resources while delivery is in progress—management operations attempting
+    /// resources while delivery is in progress. Management operations attempting
     /// to remove a port will block when trying to acquire the write lock to
     /// update the map.
     #[inline]
@@ -244,7 +248,7 @@ impl DevMap {
                 .filter_map(|(vm, filter)| {
                     self.devs
                         .get(vm)
-                        .map(|d| (d.devname.clone(), filter.clone()))
+                        .map(|d| (d.devname.to_string(), filter.clone()))
                 })
                 .collect();
             out.push((*group, subscribers));
@@ -257,11 +261,6 @@ impl DevMap {
 fn mac_to_u64(val: MacAddr) -> u64 {
     let val = val.bytes();
     u64::from_be_bytes([0, 0, val[0], val[1], val[2], val[3], val[4], val[5]])
-}
-
-#[inline(always)]
-fn get_key(dev: &Dev) -> VniMac {
-    VniMac::new(dev.vni, dev.port.mac_addr())
 }
 
 /// A read-only wrapper around a shared [`DevMap`], used to

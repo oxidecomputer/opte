@@ -41,6 +41,7 @@ oxide-vpc = { path = "lib/oxide-vpc", default-features = false }
 # External dependencies
 anyhow = "1.0"
 bitflags = "2"
+c8str = { version = "0.2.1", features = ["alloc"] }
 cargo_metadata = "0.23"
 cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
@@ -59,9 +60,11 @@ libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" 
 nix = { version = "0.31", features = ["signal", "user"] }
 pcap-parser = "0.17"
 postcard = { version = "1", features = ["alloc"], default-features = false }
+poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 proc-macro2 = { version = "1" }
+proptest = "1.12"
 quote = "1.0"
-rand = "0.10.0"
+rand = { version = "0.10.0", default-features = false }
 ref-cast = "1.0.25"
 ron = "0.12"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
@@ -81,7 +84,6 @@ version_check = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 zone = { git = "https://github.com/oxidecomputer/zone" }
 ztest = { git = "https://github.com/oxidecomputer/falcon", branch = "main" }
-poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 
 [profile.dev]
 opt-level = 1
@@ -94,4 +96,3 @@ lto = "thin"
 inherits = "release"
 lto = true
 codegen-units = 1
-

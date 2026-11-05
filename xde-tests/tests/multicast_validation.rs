@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Validation tests covering multicast operations.
 //!
@@ -125,6 +125,41 @@ fn test_subscribe_unicast_ip_as_group() -> Result<()> {
         format!("{err:?}").contains("not a multicast address"),
         "Expected 'not a multicast address' error, got: {err:?}",
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_subscribe_source_family_mismatch() -> Result<()> {
+    // Verify that a source whose address family differs from the group's
+    // is rejected outright.
+
+    let topol = xde_tests::two_node_topology()?;
+    let hdl = OpteHdl::open()?;
+
+    let v4_group = Ipv4Addr::from([224, 1, 2, 109]);
+    let v6_group: Ipv6Addr = "ff04::e001:273".parse().unwrap();
+    let v4_src = Ipv4Addr::from([10, 0, 0, 1]);
+    let v6_src: Ipv6Addr = "fd00::1".parse().unwrap();
+
+    for (group, src) in
+        [(v4_group.into(), v6_src.into()), (v6_group.into(), v4_src.into())]
+    {
+        let res = hdl.mcast_subscribe(&McastSubscribeReq {
+            port_name: topol.nodes[0].port.name().to_string(),
+            group,
+            filter: SourceFilter::Include([src].into_iter().collect()),
+        });
+
+        let err = res.expect_err(&format!(
+            "Expected error subscribing to {group} with source {src}"
+        ));
+        assert!(
+            format!("{err:?}").contains("does not match the address family"),
+            "Expected family mismatch error for {group} with source {src}, \
+             got: {err:?}",
+        );
+    }
 
     Ok(())
 }

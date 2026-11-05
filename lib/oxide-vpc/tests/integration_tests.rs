@@ -19,6 +19,11 @@ use illumos_sys_hdrs::mac::MblkOffloadFlags;
 use ingot::icmp::IcmpV4Ref;
 use ingot::icmp::IcmpV4Type;
 use ingot::icmp::IcmpV6Type;
+use ingot::ip::IpV6ExtFragment;
+use ingot::ip::Ipv4Flags;
+use ingot::ip::LowRentV6EhRepr;
+use ingot::types::ParseError as IngotError;
+use ingot::types::ToOwnedPacket;
 use opte::api::L4Info;
 use opte::api::MacAddr;
 use opte::api::OpteError;
@@ -2320,6 +2325,9 @@ struct SolicitTestData {
 //    and the guest need to appear to be on an isolated L2 segment. Nothing else
 //    should resolve.
 fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
+    const UNEXPECTED_SRC_IP: Ipv6Addr = Ipv6Addr::from_const([
+        0x2001, 0xdb80, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001,
+    ]);
     vec![
         // When the client first initializes its IPv6 interface, it can give
         // itself a tentative address. This is usually generated from the EUI-64
@@ -2406,7 +2414,7 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
                     | NdiscNeighborFlags::OVERRIDE,
             }),
         },
-        // In our last case, the guest is doing resolution for _any_ old
+        // In our next case, the guest is doing resolution for _any_ old
         // link-local IPv6 address (other than the gateway's, which is tested in
         // case (2)). Since this is resolution, the address should be sent to
         // the solicited-node multicast group. But since the guest already has
@@ -2428,6 +2436,32 @@ fn generate_solicit_test_data(cfg: &VpcCfg) -> Vec<SolicitTestData> {
                 lladdr: None,
             },
             na: None,
+        },
+        // We should still respond to NSs even if they're from some wacky
+        // address, so long as the come from the guest directly. This should
+        // handle the case of self-assigned IP addresses or addresses within
+        // attached subnets, which we don't necessarily know at the time we
+        // construct the port.
+        SolicitTestData {
+            ns: SolicitInfo {
+                src_mac: cfg.guest_mac,
+                dst_mac: cfg.gateway_mac,
+                src_ip: UNEXPECTED_SRC_IP,
+                dst_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.guest_mac),
+            },
+            na: Some(AdvertInfo {
+                src_mac: cfg.gateway_mac,
+                dst_mac: cfg.guest_mac,
+                src_ip: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                dst_ip: UNEXPECTED_SRC_IP,
+                target_addr: Ipv6Addr::from_eui64(&cfg.gateway_mac),
+                lladdr: Some(cfg.gateway_mac),
+                flags: NdiscNeighborFlags::ROUTER
+                    | NdiscNeighborFlags::SOLICITED
+                    | NdiscNeighborFlags::OVERRIDE,
+            }),
         },
     ]
 }
@@ -6189,4 +6223,121 @@ fn offload_info_preserved() {
     let offload = v4_in_e.offload_flags();
     assert!(offload.flags.contains(MblkOffloadFlags::HW_LSO));
     assert_eq!(offload.mss, 1448);
+}
+
+/// Split a ULP packet `at` bytes into its payload after l4 headers.
+fn fragment_once(pkt: &mut MsgBlk, at: usize) -> Vec<MsgBlk> {
+    assert!(at.is_multiple_of(8));
+
+    let parsed = parse_outbound(pkt, VpcParser {}).unwrap().to_full_meta();
+    let mut splittable = parsed.meta().inner_ulp().unwrap().emit_vec();
+    let l4_len = splittable.len();
+    splittable.extend_from_slice(parsed.body().unwrap_or_default());
+
+    let segs = splittable.split_at(l4_len + at);
+    let mut frames = Vec::with_capacity(2);
+    let mut cursor = 0usize;
+    for (i, body_seg) in [segs.0, segs.1].iter().enumerate() {
+        let ip = match parsed.meta().inner_l3() {
+            None => panic!(),
+            Some(L3::Ipv4(v4)) => {
+                let mut base = v4.to_owned(None).unwrap();
+
+                base.total_len =
+                    u16::try_from(base.packet_length() + body_seg.len())
+                        .unwrap();
+                base.fragment_offset = cursor as u16 / 8;
+                if i == 0 {
+                    base.flags |= Ipv4Flags::MORE_FRAGMENTS;
+                }
+
+                base.compute_checksum();
+
+                L3Repr::from(base)
+            }
+            Some(L3::Ipv6(v6)) => {
+                let mut base = v6.to_owned(None).unwrap();
+
+                let frag_eh =
+                    LowRentV6EhRepr::IpV6ExtFragment(IpV6ExtFragment {
+                        next_header: base.next_header,
+                        reserved: 0,
+                        fragment_offset: cursor as u16 / 8,
+                        res: 0,
+                        more_frags: u8::from(i == 0),
+                        ident: 12345,
+                    });
+                base.next_header = IngotIpProto::IPV6_FRAGMENT;
+                base.v6ext.push(frag_eh);
+
+                L3Repr::from(base)
+            }
+        };
+
+        frames.push(MsgBlk::new_ethernet_pkt((
+            parsed.meta().inner_ether(),
+            ip,
+            body_seg,
+        )));
+
+        cursor += body_seg.len();
+    }
+
+    frames
+}
+
+#[test]
+fn inner_fragmented_packets_rejected() {
+    // OPTE is unable, at present, to map fragment IDs on a known flow
+    // back. Verify that inner fragmented traffic is rejected on both
+    // inbound/outbound for IPv4/v6.
+    //
+    // The contents of the addresses etc. are unimportant, since we aim to
+    // filter these packets during parsing.
+    let eth = Default::default();
+    let v4_addr = Ipv4Addr::default();
+    let v6_addr = Ipv6Addr::default();
+    let v4_pkt = http_301_reply2(eth, v4_addr, eth, v4_addr, 7777);
+    let v6_pkt = http_301_reply2(eth, v6_addr, eth, v6_addr, 7777);
+
+    let cases = [("IPv4", v4_pkt), ("IPv6", v6_pkt)];
+
+    for (ip, mut pkt) in cases {
+        for dir in [Direction::In, Direction::Out] {
+            // This function does not *actually* mutate pkt. Our metadata
+            // struct requires it since the main assumption in OPTE is that
+            // packets will be transformed.
+            let frags = fragment_once(&mut pkt, 8);
+            for (i, mut frag) in frags.into_iter().enumerate() {
+                let res = match dir {
+                    Direction::Out => {
+                        parse_outbound(&mut frag, VpcParser {}).err()
+                    }
+                    Direction::In => {
+                        let phys = TestIpPhys {
+                            ip: v6_addr,
+                            mac: eth,
+                            vni: 1234.try_into().unwrap(),
+                        };
+                        let mut capped = encap(frag, phys, phys);
+                        parse_inbound(&mut capped, VpcParser {}).err()
+                    }
+                };
+                match res {
+                    Some(ParseError::IngotError(e))
+                        if *e.error() == IngotError::Reject =>
+                    {
+                        assert_eq!(e.header().as_str(), "inner_l3");
+                    }
+                    None => panic!(
+                        "parser did not filter out {} {ip} fragment for {dir}",
+                        if i == 0 { "initial" } else { "tail" }
+                    ),
+                    Some(e) => {
+                        panic!("Parsing failed for unexpected reason {e:?}")
+                    }
+                }
+            }
+        }
+    }
 }

@@ -48,6 +48,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use c8str::C8Str;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
@@ -324,12 +325,12 @@ impl LayerFlowTable {
         self.ft_out.mark_dirty();
     }
 
-    fn new(port: &str, layer: &str, limit: NonZeroU32) -> Self {
+    fn new(port: Arc<C8Str>, layer: &str, limit: NonZeroU32) -> Self {
         Self {
             count: 0,
             limit,
             ft_in: FlowTable::new(
-                port,
+                Arc::clone(&port),
                 &format!("{layer}_in"),
                 limit,
                 Some(Arc::new(TtlDelegateTcp(FLOW_DEF_TTL))),
@@ -345,6 +346,36 @@ impl LayerFlowTable {
 
     fn num_flows(&self) -> u32 {
         self.count
+    }
+
+    #[inline(always)]
+    /// Determine whether there is currently space for a new entry to be
+    /// inserted.
+    ///
+    /// If out of space, this method will attempt to evict an existing entry.
+    fn check_for_space(
+        &mut self,
+        stats: &KStatNamed<LayerStats>,
+        layer_name: &'static str,
+        dir: Direction,
+    ) -> result::Result<SpaceCreated, LayerError> {
+        if self.count < self.limit.get() {
+            return Ok(SpaceCreated::AmpleSpace);
+        }
+
+        // Both in/out share the same `killed` flag, children, and evictability,
+        // so we only need to check the outbound table.
+        if let Some((out_key, out_entry)) = self.ft_out.find_evictable_entry() {
+            let in_key = out_entry.state().in_flow_pair;
+            Ok(SpaceCreated::Evict { out_key, in_key })
+        } else {
+            let stat = match dir {
+                Direction::In => &stats.vals.in_lft_full,
+                Direction::Out => &stats.vals.out_lft_full,
+            };
+            stat.incr(1);
+            Err(LayerError::FlowTableFull { layer: layer_name, dir })
+        }
     }
 }
 
@@ -525,9 +556,8 @@ enum SpaceCreated {
 }
 
 pub struct Layer {
-    port_c: CString,
-    name: &'static str,
-    name_c: CString,
+    port: Arc<C8Str>,
+    name: &'static C8Str,
     actions: Vec<Action>,
     default_in: DefaultAction,
     default_in_hits: u64,
@@ -606,15 +636,15 @@ impl Layer {
                 let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__desc__fail(
-                    self.port_c.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
-                let name_s = self.name_c.to_str().unwrap();
+                let port_s = self.port.to_str();
+                let name_s = self.name.to_str();
                 let flow_s = flow.to_string();
                 let msg_s = format!("{err:?}");
 
@@ -622,7 +652,7 @@ impl Layer {
                     || (port_s, name_s, dir, flow_s, msg_s)
                 );
             } else {
-                let (..) = (&self.port_c, &self.name_c, dir, flow, err);
+                let (..) = (&self.port, self.name, dir, flow, err);
             }
         }
     }
@@ -639,14 +669,14 @@ impl Layer {
                 let msg_c = CString::new(format!("{err:?}")).unwrap();
 
                 __dtrace_probe_gen__ht__fail(
-                    self.port_c.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir_c.as_ptr() as uintptr_t,
                     flow,
                     msg_c.as_ptr() as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_s = flow.to_string();
                 let err_s = format!("{err:?}");
 
@@ -675,12 +705,12 @@ impl Layer {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_layer__process__entry(
                     dir as uintptr_t,
-                    self.port_c.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     ifid,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let ifid_s = ifid.to_string();
 
                 crate::opte_provider::layer__process__entry!(
@@ -732,15 +762,15 @@ impl Layer {
                 }
                 __dtrace_probe_layer__process__return(
                     dir as uintptr_t,
-                    self.port_c.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     flow_before,
                     flow_after,
                     eb.as_ptr(),
                 );
                 drop(extra_str);
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_b_s = flow_before.to_string();
                 let flow_a_s = flow_after.to_string();
                 // XXX This would probably be better as separate probes;
@@ -764,14 +794,11 @@ impl Layer {
     }
 
     pub fn new(
-        name: &'static str,
-        port: &str,
+        name: &'static C8Str,
+        port: Arc<C8Str>,
         actions: LayerActions,
         ft_limit: NonZeroU32,
     ) -> Self {
-        let port_c = CString::new(port).unwrap();
-        let name_c = CString::new(name).unwrap();
-
         // Unwrap: We know this is fine because the stat names are
         // generated from the LayerStats structure.
         let stats = KStatNamed::new(
@@ -790,14 +817,13 @@ impl Layer {
             default_out: actions.default_out,
             default_out_hits: 0,
             name,
-            name_c,
-            port_c,
-            ft: LayerFlowTable::new(port, name, ft_limit),
+            ft: LayerFlowTable::new(Arc::clone(&port), name, ft_limit),
             ft_cstr: CString::new(format!("ft-{name}")).unwrap(),
-            rules_in: RuleTable::new(port, name, Direction::In),
-            rules_out: RuleTable::new(port, name, Direction::Out),
+            rules_in: RuleTable::new(Arc::clone(&port), name, Direction::In),
+            rules_out: RuleTable::new(Arc::clone(&port), name, Direction::Out),
             rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
+            port,
         }
     }
 
@@ -812,35 +838,6 @@ impl Layer {
         match dir {
             Direction::Out => self.rules_out.num_rules(),
             Direction::In => self.rules_in.num_rules(),
-        }
-    }
-
-    /// Determine whether there is currently space for a new entry to be
-    /// inserted.
-    ///
-    /// If out of space, this method will attempt to evict an existing entry.
-    fn check_for_space(
-        &self,
-        dir: Direction,
-    ) -> result::Result<SpaceCreated, LayerError> {
-        if self.ft.count < self.ft.limit.get() {
-            return Ok(SpaceCreated::AmpleSpace);
-        }
-
-        // Both in/out share the same `killed` flag, children, and evictability,
-        // so we only need to check the outbound table.
-        if let Some((out_key, out_entry)) =
-            self.ft.ft_out.find_evictable_entry()
-        {
-            let in_key = out_entry.state().in_flow_pair;
-            Ok(SpaceCreated::Evict { out_key, in_key })
-        } else {
-            let stat = match dir {
-                Direction::In => &self.stats.vals.in_lft_full,
-                Direction::Out => &self.stats.vals.out_lft_full,
-            };
-            stat.incr(1);
-            Err(LayerError::FlowTableFull { layer: self.name, dir })
         }
     }
 
@@ -928,7 +925,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.ft_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
@@ -953,6 +950,12 @@ impl Layer {
         }
     }
 
+    /// Apply the layer's rules to an inbound packet.
+    ///
+    /// This attempts to find a rule whose predicates match the packet. It then
+    /// applies the rule's actions to the packet itself, adds any
+    /// transformations to `xforms`, and potentially updates the action metadata
+    /// for downstream layers to consume.
     fn process_in_rules(
         &mut self,
         ectx: &ExecCtx,
@@ -978,7 +981,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                let write_to = self.check_for_space(In)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, In)?;
                 self.complete_eviction(write_to);
 
                 // The outbound flow ID mirrors the inbound. Remember,
@@ -1044,7 +1048,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     In,
                     &flow_before,
@@ -1084,7 +1088,8 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                let write_to = self.check_for_space(In)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, In)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1111,7 +1116,7 @@ impl Layer {
                 pkt.hdr_transform(&ht_in)?;
                 xforms.hdr.push(ht_in);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Direction::In,
                     &flow_before,
@@ -1214,7 +1219,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.ft_cstr.as_c_str(),
                     Direction::Out,
                     &flow_before,
@@ -1239,6 +1244,12 @@ impl Layer {
         }
     }
 
+    /// Apply the layer's rules to an outbound packet.
+    ///
+    /// This attempts to find a rule whose predicates match the packet. It then
+    /// applies the rule's actions to the packet itself, adds any
+    /// transformations to `xforms`, and potentially updates the action metadata
+    /// for downstream layers to consume.
     fn process_out_rules(
         &mut self,
         ectx: &ExecCtx,
@@ -1264,7 +1275,8 @@ impl Layer {
             Action::Allow => Ok(LayerResult::Allow),
 
             Action::StatefulAllow => {
-                let write_to = self.check_for_space(Out)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, Out)?;
                 self.complete_eviction(write_to);
 
                 // The inbound flow ID must be calculated _after_ the
@@ -1336,7 +1348,7 @@ impl Layer {
                 pkt.hdr_transform(&ht)?;
                 xforms.hdr.push(ht);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
@@ -1376,7 +1388,8 @@ impl Layer {
                 // In general, the semantic of a StatefulAction is
                 // that it gets an FT entry. If there are no slots
                 // available, then we must fail until one opens up.
-                let write_to = self.check_for_space(Out)?;
+                let write_to =
+                    self.ft.check_for_space(&self.stats, self.name, Out)?;
 
                 let desc = match action.gen_desc(pkt.flow(), pkt, ameta) {
                     Ok(aord) => match aord {
@@ -1403,7 +1416,7 @@ impl Layer {
                 pkt.hdr_transform(&ht_out)?;
                 xforms.hdr.push(ht_out);
                 ht_probe(
-                    &self.port_c,
+                    self.port.as_c_str(),
                     self.rt_cstr.as_c_str(),
                     Out,
                     &flow_before,
@@ -1521,13 +1534,13 @@ impl Layer {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_rule__deny(
-                    self.port_c.as_ptr() as uintptr_t,
-                    self.name_c.as_ptr() as uintptr_t,
+                    self.port.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     dir as uintptr_t,
                     flow_id,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.port_c.to_str().unwrap();
+                let port_s = self.port.to_str();
                 let flow_s = flow_id.to_string();
 
                 crate::opte_provider::rule__deny!(
@@ -1617,7 +1630,7 @@ impl From<&RuleTableEntry> for RuleTableEntryDump {
 
 #[derive(Debug)]
 pub struct RuleTable {
-    port_c: CString,
+    port: Arc<C8Str>,
     layer_c: CString,
     dir: Direction,
     rules: Vec<RuleTableEntry>,
@@ -1671,7 +1684,7 @@ impl RuleTable {
             if rte.rule.is_match(pmeta, ameta) {
                 rte.hits.fetch_add(1, Ordering::Relaxed);
                 Self::rule_match_probe(
-                    self.port_c.as_c_str(),
+                    self.port.as_c_str(),
                     self.layer_c.as_c_str(),
                     self.dir,
                     ifid,
@@ -1682,7 +1695,7 @@ impl RuleTable {
         }
 
         Self::rule_no_match_probe(
-            self.port_c.as_c_str(),
+            self.port.as_c_str(),
             self.layer_c.as_c_str(),
             self.dir,
             ifid,
@@ -1721,9 +1734,9 @@ impl RuleTable {
         self.rules.iter().find(|rte| rte.rule == *query_rule).map(|rte| rte.id)
     }
 
-    fn new(port: &str, layer: &str, dir: Direction) -> Self {
+    fn new(port: Arc<C8Str>, layer: &str, dir: Direction) -> Self {
         Self {
-            port_c: CString::new(port).unwrap(),
+            port,
             layer_c: CString::new(layer).unwrap(),
             dir,
             rules: vec![],
@@ -1901,8 +1914,15 @@ mod test {
         use crate::engine::predicate::Ipv4AddrMatch;
         use crate::engine::predicate::Predicate;
         use crate::engine::rule;
+        use c8str::C8String;
 
-        let mut rule_table = RuleTable::new("port", "test", Direction::Out);
+        let mut rule_table = RuleTable::new(
+            Arc::from(
+                C8String::from_string("port").unwrap().into_boxed_c8_str(),
+            ),
+            "test",
+            Direction::Out,
+        );
         let mut rule = Rule::new(
             1,
             Action::Static(Arc::new(rule::Identity::new("find_rule"))),

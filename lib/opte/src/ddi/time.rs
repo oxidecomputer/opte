@@ -116,7 +116,7 @@ impl Moment {
     }
 
     /// Return the underlying timestamp for atomic storage or debugging.
-    pub(crate) fn raw(&self) -> u64 {
+    pub fn raw(&self) -> u64 {
         cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 self.inner as u64

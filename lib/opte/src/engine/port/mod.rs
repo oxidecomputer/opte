@@ -78,12 +78,12 @@ use crate::engine::packet::EmitSpec;
 use crate::engine::packet::PushSpec;
 use crate::engine::rule::CompiledEncap;
 use alloc::boxed::Box;
-use alloc::ffi::CString;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::sync::Weak;
 use alloc::vec::Vec;
+use c8str::C8Str;
 use core::ffi::CStr;
 use core::fmt;
 use core::fmt::Display;
@@ -229,10 +229,7 @@ pub enum DropReason {
 /// [`Port`] the list of layers is immutable.
 pub struct PortBuilder {
     ectx: Arc<ExecCtx>,
-    name: String,
-    // Cache the CString version of the name for use with DTrace
-    // probes.
-    name_cstr: CString,
+    name: Arc<C8Str>,
     mac: MacAddr,
     layers: KMutex<Vec<Layer>>,
     mtu: Option<NonZeroU32>,
@@ -341,10 +338,20 @@ impl PortBuilder {
             // At this point the layer pipeline is immutable, thus we
             // move the layers out of the mutex.
             layers: self.layers.into_inner(),
-            uft_in: FlowTable::new(&self.name, "uft_in", uft_limit, None),
-            uft_out: FlowTable::new(&self.name, "uft_out", uft_limit, None),
+            uft_in: FlowTable::new(
+                Arc::clone(&self.name),
+                "uft_in",
+                uft_limit,
+                None,
+            ),
+            uft_out: FlowTable::new(
+                Arc::clone(&self.name),
+                "uft_out",
+                uft_limit,
+                None,
+            ),
             tcp_flows: FlowTable::new(
-                &self.name,
+                Arc::clone(&self.name),
                 "tcp_flows",
                 tcp_limit,
                 Some(Arc::<TcpExpiry>::default()),
@@ -356,13 +363,14 @@ impl PortBuilder {
         stats.out_uft_capacity.set(u64::from(data.uft_out.get_limit().get()));
         stats.tcp_capacity.set(u64::from(data.tcp_flows.get_limit().get()));
 
+        let stats = KStatNamed::new("xde", self.name.as_str(), stats)?;
+
         Ok(Port {
-            name: self.name.clone(),
-            name_cstr: self.name_cstr,
+            name: self.name,
             mac: self.mac,
             ectx: self.ectx,
             epoch: AtomicU64::new(1),
-            stats: KStatNamed::new("xde", &self.name, stats)?,
+            stats,
             net,
             data: KRwLock::new(data),
             mtu: self.mtu,
@@ -402,25 +410,17 @@ impl PortBuilder {
     }
 
     /// Return the name of the port.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Arc<C8Str> {
         &self.name
     }
 
     pub fn new(
-        name: &str,
-        name_cstr: CString,
+        name: Arc<C8Str>,
         mac: MacAddr,
         ectx: Arc<ExecCtx>,
         mtu: Option<NonZeroU32>,
     ) -> Self {
-        PortBuilder {
-            name: name.to_string(),
-            name_cstr,
-            mac,
-            ectx,
-            layers: KMutex::new(Vec::new()),
-            mtu,
-        }
+        PortBuilder { name, mac, ectx, layers: KMutex::new(Vec::new()), mtu }
     }
 
     /// Remove the [`Layer`] registered under `name`, if such a layer
@@ -815,10 +815,7 @@ struct PortData {
 pub struct Port<N: NetworkImpl> {
     epoch: AtomicU64,
     ectx: Arc<ExecCtx>,
-    name: String,
-    // Cache the CString version of the name for use with DTrace
-    // probes.
-    name_cstr: CString,
+    name: Arc<C8Str>,
     mac: MacAddr,
     stats: KStatNamed<PortStats>,
     net: N,
@@ -988,20 +985,12 @@ impl<N: NetworkImpl> Port<N> {
     //
     fn tcp_err(
         &self,
-        data: &FlowTable<TcpFlowEntryState>,
+        _data: &FlowTable<TcpFlowEntryState>,
         dir: Direction,
         msg: String,
         pkt: &mut Packet<MblkFullParsed>,
     ) {
-        if unsafe { super::opte_panic_debug != 0 } {
-            super::err!("mblk: {}", pkt.mblk_addr());
-            super::err!("flow: {}", pkt.flow());
-            super::err!("meta: {:?}", pkt.meta());
-            super::err!("flows: {:?}", data);
-            todo!("bad packet: {}", msg);
-        } else {
-            self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
-        }
+        self.tcp_err_probe(dir, Some(pkt), pkt.flow(), msg)
     }
 
     fn tcp_err_probe(
@@ -1014,11 +1003,11 @@ impl<N: NetworkImpl> Port<N> {
         let mblk_addr = pkt.map(|p| p.mblk_addr()).unwrap_or_default();
         cfg_if::cfg_if! {
             if #[cfg(all(not(feature = "std"), not(test)))] {
-                let msg_arg = CString::new(msg).unwrap();
+                let msg_arg = c8str::C8String::from_string(msg).unwrap();
 
                 __dtrace_probe_tcp__err(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     flow,
                     mblk_addr,
                     msg_arg.as_ptr() as uintptr_t,
@@ -1026,7 +1015,7 @@ impl<N: NetworkImpl> Port<N> {
             } else if #[cfg(feature = "usdt")] {
                 let flow_s = flow.to_string();
                 crate::opte_provider::tcp__err!(
-                    || (dir, &self.name, flow_s, mblk_addr, &msg)
+                    || (dir, self.name.as_str(), flow_s, mblk_addr, &msg)
                 );
             } else {
                 let (..) = (dir, pkt, msg, flow, mblk_addr);
@@ -1330,12 +1319,12 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Return the name of the port.
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.as_str()
     }
 
     /// Return the name of the port as a CString.
-    pub fn name_cstr(&self) -> &CString {
-        &self.name_cstr
+    pub fn name_cstr(&self) -> &CStr {
+        self.name.as_c_str()
     }
 
     /// Process the packet.
@@ -1554,7 +1543,7 @@ impl<N: NetworkImpl> Port<N> {
                         };
 
                         let invalidated_tcp = match tcp_flow.state().update(
-                            self.name_cstr.as_c_str(),
+                            self.name_cstr(),
                             tcp,
                             dir,
                             pkt.len() as u64,
@@ -2180,9 +2169,9 @@ impl fmt::Debug for Transforms {
 // organization.
 impl<N: NetworkImpl> Port<N> {
     // Process the packet against each layer in turn. If `Allow` is
-    // returned, then `meta` contains the updated metadata, and `hts`
-    // contains the list of header transformations to run against the
-    // metadata.
+    // returned, then `meta` contains the updated metadata, and `xforms`
+    // contains the list of all transformations to run against the
+    // packet, including header and body transformations.
     //
     // Processing may return early for several reasons.
     //
@@ -2190,6 +2179,10 @@ impl<N: NetworkImpl> Port<N> {
     // packet is dropped and no further processing is done.
     //
     // * Hairpin: A layer has generated a hairpin packet.
+    //
+    // * HandlePkt: The network impl decided to handle the packet directly,
+    // rather than going through the usual layer actions. This results in
+    // calling `NetworkImpl::handle_pkt()` on the packet.
     //
     // * Error: An error has ocurred and processing cannot continue.
     fn layers_process(
@@ -2247,7 +2240,7 @@ impl<N: NetworkImpl> Port<N> {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_port__process__entry(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     flow,
                     epoch as uintptr_t,
                     mblk_addr,
@@ -2255,7 +2248,7 @@ impl<N: NetworkImpl> Port<N> {
             } else if #[cfg(feature = "usdt")] {
                 let flow_s = flow.to_string();
                 crate::opte_provider::port__process__entry!(
-                    || (dir, &self.name, flow_s, epoch, mblk_addr)
+                    || (dir, self.name.as_str(), flow_s, epoch, mblk_addr)
                 );
             } else {
                 let (..) = (dir, flow, epoch, mblk_addr);
@@ -2316,7 +2309,7 @@ impl<N: NetworkImpl> Port<N> {
                 }
                 __dtrace_probe_port__process__return(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     flow_before,
                     flow_after,
                     epoch as uintptr_t,
@@ -2368,7 +2361,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut tfs = TcpFlowState::new();
 
         let tcp_state = match tfs.process(
-            self.name_cstr.as_c_str(),
+            self.name_cstr(),
             dir.dir(),
             dir.local_flow(),
             tcp,
@@ -2464,7 +2457,7 @@ impl<N: NetworkImpl> Port<N> {
         let tfes_base = entry.state();
 
         let next_state = tfes_base.update(
-            self.name_cstr.as_c_str(),
+            self.name_cstr(),
             tcp,
             dir.dir(),
             pkt_len,
@@ -2554,6 +2547,12 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    /// Process an inbound packet which does not have a UFT entry.
+    ///
+    /// This is called when we miss a lookup into the UFT for a packet. It
+    /// applies the transformations from each individual layer flow table, and
+    /// then possibly compiles the resulting transformation into a new UFT
+    /// entry.
     fn process_in_miss(
         &self,
         data: &mut PortData,
@@ -2744,13 +2743,13 @@ impl<N: NetworkImpl> Port<N> {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_uft__hit(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     ufid,
                     epoch as uintptr_t,
                     last_hit.raw_millis() as usize
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.name_cstr.to_str().unwrap();
+                let port_s = self.name.to_str();
                 let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__hit!(
                     || (dir, port_s, ufid_s, epoch, 0)
@@ -2787,6 +2786,7 @@ impl<N: NetworkImpl> Port<N> {
         }
     }
 
+    /// Process an outbound packet which does not have a UFT entry.
     fn process_out_miss(
         &self,
         data: &mut PortData,
@@ -2984,12 +2984,12 @@ impl<N: NetworkImpl> Port<N> {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_uft__invalidate(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     ufid,
                     epoch as uintptr_t,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.name_cstr.to_str().unwrap();
+                let port_s = self.name.to_str();
                 let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__invalidate!(
                     || (dir, port_s, ufid_s, epoch)
@@ -3024,11 +3024,11 @@ impl<N: NetworkImpl> Port<N> {
             if #[cfg(all(not(feature = "std"), not(test)))] {
                 __dtrace_probe_uft__tcp__closed(
                     dir as uintptr_t,
-                    self.name_cstr.as_ptr() as uintptr_t,
+                    self.name.as_ptr() as uintptr_t,
                     ufid,
                 );
             } else if #[cfg(feature = "usdt")] {
-                let port_s = self.name_cstr.to_str().unwrap();
+                let port_s = self.name.to_str();
                 let ufid_s = ufid.to_string();
                 crate::opte_provider::uft__tcp__closed!(
                     || (dir, port_s, ufid_s)
@@ -3588,6 +3588,7 @@ mod tests {
     use super::*;
     use crate::api::PortInfo;
     use crate::engine::packet::AddrPair;
+    use c8str::C8String;
     use core::time::Duration;
     use ingot::tcp::TcpFlags;
 
@@ -3618,7 +3619,9 @@ mod tests {
 
         let policy = Arc::<TcpExpiry>::default();
         let mut ft = FlowTable::new(
-            "myport",
+            Arc::from(
+                C8String::from_string("myport").unwrap().into_boxed_c8_str(),
+            ),
             "tcp",
             16.try_into().unwrap(),
             Some(policy.clone()),
@@ -3685,7 +3688,9 @@ mod tests {
 
         let policy = Arc::<TcpExpiry>::default();
         let mut ft = FlowTable::new(
-            "myport",
+            Arc::from(
+                C8String::from_string("myport").unwrap().into_boxed_c8_str(),
+            ),
             "tcp",
             16.try_into().unwrap(),
             Some(policy.clone()),

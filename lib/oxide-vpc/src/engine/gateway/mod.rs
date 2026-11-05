@@ -110,7 +110,7 @@ pub use transit::*;
 
 use super::VpcNetwork;
 
-pub const NAME: &str = "gateway";
+pub const NAME: &c8str::C8Str = c8str::c8!("gateway");
 
 struct BuildCtx<'a> {
     in_rules: Vec<Rule<Finalized>>,
@@ -139,7 +139,7 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = Layer::new(NAME, pb.name(), actions, ft_limit);
+    let mut layer = Layer::new(NAME, Arc::clone(pb.name()), actions, ft_limit);
 
     let mut ctx = BuildCtx {
         in_rules: vec![],

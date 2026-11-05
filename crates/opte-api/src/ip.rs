@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 use super::mac::MacAddr;
 use crate::DomainName;
@@ -527,6 +527,28 @@ impl Ipv4Addr {
         self.inner[0] == 169 && self.inner[1] == 254
     }
 
+    /// Returns true if this is in the "this host on this network" block
+    /// (0.0.0.0/8).
+    ///
+    /// [RFC 1122 §3.2.1.3] allows a host to use these before it learns its
+    /// address, so this is broader than [`Ipv4Addr::is_unspecified`].
+    ///
+    /// [RFC 1122 §3.2.1.3]: https://www.rfc-editor.org/rfc/rfc1122#section-3.2.1.3
+    pub const fn is_this_network(&self) -> bool {
+        self.inner[0] == 0
+    }
+
+    /// Returns true if this is in the reserved class E block (240.0.0.0/4).
+    ///
+    /// The IANA special-purpose registry ([RFC 6890]) marks the block,
+    /// reserved by [RFC 1112 §4], as "Source: False".
+    ///
+    /// [RFC 6890]: https://www.rfc-editor.org/rfc/rfc6890
+    /// [RFC 1112 §4]: https://www.rfc-editor.org/rfc/rfc1112#section-4
+    pub const fn is_reserved(&self) -> bool {
+        self.inner[0] >= 240
+    }
+
     /// Return the multicast MAC address associated with this multicast IPv4
     /// address. If the IPv4 address is not multicast, None will be returned.
     ///
@@ -693,6 +715,38 @@ impl PartialOrd for Ipv6Addr {
     }
 }
 
+/// The IPv6 representation of an embedded IPv4 address.
+///
+/// Both variants carry the IPv4 address within the low 32 bits and differ only
+/// in the 96-bit prefix ahead of those bits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedIpv4 {
+    /// The `::ffff:0:0/96` form, which represents an IPv4 node's address
+    /// to an IPv6 application ([RFC 4291 §2.5.5.2]).
+    ///
+    /// [RFC 4291 §2.5.5.2]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2
+    Mapped,
+
+    /// The `::/96` form, which [RFC 4291 §2.5.5.1] deprecates because the
+    /// transition mechanisms that used it are obsolete.
+    ///
+    /// [RFC 4291 §2.5.5.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.1
+    Compatible,
+}
+
+impl Display for EmbeddedIpv4 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Mapped => {
+                write!(f, "IPv4-mapped (::ffff:0:0/96, RFC 4291 §2.5.5.2)")
+            }
+            Self::Compatible => {
+                write!(f, "IPv4-compatible (::/96, RFC 4291 §2.5.5.1)")
+            }
+        }
+    }
+}
+
 impl Ipv6Addr {
     /// The unspecified IPv6 address, i.e., `::` or all zeros.
     pub const ANY_ADDR: Self = Self { inner: [0; 16] };
@@ -793,14 +847,45 @@ impl Ipv6Addr {
         self.inner[0] == 0xfe && (self.inner[1] & 0xc0) == 0x80
     }
 
-    /// Return `true` if this is a multicast IPv6 address with the ff04::/16 prefix
-    /// (admin-local scope with flags=0) as used by Omicron for underlay multicast.
+    /// Return the [`EmbeddedIpv4`] form this address takes or `None` if
+    /// it does not embed an IPv4 address.
+    ///
+    /// The IPv4-mapped ([RFC 4291 §2.5.5.2]) and IPv4-compatible
+    /// ([RFC 4291 §2.5.5.1]) forms convert to an IPv4 address.
+    ///
+    /// [RFC 4291 §2.5.5.1]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.1
+    /// [RFC 4291 §2.5.5.2]: https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2
+    pub const fn embedded_ipv4_form(&self) -> Option<EmbeddedIpv4> {
+        match self.inner {
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, ..] => {
+                Some(EmbeddedIpv4::Mapped)
+            }
+            [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..] => {
+                Some(EmbeddedIpv4::Compatible)
+            }
+            _ => None,
+        }
+    }
+
+    /// Return `true` if this is a multicast IPv6 address with the ff04::/16
+    /// prefix (admin-local scope with flags=0) as used by Omicron for underlay
+    /// multicast.
     ///
     /// This specifically checks for the ff04::/16 prefix where:
     /// - First byte: 0xFF (all multicast addresses)
     /// - Second byte: 0x04 (flags=0, scope=4 admin-local)
     ///
-    /// See [RFC 7346] for details on IPv6 multicast address scopes.
+    /// See [RFC 7346] for details on IPv6 multicast address scopes. Routers
+    /// must not forward a packet beyond the scope its destination names
+    /// ([RFC 4291 §2.7]). Admin-local keeps rack traffic in the rack,
+    /// link-local is dropped at the first hop, and global is permitted to
+    /// leave the rack.
+    ///
+    /// Requiring flags=0 follows Omicron's allocation rather than the RFCs.
+    /// T=0 denotes an IANA-assigned well-known group ([RFC 4291 §2.7]), and
+    /// [RFC 3307 §4] requires dynamically allocated groups to set T=1. These
+    /// groups are operator-allocated, so ff14:: would be the conformant
+    /// choice. Transient groups are rejected here regardless.
     ///
     /// Omicron allocates multicast addresses from a /64 subnet within
     /// ff04::/16, and the narrower /64 constraint is enforced upstream
@@ -809,6 +894,8 @@ impl Ipv6Addr {
     /// for correct packet handling at this layer.
     ///
     /// [RFC 7346]: https://www.rfc-editor.org/rfc/rfc7346.html
+    /// [RFC 4291 §2.7]: https://www.rfc-editor.org/rfc/rfc4291#section-2.7
+    /// [RFC 3307 §4]: https://www.rfc-editor.org/rfc/rfc3307#section-4
     pub const fn is_admin_scoped_multicast(&self) -> bool {
         if !self.is_multicast() {
             return false;
@@ -1040,13 +1127,11 @@ impl MulticastUnderlay {
 
     /// Create a new `MulticastUnderlay` without validation.
     ///
-    /// Safety: The caller must ensure that `addr` is an admin-scoped IPv6
-    /// multicast address (ff04::/16). Using this with an invalid address
-    /// violates the type's invariant and may lead to undefined behavior.
+    /// Callers of this fn must still uphold the type's invariant by supplying
+    /// an admin-local multicast address (ff04::/16). So, no validation here.
     ///
-    /// This is intended for cases where validation has already been performed
-    /// (e.g., after an explicit `is_admin_scoped_multicast()` check) to avoid
-    /// redundant validation overhead.
+    /// On the packet path, the address is read directly from the wire, and
+    /// the forwarding and subscription table lookups don't recheck it.
     #[inline]
     pub const fn new_unchecked(addr: Ipv6Addr) -> Self {
         Self(addr)
@@ -1795,7 +1880,7 @@ mod test {
         assert!(to_ipv6("ff04::1").is_admin_scoped_multicast());
         assert!(to_ipv6("ff04:1234:5678:9abc::1").is_admin_scoped_multicast());
 
-        // Test other administrative scopes (NOT accepted)
+        // Test other administrative scopes (not accepted)
         assert!(!to_ipv6("ff05::1").is_admin_scoped_multicast()); // site-local
         assert!(!to_ipv6("ff08::1").is_admin_scoped_multicast()); // organization-local
 

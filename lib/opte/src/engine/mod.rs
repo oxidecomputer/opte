@@ -11,6 +11,7 @@ pub mod arp;
 pub mod checksum;
 pub mod dhcp;
 pub mod dhcpv6;
+mod freelist;
 #[macro_use]
 pub mod ether;
 pub mod flow_table;
@@ -49,12 +50,6 @@ use parse::ValidNoEncap;
 use rule::CompiledTransform;
 use zerocopy::ByteSlice;
 use zerocopy::ByteSliceMut;
-
-/// When set to 1 we will panic in some situations instead of just
-/// flagging in error. This can be useful for debugging certain
-/// scenarios in development.
-#[unsafe(no_mangle)]
-pub static mut opte_panic_debug: i32 = 0;
 
 cfg_if! {
     if #[cfg(feature = "std")] {
@@ -269,6 +264,18 @@ pub trait NetworkImpl {
     ) -> Result<HdlErrAction, HdlPktError>
     where
         T::Chunk: ByteSliceMut + IntoBufPointer<'a>;
+
+    /// Return an iterator over autonomously-generated packets.
+    ///
+    /// Networks may choose to generate autonomous packets, e.g., sending
+    /// advertisements or heartbeats periodically. The network is responsible
+    /// for scheduling these, and this method should return all packets to be
+    /// delivered at the time it's called.
+    ///
+    /// The default implementation generates no packets.
+    fn autonomous_packets(&self) -> impl Iterator<Item = (Direction, MsgBlk)> {
+        core::iter::empty()
+    }
 }
 
 /// A packet parser for the network implementation.
