@@ -194,7 +194,7 @@ fn can_manipulate_port_state() -> Result<()> {
         .send_udp_v4(src_ip, dst_ip, FAILED_DST_PORT, "some data")
         .expect("able to send a UDP packet from src to dst zones");
     let src_flows = layer_flows(src_node.port.name(), "firewall").unwrap();
-    let dst_flows = layer_flows(src_node.port.name(), "firewall").unwrap();
+    let dst_flows = layer_flows(dst_node.port.name(), "firewall").unwrap();
     assert_eq!(
         has_udp_pair(
             &src_flows.ft_out,
@@ -205,7 +205,7 @@ fn can_manipulate_port_state() -> Result<()> {
         ),
         (false, false),
         "Sending port should have no firewall flow-table entries \
-        for a packet sent after pausing its OPTE ports"
+        for a packet sent after it was paused."
     );
     assert_eq!(
         has_udp_pair(
@@ -216,8 +216,8 @@ fn can_manipulate_port_state() -> Result<()> {
             FAILED_DST_PORT,
         ),
         (false, false),
-        "Receiving port should have no firewall flow-table entries \
-        for a packet sent after pausing its OPTE ports"
+        "Receiving port should have no firewall flow-table entries. \
+        Its partner is paused and cannot send traffic."
     );
 
     // Sanity check that we can't pause an already-paused port.
