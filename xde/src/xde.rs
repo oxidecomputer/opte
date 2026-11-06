@@ -302,6 +302,8 @@ use oxide_vpc::api::DetachSubnetResp;
 use oxide_vpc::api::DumpMcast2PhysResp;
 use oxide_vpc::api::DumpMcastForwardingResp;
 use oxide_vpc::api::DumpMcastSubscriptionsResp;
+use oxide_vpc::api::DumpRouterListReq;
+use oxide_vpc::api::DumpRouterListResp;
 use oxide_vpc::api::DumpVirt2BoundaryResp;
 use oxide_vpc::api::DumpVirt2PhysResp;
 use oxide_vpc::api::InternetGatewayMap;
@@ -320,9 +322,11 @@ use oxide_vpc::api::PortInfo;
 use oxide_vpc::api::RemFwRuleReq;
 use oxide_vpc::api::RemoveCidrResp;
 use oxide_vpc::api::Replication;
+use oxide_vpc::api::RouterList;
 use oxide_vpc::api::SetFwRulesReq;
 use oxide_vpc::api::SetMcast2PhysReq;
 use oxide_vpc::api::SetMcastForwardingReq;
+use oxide_vpc::api::SetRouterListReq;
 use oxide_vpc::api::SetVirt2BoundaryReq;
 use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::SourceFilter;
@@ -1066,6 +1070,16 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
 
         OpteCmd::ClearVirt2Boundary => {
             let resp = clear_v2b_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::SetRouterList => {
+            let resp = set_router_list_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::DumpRouterList => {
+            let resp = dump_router_list_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -3524,7 +3538,9 @@ fn new_port(
     gateway::setup(&pb, &cfg, vpc_map, FT_LIMIT_ONE)?;
     router::setup(&pb, &cfg, FT_LIMIT_ONE)?;
     nat::setup(&mut pb, &cfg, nat_ft_limit)?;
-    overlay::setup(&pb, &cfg, v2p, m2p, v2b.clone(), FT_LIMIT_ONE)?;
+    let routers =
+        Arc::new(KRwLock::new(v2b.port_routers(RouterList::default_only())));
+    overlay::setup(&pb, &cfg, v2p, m2p, routers.clone(), FT_LIMIT_ONE)?;
 
     // Set the overall unified flow and TCP flow table limits based on the total
     // configuration above, by taking the maximum of size of the individual
@@ -3535,7 +3551,7 @@ fn new_port(
     // construct a new one, so the unwrap is safe.
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
-    let net = VpcNetwork::new(cfg, v2b);
+    let net = VpcNetwork::new(cfg, routers);
     let port = Arc::new(pb.create(net, limit, limit)?);
     Ok(port)
 }
@@ -4126,7 +4142,7 @@ fn dump_m2p_hdlr() -> Result<DumpMcast2PhysResp, OpteError> {
 fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
-    state.v2b.set(req.vip, req.tep);
+    state.v2b.set(req.router_id, req.vip, req.tep);
     Ok(NoResp::default())
 }
 
@@ -4134,7 +4150,7 @@ fn set_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearVirt2BoundaryReq = env.copy_in_req()?;
     let state = get_xde_state();
-    state.v2b.remove(req.vip, req.tep);
+    state.v2b.remove(req.router_id, req.vip, req.tep);
     Ok(NoResp::default())
 }
 
@@ -4142,6 +4158,40 @@ fn clear_v2b_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
 fn dump_v2b_hdlr() -> Result<DumpVirt2BoundaryResp, OpteError> {
     let state = get_xde_state();
     Ok(state.v2b.dump())
+}
+
+#[unsafe(no_mangle)]
+fn set_router_list_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let req: SetRouterListReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+    *dev.port.network().routers.write() = state.v2b.port_routers(req.list);
+    // We've changed fundamental assumptions upon which the UFT was built, so
+    // we need to clear it.
+    match dev.port.clear_uft() {
+        Ok(()) => {}
+        // A port that isn't running has no flows to invalidate.
+        Err(OpteError::BadState(_)) => {}
+        Err(e) => return Err(e),
+    }
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn dump_router_list_hdlr(
+    env: &mut IoctlEnvelope,
+) -> Result<DumpRouterListResp, OpteError> {
+    let req: DumpRouterListReq = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let dev = devs
+        .get_by_name(&req.port_name)
+        .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
+    let list = dev.port.network().routers.read().list();
+    Ok(DumpRouterListResp { list })
 }
 
 #[unsafe(no_mangle)]

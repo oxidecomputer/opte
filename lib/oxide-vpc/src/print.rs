@@ -12,6 +12,7 @@
 use crate::api::DumpMcast2PhysResp;
 use crate::api::DumpMcastForwardingResp;
 use crate::api::DumpMcastSubscriptionsResp;
+use crate::api::DumpRouterListResp;
 use crate::api::DumpVirt2BoundaryResp;
 use crate::api::DumpVirt2PhysResp;
 use crate::api::GuestPhysAddr;
@@ -22,6 +23,7 @@ use opte::api::IpCidr;
 use opte::api::Vni;
 use opte::print::*;
 use std::io::Write;
+use std::string::ToString;
 use tabwriter::TabWriter;
 
 /// Print the header for the [`print_v2p()`] output.
@@ -91,26 +93,57 @@ pub fn print_v2b_into(
     let mut t = TabWriter::new(writer);
     writeln!(t, "Virtual to Boundary Mappings")?;
     write_hrb(&mut t)?;
-    writeln!(t, "\nIPv4 mappings")?;
-    write_hr(&mut t)?;
-    print_v2b_header(&mut t)?;
-    for x in &resp.mappings.ip4 {
-        for tep in &x.1 {
-            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
-        }
-    }
-    t.flush()?;
 
-    writeln!(t, "\nIPv6 mappings")?;
-    write_hr(&mut t)?;
-    print_v2b_header(&mut t)?;
-    for x in &resp.mappings.ip6 {
-        for tep in &x.1 {
-            print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
-        }
-    }
-    writeln!(t)?;
+    for (router, mappings) in &resp.routers {
+        let router = match router {
+            None => "default".to_string(),
+            Some(id) => id.to_string(),
+        };
+        writeln!(t, "\nRouter: {router}")?;
 
+        writeln!(t, "\nIPv4 mappings")?;
+        write_hr(&mut t)?;
+        print_v2b_header(&mut t)?;
+        for x in &mappings.ip4 {
+            for tep in &x.1 {
+                print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+            }
+        }
+        t.flush()?;
+
+        writeln!(t, "\nIPv6 mappings")?;
+        write_hr(&mut t)?;
+        print_v2b_header(&mut t)?;
+        for x in &mappings.ip6 {
+            for tep in &x.1 {
+                print_v2b_entry(&mut t, x.0.into(), tep.ip, tep.vni)?;
+            }
+        }
+        writeln!(t)?;
+    }
+
+    t.flush()
+}
+
+/// Print a [`DumpRouterListResp`].
+pub fn print_router_list(resp: &DumpRouterListResp) -> std::io::Result<()> {
+    print_router_list_into(&mut std::io::stdout(), resp)
+}
+
+/// Print a [`DumpRouterListResp`] into a given writer.
+pub fn print_router_list_into(
+    writer: &mut impl Write,
+    resp: &DumpRouterListResp,
+) -> std::io::Result<()> {
+    let mut t = TabWriter::new(writer);
+    writeln!(t, "PRIORITY\tROUTER")?;
+    for (prio, router) in resp.list.entries() {
+        let router = match router {
+            None => "default".to_string(),
+            Some(id) => id.to_string(),
+        };
+        writeln!(t, "{prio}\t{router}")?;
+    }
     t.flush()
 }
 
