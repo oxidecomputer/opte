@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Copyright 2025 Oxide Computer Company
+// Copyright 2026 Oxide Computer Company
 
 //! Module to parse and verify Geneve headers from snoop hex output.
 //!
@@ -57,7 +57,7 @@ pub fn parse_geneve_packet(bytes: &[u8]) -> Result<GeneveInfo> {
 /// Panics if parsing fails or if any of the expected values don't match.
 ///
 /// # Example
-/// ```no_run
+/// ```ignore
 /// let snoop_output = snoop_underlay.assert_packet("on underlay");
 /// let stdout = String::from_utf8_lossy(&snoop_output.stdout);
 /// geneve_verify::assert_geneve_packet(
