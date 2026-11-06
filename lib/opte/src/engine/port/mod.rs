@@ -386,7 +386,6 @@ impl PortBuilder {
                 .layers
                 .into_iter()
                 .map(|v| v.into_layer(Arc::clone(&self.name)))
-                .map(KRwLock::new)
                 .collect(),
             uft_in: KRwLock::new(uft_in),
             uft_out: KRwLock::new(uft_out),
@@ -860,7 +859,7 @@ pub struct Port<N: NetworkImpl> {
     mtu: Option<NonZeroU32>,
 
     state: PortState,
-    layers: Vec<KRwLock<Layer>>,
+    layers: Vec<Layer>,
     uft_in: KRwLock<FlowTable<UftEntry<InnerFlowId>>>,
     uft_out: KRwLock<FlowTable<UftEntry<InnerFlowId>>>,
     // We keep a record of the inbound UFID in the TCP flow table so
@@ -958,7 +957,7 @@ impl<N: NetworkImpl> Port<N> {
 
         // Clear all dynamic state related to the creation of flows.
         for layer in &self.layers {
-            layer.write().clear_flows();
+            layer.clear_flows();
         }
 
         self.uft_in.write().clear();
@@ -999,16 +998,11 @@ impl<N: NetworkImpl> Port<N> {
     ) -> Result<()> {
         check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
-            let mut layer = layer.write();
-            if layer.name() == layer_name {
-                self.epoch += 1;
-                layer.add_rule(dir, rule);
-                return Ok(());
-            }
-        }
+        let layer = self.layer_mut_result(layer_name)?;
+        layer.add_rule(dir, rule);
+        self.epoch += 1;
 
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
+        Ok(())
     }
 
     fn tcp_err_probe(
@@ -1048,14 +1042,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn dump_layer(&self, name: &str) -> Result<DumpLayerResp> {
-        for layer in &self.layers {
-            let layer = layer.read();
-            if layer.name() == name {
-                return Ok(layer.dump());
-            }
-        }
-
-        Err(OpteError::LayerNotFound(name.to_string()))
+        self.layer_result(name).map(Layer::dump)
     }
 
     /// Dump the contents of the TCP flow connection tracking table.
@@ -1108,16 +1095,8 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     pub fn clear_lft(&self, layer: &str) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
-        let layer = self
-            .layers
-            .iter()
-            .find(|l| {
-                let l = l.read();
-                l.name() == layer
-            })
-            .ok_or_else(|| OpteError::LayerNotFound(layer.to_string()))?;
-        layer.write().clear_flows();
-        Ok(())
+
+        self.layer_result(layer).map(Layer::clear_flows)
     }
 
     /// Dump the contents of the Unified Flow Table (UFT).
@@ -1217,8 +1196,7 @@ impl<N: NetworkImpl> Port<N> {
         }
 
         for layer in &self.layers {
-            let mut l = layer.write();
-            l.expire_flows(now);
+            layer.expire_flows(now);
         }
 
         Ok(())
@@ -1281,14 +1259,32 @@ impl<N: NetworkImpl> Port<N> {
         dir: Direction,
         rule: &Rule<Finalized>,
     ) -> Result<Option<RuleId>> {
-        for layer in &self.layers {
-            let layer = layer.read();
-            if layer.name() == layer_name {
-                return Ok(layer.find_rule(dir, rule));
-            }
-        }
+        self.layer_result(layer_name).map(|layer| layer.find_rule(dir, rule))
+    }
 
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
+    /// Return a reference to the layer `name`, if present.
+    fn layer(&self, name: &str) -> Option<&Layer> {
+        self.layers.iter().find(|l| l.name() == name)
+    }
+
+    /// Return a reference to the layer `name`, if present.
+    ///
+    /// Allocates an [`OpteError::LayerNotFound`] error on a miss.
+    fn layer_result(&self, name: &str) -> Result<&Layer> {
+        self.layer(name).ok_or_else(|| OpteError::LayerNotFound(name.into()))
+    }
+
+    /// Return a reference to the layer `name`, if present.
+    fn layer_mut(&mut self, name: &str) -> Option<&mut Layer> {
+        self.layers.iter_mut().find(|l| l.name() == name)
+    }
+
+    /// Return a reference to the layer `name`, if present.
+    ///
+    /// Allocates an [`OpteError::LayerNotFound`] error on a miss.
+    fn layer_mut_result(&mut self, name: &str) -> Result<&mut Layer> {
+        self.layer_mut(name)
+            .ok_or_else(|| OpteError::LayerNotFound(name.into()))
     }
 
     /// Return a reference to the [`Action`] defined in the given
@@ -1303,19 +1299,12 @@ impl<N: NetworkImpl> Port<N> {
         layer_name: &str,
         action_idx: usize,
     ) -> Option<Action> {
-        for layer in &self.layers {
-            let layer = layer.read();
-            if layer.name() == layer_name {
-                return layer.action(action_idx);
-            }
-        }
-
-        None
+        self.layer(layer_name).and_then(|layer| layer.action(action_idx))
     }
 
     /// Return the list of layer names.
     pub fn layers(&self) -> Vec<String> {
-        self.layers.iter().map(|l| l.read().name().to_string()).collect()
+        self.layers.iter().map(|l| l.name().to_string()).collect()
     }
 
     /// Return a snapshot of the layer-level statistics.
@@ -1324,14 +1313,7 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This command is valid for any [`PortState`].
     pub fn layer_stats_snap(&self, layer_name: &str) -> Option<LayerStatsSnap> {
-        for layer in &self.layers {
-            let layer = layer.read();
-            if layer.name() == layer_name {
-                return Some(layer.stats_snap());
-            }
-        }
-
-        None
+        self.layer(layer_name).map(Layer::stats_snap)
     }
 
     /// List each `Layer` under this port.
@@ -1343,7 +1325,6 @@ impl<N: NetworkImpl> Port<N> {
         let mut tmp = Vec::with_capacity(self.layers.len());
 
         for layer in &self.layers {
-            let layer = layer.read();
             tmp.push(LayerDesc {
                 name: layer.name().to_string(),
                 rules_in: layer.num_rules(Direction::In),
@@ -1380,16 +1361,10 @@ impl<N: NetworkImpl> Port<N> {
         match (layer_name, dir) {
             ("uft", Direction::In) => self.uft_in.read().num_flows(),
             ("uft", Direction::Out) => self.uft_out.read().num_flows(),
-            (name, _dir) => {
-                for layer in &self.layers {
-                    let layer = layer.read();
-                    if layer.name() == name {
-                        return layer.num_flows();
-                    }
-                }
-
-                panic!("layer not found: {name}");
-            }
+            (name, _dir) => self
+                .layer(name)
+                .map(|layer| layer.num_flows())
+                .expect("layer not found: {name}"),
         }
     }
 
@@ -1397,13 +1372,9 @@ impl<N: NetworkImpl> Port<N> {
     /// the given direction.
     #[cfg(any(feature = "std", test))]
     pub fn num_rules(&self, layer_name: &str, dir: Direction) -> usize {
-        self.layers
-            .iter()
-            .find_map(|layer| {
-                let layer = layer.read();
-                (layer.name() == layer_name).then(|| layer.num_rules(dir))
-            })
-            .unwrap_or_else(|| panic!("layer not found: {layer_name}"))
+        self.layer(layer_name)
+            .map(|layer| layer.num_rules(dir))
+            .expect("layer not found: {layer_name}")
     }
 
     /// Process the packet.
@@ -1874,20 +1845,11 @@ impl<N: NetworkImpl> Port<N> {
     ) -> Result<()> {
         check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
-            let mut layer = layer.write();
-            if layer.name() == layer_name {
-                match layer.remove_rule(dir, id) {
-                    Err(_) => return Err(OpteError::RuleNotFound(id)),
-                    Ok(()) => {
-                        self.epoch += 1;
-                        return Ok(());
-                    }
-                }
-            }
-        }
+        let layer = self.layer_mut_result(layer_name)?;
+        layer.remove_rule(dir, id)?;
+        self.epoch += 1;
 
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
+        Ok(())
     }
 
     /// For the given layer, set both the inbound and outbound rules
@@ -1918,16 +1880,11 @@ impl<N: NetworkImpl> Port<N> {
     ) -> Result<()> {
         check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
-            let mut layer = layer.write();
-            if layer.name() == layer_name {
-                self.epoch += 1;
-                layer.set_rules(in_rules, out_rules);
-                return Ok(());
-            }
-        }
+        let layer = self.layer_mut_result(layer_name)?;
+        layer.set_rules(in_rules, out_rules);
+        self.epoch += 1;
 
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
+        Ok(())
     }
 
     // TODO: not dupe `set_rules`.
@@ -1939,16 +1896,11 @@ impl<N: NetworkImpl> Port<N> {
     ) -> Result<()> {
         check_state!(self.state, [PortState::Ready, PortState::Running])?;
 
-        for layer in &self.layers {
-            let mut layer = layer.write();
-            if layer.name() == layer_name {
-                self.epoch += 1;
-                layer.set_rules_soft(in_rules, out_rules);
-                return Ok(());
-            }
-        }
+        let layer = self.layer_mut_result(layer_name)?;
+        layer.set_rules_soft(in_rules, out_rules);
+        self.epoch += 1;
 
-        Err(OpteError::LayerNotFound(layer_name.to_string()))
+        Ok(())
     }
 
     /// Grab a snapshot of the port statistics.
@@ -1983,7 +1935,7 @@ impl<N: NetworkImpl> Port<N> {
             v.verify_not_larval("tcp", k, None);
         }
         for layer in &self.layers {
-            layer.read().verify_no_larval();
+            layer.verify_no_larval();
         }
     }
 }
@@ -2252,7 +2204,6 @@ impl<N: NetworkImpl> Port<N> {
         match dir {
             Direction::Out => {
                 for layer in &self.layers {
-                    let mut layer = layer.write();
                     let res =
                         layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
@@ -2268,7 +2219,6 @@ impl<N: NetworkImpl> Port<N> {
 
             Direction::In => {
                 for layer in self.layers.iter().rev() {
-                    let mut layer = layer.write();
                     let res =
                         layer.process(&self.ectx, dir, pkt, xforms, ameta);
 
