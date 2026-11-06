@@ -45,6 +45,12 @@ pkgdepend generate -d proto opte.base.p5m > opte.generate.p5m
 mkdir -p packages
 pkgdepend resolve -d packages -s resolve.p5m opte.generate.p5m
 
+# RFD 662 POC: pkgdepend resolve pins deps to the build host's exact branch
+# (e.g. system/kernel@0.5.11-3.0.24068), which makes the p5p uninstallable on
+# any system with an older helios build. Strip the branch so only the release
+# component constrains.
+sed -i 's/@\([0-9][0-9.]*\)-[0-9][0-9.]*/@\1/g' packages/opte.generate.p5m.resolve.p5m
+
 cat opte.base.p5m packages/opte.generate.p5m.resolve.p5m > opte.final.p5m
 
 pkgrepo create $REPO
