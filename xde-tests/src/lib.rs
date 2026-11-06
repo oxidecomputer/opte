@@ -211,6 +211,21 @@ impl OpteZone {
         )
     }
 
+    /// Add the on-link host route to the overlay gateway via `addr`.
+    ///
+    /// The DHCP client may already have installed this route from the
+    /// classless static routes option (121) that OPTE's DHCP server sends, in
+    /// which case `route add` fails with "entry exists".
+    fn add_gateway_route(&self, addr: Ipv4Addr) -> Result<()> {
+        let cmd = format!("route add -iface {OVERLAY_GW} {addr}");
+        match self.zone.zexec(&cmd) {
+            Ok(_) => Ok(()),
+            // Already installed by dhcpagent from option 121.
+            Err(e) if e.to_string().contains("entry exists") => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Wait for the network to come up, then set up the IPv4 overlay network.
     fn setup(&self, devname: &str, addr: Ipv4Addr) -> Result<()> {
         self.wait_for_smf()?;
@@ -218,7 +233,7 @@ impl OpteZone {
         // Configure IPv4 via DHCP
         self.zone
             .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/test"))?;
-        self.zone.zexec(&format!("route add -iface {OVERLAY_GW} {addr}"))?;
+        self.add_gateway_route(addr)?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
         // Add multicast route so multicast traffic goes through the OPTE gateway
         self.zone.zexec(&format!("route add 224.0.0.0/4 {OVERLAY_GW}"))?;
@@ -238,8 +253,7 @@ impl OpteZone {
         // Configure IPv4 via DHCP (OPTE provides DHCP server via hairpin)
         self.zone
             .zexec(&format!("ipadm create-addr -t -T dhcp {devname}/testv4"))?;
-        self.zone
-            .zexec(&format!("route add -iface {OVERLAY_GW} {ipv4_addr}"))?;
+        self.add_gateway_route(ipv4_addr)?;
         self.zone.zexec(&format!("route add {OVERLAY_NET} {OVERLAY_GW}"))?;
 
         // Configure IPv6 via DHCPv6 with stateful mode.
