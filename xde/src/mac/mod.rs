@@ -713,7 +713,7 @@ impl MacFlowDesc {
         flow_ac.fa_flags = flags.bits();
 
         match unsafe {
-            mac_link_flow_add_action(
+            mac_link_flow_add(
                 link_id.into(),
                 name.as_ptr(),
                 &desc,
@@ -726,6 +726,7 @@ impl MacFlowDesc {
                 //    interface until we stabilise it.
                 ptr::null(),
                 &flow_ac,
+                ptr::null_mut(),
             )
         } {
             0 => Ok(MacFlow { name, parent }),

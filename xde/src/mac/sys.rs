@@ -187,13 +187,8 @@ unsafe extern "C" {
         flow_name: *const c_char,
         flow_desc: *const flow_desc_t,
         mrp: *const mac_resource_props_t,
-    ) -> c_int;
-    pub fn mac_link_flow_add_action(
-        linkid: datalink_id_t,
-        flow_name: *const c_char,
-        flow_desc: *const flow_desc_t,
-        mrp: *const mac_resource_props_t,
         action: *const flow_action_t,
+        flent_out: *mut flow_entry_handle_t,
     ) -> c_int;
     pub fn mac_link_flow_remove(flow_name: *const c_char) -> c_int;
 }
@@ -665,7 +660,7 @@ pub const MAC_LSO_EMUL: u32 = 1 << 2;
 
 bitflags::bitflags! {
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FlowActionFlags: u32 {
+pub struct FlowActionFlags: u64 {
     const ACTION = 1 << 0;
     const RESOURCE = 1 << 1;
     const RX_ONLY = 1 << 2;
@@ -680,20 +675,26 @@ pub struct FlowActionFlags: u32 {
 #[derive(Default)]
 #[repr(C, packed(4))]
 pub struct flow_action_t {
-    pub fa_flags: u32,
+    pub fa_flags: u64,
 
     // Valid IFF. FlowActionFlags::ACTION.
     pub fa_direct_rx_fn: Option<mac_direct_rx_fn>,
     pub fa_direct_rx_arg: *mut c_void,
 
     // Valid IFF. FlowActionFlags::RESOURCE.
+    pub fa_resource: *const mac_resource_cb_t,
+}
+
+pub struct mac_resource_cb_t {
+    pub mrc_valid: u64,
+    pub mrc_arg: *mut c_void,
+
     // TODO(ky): higher fidelity.
-    pub fa_resource_add: Option<fn()>,
-    pub fa_resource_remove: Option<fn()>,
-    pub fa_resource_quiesce: Option<fn()>,
-    pub fa_resource_restart: Option<fn()>,
-    pub fa_resource_bind: Option<fn()>,
-    pub fa_resource_arg: *mut c_void,
+    pub mrc_add: Option<fn()>,
+    pub mrc_remove: Option<fn()>,
+    pub mrc_quiesce: Option<fn()>,
+    pub mrc_restart: Option<fn()>,
+    pub mrc_bind: Option<fn()>,
 }
 
 pub type flow_mask_t = u64;
@@ -886,3 +887,4 @@ pub enum mac_dhcpcid_form_t {
 
 // typedef mac_resource_handle_t   (*mac_resource_add_t)(void *, mac_resource_t *);
 pub type mac_resource_handle_t = *mut c_void;
+pub type mac_flow_handle_t = *mut c_void;
