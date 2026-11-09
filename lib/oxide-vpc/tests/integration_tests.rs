@@ -412,7 +412,24 @@ fn gateway_icmp4_ping() {
     // back to guest.
     // ================================================================
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let denies_before = VPC_LAYERS.map(|name| {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        (stats.in_deny, stats.out_deny)
+    });
+    let port_before = g1.port.stats_snap();
     let res = g1.port.process(Out, pkt1);
+    for (name, (in_before, out_before)) in
+        VPC_LAYERS.into_iter().zip(denies_before)
+    {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        assert_eq!(stats.in_deny - in_before, 0, "{name} in_deny");
+        assert_eq!(stats.out_deny - out_before, 0, "{name} out_deny");
+    }
+    let port_after = g1.port.stats_snap();
+    assert_eq!(port_after.out_hairpin - port_before.out_hairpin, 1);
+    assert_eq!(port_after.out_drop, port_before.out_drop);
+    assert_eq!(port_after.in_drop, port_before.in_drop);
+
     let mut hp = match res {
         Ok(Hairpin(hp)) => hp,
         _ => panic!("expected Hairpin, got {res:?}"),
@@ -529,7 +546,23 @@ fn guest_to_guest_no_route() {
     update!(g1, ["incr:epoch", "set:router.rules.out=1"]);
     let mut pkt1_m = http_syn(&g1_cfg, &g2_cfg);
     let pkt1 = parse_outbound(&mut pkt1_m, VpcParser {}).unwrap();
+    let denies_before = VPC_LAYERS.map(|name| {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        (stats.in_deny, stats.out_deny)
+    });
     let res = g1.port.process(Out, pkt1);
+    for (name, (in_before, out_before)) in
+        VPC_LAYERS.into_iter().zip(denies_before)
+    {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        assert_eq!(stats.in_deny - in_before, 0, "{name} in_deny");
+        assert_eq!(
+            stats.out_deny - out_before,
+            u64::from(name == "router"),
+            "{name} out_deny"
+        );
+    }
+
     assert_drop!(
         res,
         DropReason::Layer { name: "router", reason: DenyReason::Default }
@@ -755,7 +788,23 @@ fn guest_to_guest_diff_vpc_no_peer() {
     // ================================================================
     let mut g1_pkt = http_syn(&g1_cfg, &g2_cfg);
     let pkt1 = parse_outbound(&mut g1_pkt, GenericUlp {}).unwrap();
+    let denies_before = VPC_LAYERS.map(|name| {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        (stats.in_deny, stats.out_deny)
+    });
     let res = g1.port.process(Out, pkt1);
+    for (name, (in_before, out_before)) in
+        VPC_LAYERS.into_iter().zip(denies_before)
+    {
+        let stats = g1.port.layer_stats_snap(name).unwrap();
+        assert_eq!(stats.in_deny - in_before, 0, "{name} in_deny");
+        assert_eq!(
+            stats.out_deny - out_before,
+            u64::from(name == "overlay"),
+            "{name} out_deny"
+        );
+    }
+
     assert_drop!(
         res,
         DropReason::Layer { name: "overlay", reason: DenyReason::Action }
