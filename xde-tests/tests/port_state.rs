@@ -220,10 +220,10 @@ fn can_manipulate_port_state() -> Result<()> {
         Its partner is paused and cannot send traffic."
     );
 
-    // Sanity check that we can't pause an already-paused port.
+    // Sanity check that we can pause an already-paused port.
     assert!(
-        pause(src_node.port.name()).is_err(),
-        "Should not be able to pause a paused port",
+        pause(src_node.port.name()).is_ok(),
+        "Pausing a paused port should be a no-op",
     );
 
     // Reset the source port, and confirm that all state is gone.

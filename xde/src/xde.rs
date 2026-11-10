@@ -4389,7 +4389,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         // If the caller supplied an overlay group, translate it via the M2P table.
         // First, reject non-multicast inputs to preserve DevMap error semantics.
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));
@@ -4398,7 +4398,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         // Validate source filter: sources must contain valid unicast addresses
         req.filter
             .validate_sources_for_group(req.group)
-            .map_err(|e| OpteError::BadState(e.to_string()))?;
+            .map_err(|e| OpteError::Multicast(e.to_string()))?;
 
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
@@ -4412,7 +4412,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
                 } else if let Ok(underlay_group) = MulticastUnderlay::new(ip6) {
                     underlay_group
                 } else {
-                    return Err(OpteError::BadState(
+                    return Err(OpteError::Multicast(
                         "no underlay mapping for IPv6 multicast group".into(),
                     ));
                 }
@@ -4424,7 +4424,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
                 if let Some(underlay_group) = state.m2p.get(&req.group) {
                     underlay_group
                 } else {
-                    return Err(OpteError::BadState(
+                    return Err(OpteError::Multicast(
                         "no underlay mapping for IPv4 multicast group".into(),
                     ));
                 }
@@ -4483,7 +4483,7 @@ fn mcast_unsubscribe_hdlr(
         // Reject non-multicast input to preserve API use and match subscribe
         // semantics.
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));
@@ -4548,7 +4548,7 @@ fn mcast_unsubscribe_all_hdlr(
 
         // Reject non-multicast input
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));

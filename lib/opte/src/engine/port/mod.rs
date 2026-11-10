@@ -743,7 +743,7 @@ pub struct Port<N: NetworkImpl> {
 macro_rules! check_state {
     ( $sg:expr, [ $( $state:expr ),* ] ) => {
         if $( $sg != $state )&&* {
-            Err(OpteError::BadState(format!("{}", $sg)))
+            Err(OpteError::BadState($sg))
         } else {
             Ok(())
         }
@@ -770,16 +770,17 @@ impl<N: NetworkImpl> Port<N> {
     /// Place the port in the [`PortState::Paused`] state.
     ///
     /// After completion the port can no longer process traffic or
-    /// modify state.
+    /// modify state. Pausing a port that is already paused is a no-op.
     ///
     /// # States
     ///
     /// This command is valid for the following states:
     ///
     /// * [`PortState::Running`]
+    /// * [`PortState::Paused`]
     pub fn pause(&self) -> Result<()> {
         let mut data = self.data.write();
-        check_state!(data.state, [PortState::Running])?;
+        check_state!(data.state, [PortState::Running, PortState::Paused])?;
         data.state = PortState::Paused;
         Ok(())
     }

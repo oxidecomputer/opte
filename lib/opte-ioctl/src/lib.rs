@@ -29,6 +29,8 @@ use opte::api::SetXdeUnderlayReq;
 use opte::api::StateReq;
 use opte::api::StateResp;
 use opte::api::XDE_IOC_OPTE_CMD;
+// Re-export API types used in `OpteHdl` requests/ responses.
+pub use oxide_vpc::api;
 use oxide_vpc::api::AddFwRuleReq;
 use oxide_vpc::api::AddRouterEntryReq;
 use oxide_vpc::api::AllowCidrReq;
