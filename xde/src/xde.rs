@@ -248,7 +248,12 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
+use opte::api::PausePortReq;
+use opte::api::ResetPortReq;
+use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
+use opte::api::StateReq;
+use opte::api::StateResp;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
@@ -967,6 +972,26 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             // The list-ports command has no request body, so there is
             // no need to pass the envelope.
             let resp = list_ports_hdlr();
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::State => {
+            let resp = state_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::PausePort => {
+            let resp = pause_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResumePort => {
+            let resp = resume_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResetPort => {
+            let resp = reset_port_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
         }
 
@@ -4771,6 +4796,53 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     }
 
     Ok(resp)
+}
+
+#[unsafe(no_mangle)]
+fn state_hdlr(env: &mut IoctlEnvelope) -> Result<StateResp, OpteError> {
+    let StateReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    Ok(StateResp { state: dev.port.state() })
+}
+
+#[unsafe(no_mangle)]
+fn pause_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let PausePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.pause()?;
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn resume_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResumePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.start();
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn reset_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResetPortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.reset();
+    Ok(NoResp::default())
 }
 
 impl From<&crate::ip::in6_addr> for Ipv6Addr {

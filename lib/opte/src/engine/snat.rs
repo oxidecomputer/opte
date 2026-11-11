@@ -114,6 +114,8 @@ impl<T: ConcreteIpAddr> NatPool<T> {
     pub fn add(&self, priv_ip: T, pub_ip: T, pub_ports: RangeInclusive<u16>) {
         let free_ports = Freelist::new(pub_ports);
         let entry = PortList { ip: pub_ip, free_ports };
+        // TODO-robustness: We probably want to handle overwrites here, rather
+        // than ignoring them.
         self.free_list.lock().insert(priv_ip, entry);
     }
 
@@ -239,6 +241,10 @@ impl From<GenIcmpErr> for GenDescError {
 }
 
 impl<T: ConcreteIpAddr + 'static> SNat<T> {
+    /// Construct a new SNAT pool which maps from the private `addr`.
+    ///
+    /// The mapping starts as empty, without any public IPs or ports to map the
+    /// private address to. They must be added with [`SNat<T>::add`].
     pub fn new(addr: T) -> Self {
         SNat {
             priv_ip: addr,
@@ -248,10 +254,11 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
         }
     }
 
-    pub fn add(&self, priv_ip: T, pub_ip: T, pub_ports: RangeInclusive<u16>) {
+    /// Add a mapping from our private IP to the provided public IP and ports.
+    pub fn add(&self, pub_ip: T, pub_ports: RangeInclusive<u16>) {
         let pools = [&self.tcp_pool, &self.udp_pool, &self.icmp_pool];
         for pool in pools {
-            pool.add(priv_ip, pub_ip, pub_ports.clone())
+            pool.add(self.priv_ip, pub_ip, pub_ports.clone())
         }
     }
 
@@ -307,15 +314,23 @@ impl<T: ConcreteIpAddr + 'static> SNat<T> {
 impl Display for SNat<Ipv4Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Here and below: all ULP-specific pools have the same SNAT mappings.
-        let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "{pub_ip}:{}-{}", ports.start(), ports.end())
+        match self.tcp_pool.mapping(self.priv_ip) {
+            Some((pub_ip, ports)) => {
+                write!(f, "{pub_ip}:{}-{}", ports.start(), ports.end())
+            }
+            None => write!(f, "None"),
+        }
     }
 }
 
 impl Display for SNat<Ipv6Addr> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let (pub_ip, ports) = self.tcp_pool.mapping(self.priv_ip).unwrap();
-        write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
+        match self.tcp_pool.mapping(self.priv_ip) {
+            Some((pub_ip, ports)) => {
+                write!(f, "[{pub_ip}]:{}-{}", ports.start(), ports.end())
+            }
+            None => write!(f, "None"),
+        }
     }
 }
 
@@ -553,7 +568,7 @@ mod test {
         let outside_port = 80;
 
         let snat = SNat::new(priv_ip);
-        snat.add(priv_ip, pub_ip, 8765..=8765);
+        snat.add(pub_ip, 8765..=8765);
         let mut action_meta = ActionMeta::new();
         assert!(snat.tcp_pool.verify_available(priv_ip, pub_ip, pub_port));
 
