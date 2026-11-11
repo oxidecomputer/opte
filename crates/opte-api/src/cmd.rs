@@ -256,7 +256,7 @@ pub enum OpteError {
         pos: String,
     },
     BadName,
-    BadState(String),
+    BadState(PortState),
     CopyinReq,
     CopyoutResp,
     DeserCmdErr(String),
@@ -296,6 +296,8 @@ pub enum OpteError {
     },
     /// The provided `IpCfg` is not valid, such as an empty port range.
     InvalidIpCfg,
+    /// A multicast-related error.
+    Multicast(String),
 }
 
 impl OpteError {
@@ -334,6 +336,7 @@ impl OpteError {
             Self::SerCmdResp(_) => ENOMSG,
             Self::System { errno, .. } => *errno,
             Self::InvalidIpCfg => EINVAL,
+            Self::Multicast(_) => EINVAL,
         }
     }
 }
