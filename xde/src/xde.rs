@@ -144,9 +144,11 @@
 //! the underlay and the ability to modify the canonical [`DevMap`] -- without
 //! holding a `KMutex`. Management operations made by OPTE *will* upcall -- we
 //! must resolve link names to IDs, and add/remove link information from DLS.
-//! Doing so makes an ioctl thread vulnerable to receiving signals, so other
-//! threads trying to take the management lock must be able to take, e.g.,
-//! a SIGSTOP.
+//! Doing so makes an ioctl thread vulnerable to receiving signals.
+//! Ioctl waiters take the management lock with [`TokenLock::lock_sig`]
+//! and return `EINTR` when that wait is interrupted. [`xde_detach`] uses
+//! [`TokenLock::lock`], which still waits through `SIGSTOP` so a stopped
+//! holder cannot deadlock detach.
 //!
 //! Whenever the central [`DevMap`] is modified, we call [`refresh_maps()`]
 //! which iterates through each reachable [`XdeDev`] and underlay port. For
@@ -590,6 +592,19 @@ struct UnderlayState {
     u1: Arc<XdeUnderlayPort>,
     u2: Arc<XdeUnderlayPort>,
     shared_props: OffloadInfo,
+}
+
+/// Acquire the management token for an ioctl.
+///
+/// A signal ends the wait without taking ownership. The ioctl returns
+/// `EINTR`. Detach does not use this path.
+fn lock_management(
+    state: &'static XdeState,
+) -> Result<TokenGuard<'static, XdeMgmt>, OpteError> {
+    state.management_lock.lock_sig().map_err(|_| OpteError::System {
+        errno: EINTR,
+        msg: "management operation interrupted by signal".into(),
+    })
 }
 
 fn get_xde_state() -> &'static XdeState {
@@ -1246,7 +1261,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
     // Taking the management lock allows us to create XDE ports atomically
     // with respect to other threads (and enforces a lockout on, e.g., the
     // underlay).
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
 
     let UnderlayState { u1, u2, shared_props: underlay_capab } = {
         token
@@ -1421,7 +1436,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
 fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
 
     // First -- does the device exist?
     // Remove it, knowing that we may need to reinsert on a rollback.
@@ -1615,7 +1630,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
     let link1 = ResolvedLink::new(req.u1.as_str())?;
     let link2 = ResolvedLink::new(req.u2.as_str())?;
 
-    let mut token = state.management_lock.lock();
+    let mut token = lock_management(state)?;
 
     if token.underlay.is_some() {
         return Err(OpteError::System {
@@ -1634,7 +1649,7 @@ fn set_xde_underlay(req: &SetXdeUnderlayReq) -> Result<NoResp, OpteError> {
 #[unsafe(no_mangle)]
 fn clear_xde_underlay() -> Result<NoResp, OpteError> {
     let state = get_xde_state();
-    let mut token = state.management_lock.lock();
+    let mut token = lock_management(state)?;
     if token.underlay.is_none() {
         return Err(OpteError::System {
             errno: ENOENT,
@@ -4233,7 +4248,7 @@ fn set_mcast_forwarding_hdlr(
     // Record next hop count before consuming the vector
     let next_hop_count = req.next_hops.len();
 
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     {
         let mut mcast_fwd = token.mcast_fwd.write();
 
@@ -4304,7 +4319,7 @@ fn clear_mcast_forwarding_hdlr(
     // Validation of admin-local IPv6 (ff04::/16) happens at deserialization
     let underlay = req.underlay;
 
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     {
         let mut mcast_fwd = token.mcast_fwd.write();
         mcast_fwd.remove(&underlay);
@@ -4336,7 +4351,7 @@ fn clear_mcast_forwarding_hdlr(
 fn dump_mcast_forwarding_hdlr() -> Result<DumpMcastForwardingResp, OpteError> {
     let state = get_xde_state();
 
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     let mcast_fwd = token.mcast_fwd.read();
 
     let entries: Vec<McastForwardingEntry> = mcast_fwd
@@ -4360,7 +4375,7 @@ fn dump_mcast_forwarding_hdlr() -> Result<DumpMcastForwardingResp, OpteError> {
 fn dump_mcast_subscriptions_hdlr()
 -> Result<DumpMcastSubscriptionsResp, OpteError> {
     let state = get_xde_state();
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     let devs = token.devs.read();
 
     let mut entries: alloc::vec::Vec<McastSubscriptionEntry> =
@@ -4382,7 +4397,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let state = get_xde_state();
 
     // Update under management lock so we can refresh DevMap views used by Tx/Rx
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     {
         let mut devs = token.devs.write();
         // Subscriptions are keyed on the underlay (outer) IPv6 multicast address.
@@ -4468,7 +4483,7 @@ fn mcast_unsubscribe_hdlr(
     let state = get_xde_state();
 
     // Update under management lock so we can refresh DevMap views used by Tx/Rx
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     {
         let mut devs = token.devs.write();
 
@@ -4542,7 +4557,7 @@ fn mcast_unsubscribe_all_hdlr(
     let state = get_xde_state();
 
     // Update under management lock so we can refresh DevMap views used by Tx/Rx
-    let token = state.management_lock.lock();
+    let token = lock_management(state)?;
     {
         let mut devs = token.devs.write();
 
