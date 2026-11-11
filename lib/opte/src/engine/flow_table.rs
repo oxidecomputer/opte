@@ -268,8 +268,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
     }
 
     fn mark_dead(&self) {
-        // Unwrap safety: all stored values must be valid `Liveness`.
-        let old_state = Liveness::from(
+        let old_state = Liveness::from_trusted(
             self.lifetime.state.swap(Liveness::Dead.into(), Ordering::Relaxed),
         );
 
@@ -288,7 +287,7 @@ impl<S: FlowState> FlowEntryInfo for FlowEntry<S> {
 
     fn mark_ready(&self) {
         self.lifetime.state.update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-            let curr = Liveness::from(v);
+            let curr = Liveness::from_trusted(v);
             u8::from(curr.transition_to_ready().expect(
                 "every increment should correspond to exactly one decrement",
             ))
@@ -1001,6 +1000,37 @@ impl Liveness {
         }
         .decrement_holds()
     }
+
+    /// Parse [`Self`] stored as a `u8` using our
+    /// `impl From<Liveness> for u8`.
+    ///
+    /// This method will panic if there is a fatal round-tripping error:
+    ///  - an illegal discriminant
+    ///  - a [`Self::Dead`] has a non-zero hold count.
+    ///
+    /// No value serialised from a `Liveness` can violate these invariants.
+    fn from_trusted(value: u8) -> Self {
+        let tag = value & 0b11;
+
+        let holds = Holds::new(value >> 2).expect("Holds admits u8::MAX >> 2");
+
+        match tag {
+            0 => Self::Larval { holds },
+            1 => Self::Ready { holds },
+            2 => {
+                // This is a purely internal type. If we have a non-zero hold
+                // counter, we've made a serious programming error with our
+                // atomic handling and cannot reason about a flow's state.
+                assert_eq!(
+                    holds.get(),
+                    0,
+                    "Dead flows cannot have holds, saw {holds:?}"
+                );
+                Self::Dead
+            }
+            v => unreachable!("illegal flowstate tag {v}"),
+        }
+    }
 }
 
 impl Default for Liveness {
@@ -1023,30 +1053,6 @@ pub(super) enum HoldIncrementError {
 pub(super) enum HoldDecrementError {
     /// The flow entry is live and has no recorded holds.
     NoHolds,
-}
-
-impl From<u8> for Liveness {
-    fn from(value: u8) -> Self {
-        let tag = value & 0b11;
-        let holds = Holds::new(value >> 2).expect("maximum is u8::MAX >> 2");
-
-        match tag {
-            0 => Self::Larval { holds },
-            1 => Self::Ready { holds },
-            2 => {
-                // This is a purely internal type. If we have a non-zero hold
-                // counter, we've made a serious programming error with our
-                // atomic handling and cannot reason about a flow's state.
-                assert_eq!(
-                    holds.get(),
-                    0,
-                    "Dead flows cannot have holds, saw {holds:?}"
-                );
-                Self::Dead
-            }
-            v => unreachable!("illegal flowstate tag {v}"),
-        }
-    }
 }
 
 impl From<Liveness> for u8 {
@@ -1098,16 +1104,17 @@ struct FlowLifetime {
 
 impl FlowLifetime {
     fn liveness(&self) -> Liveness {
-        Liveness::from(self.state.load(Ordering::Relaxed))
+        Liveness::from_trusted(self.state.load(Ordering::Relaxed))
     }
 }
 
 impl fmt::Debug for FlowLifetime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let FlowLifetime { last_hit, state, n_children, children: _ } = self;
+        let FlowLifetime { last_hit, state: _state, n_children, children: _ } =
+            self;
         f.debug_struct("FlowEntry")
             .field("last_hit", last_hit)
-            .field("state", &Liveness::from(state.load(Ordering::Relaxed)))
+            .field("state", &self.liveness())
             .field("n_children", n_children)
             .field("children", &"<lock>")
             .finish()
@@ -1270,7 +1277,7 @@ impl<S: FlowState> FlowEntry<S> {
         self.lifetime
             .state
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                let curr = Liveness::from(v);
+                let curr = Liveness::from_trusted(v);
                 curr.increment_holds()
                     .inspect_err(|v| err = Some(*v))
                     .ok()
@@ -2148,7 +2155,7 @@ mod test {
             (Liveness::Ready { holds: Holds::ZERO }),
         ];
 
-        let roundtrip = |v| assert_eq!(v, Liveness::from(u8::from(v)));
+        let roundtrip = |v| assert_eq!(v, Liveness::from_trusted(u8::from(v)));
 
         for base in families {
             for i in 0..Liveness::MAX_HOLDS {
