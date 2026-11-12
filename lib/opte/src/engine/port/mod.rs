@@ -94,7 +94,6 @@ use core::num::NonZeroU16;
 use core::num::NonZeroU32;
 use core::ops::Deref;
 use core::result;
-use core::str::FromStr;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering;
 #[cfg(any(feature = "std", test))]
