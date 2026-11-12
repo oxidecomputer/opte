@@ -887,4 +887,4 @@ pub enum mac_dhcpcid_form_t {
 
 // typedef mac_resource_handle_t   (*mac_resource_add_t)(void *, mac_resource_t *);
 pub type mac_resource_handle_t = *mut c_void;
-pub type mac_flow_handle_t = *mut c_void;
+pub type flow_entry_handle_t = *mut c_void;
