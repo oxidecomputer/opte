@@ -287,6 +287,13 @@ fn port_transition_pause() {
     let _ = g2.port.dump_uft();
 
     // ================================================================
+    // Pausing more than once is a no-op.
+    // ================================================================
+    g2.port.pause().expect("pausing should be a no-op");
+    set!(g2, "port_state=paused");
+    assert!(matches!(g2.port.state(), oxide_vpc::api::PortState::Paused));
+
+    // ================================================================
     // Verify that APIs which modify state are not allowed.
     // ================================================================
     assert!(matches!(g2.port.clear_uft(), Err(OpteError::BadState(_))));
