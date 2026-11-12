@@ -4806,7 +4806,7 @@ fn state_hdlr(env: &mut IoctlEnvelope) -> Result<StateResp, OpteError> {
     let Some(dev) = devs.get_by_name(&port_name) else {
         return Err(OpteError::PortNotFound(port_name));
     };
-    Ok(StateResp { state: dev.port.state() })
+    Ok(StateResp { state: dev.port.read().state() })
 }
 
 #[unsafe(no_mangle)]
@@ -4817,7 +4817,7 @@ fn pause_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let Some(dev) = devs.get_by_name(&port_name) else {
         return Err(OpteError::PortNotFound(port_name));
     };
-    dev.port.pause()?;
+    dev.port.write().pause()?;
     Ok(NoResp::default())
 }
 
@@ -4829,7 +4829,7 @@ fn resume_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let Some(dev) = devs.get_by_name(&port_name) else {
         return Err(OpteError::PortNotFound(port_name));
     };
-    dev.port.start();
+    dev.port.write().start();
     Ok(NoResp::default())
 }
 
@@ -4841,7 +4841,7 @@ fn reset_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let Some(dev) = devs.get_by_name(&port_name) else {
         return Err(OpteError::PortNotFound(port_name));
     };
-    dev.port.reset();
+    dev.port.write().reset();
     Ok(NoResp::default())
 }
 

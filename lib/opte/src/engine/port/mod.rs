@@ -848,7 +848,7 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     /// * [`PortState::Paused`]
     pub fn pause(&mut self) -> Result<()> {
-        check_state!(data.state, [PortState::Running, PortState::Paused])?;
+        check_state!(self.state, [PortState::Running, PortState::Paused])?;
         self.state = PortState::Paused;
         Ok(())
     }
