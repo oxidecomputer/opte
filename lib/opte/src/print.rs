@@ -18,6 +18,7 @@ use crate::api::TcpFlowEntryDump;
 use opte_api::ActionDescEntryDump;
 use opte_api::ListLayersResp;
 use opte_api::RuleDump;
+use opte_api::StateResp;
 use opte_api::UftEntryDump;
 use std::collections::VecDeque;
 use std::io::Write;
@@ -313,4 +314,11 @@ pub fn write_hr(t: &mut impl Write) -> std::io::Result<()> {
 /// Print a horizontal rule.
 pub fn print_hr() {
     println!("{:-<70}", "-");
+}
+
+/// Print the state of a port.
+pub fn print_port_state(port: &str, state: StateResp) -> std::io::Result<()> {
+    let mut stdout = std::io::stdout();
+    writeln!(&mut stdout, "PORT\tSTATE")?;
+    writeln!(&mut stdout, "{}\t{}", port, state.state)
 }
