@@ -74,7 +74,7 @@ pub use ztest::*;
 
 /// VPC VNI for test ports, distinct from the multicast VNI so that
 /// port-keyed and multicast-keyed code paths are exercised separately.
-const TEST_VPC_VNI: u32 = 1000;
+pub const TEST_VPC_VNI: u32 = 1000;
 
 /// Ensure a zone with the given name is not present.
 ///

@@ -714,6 +714,9 @@ pub struct SetVirt2PhysReq {
 }
 
 /// Clear a mapping from VPC IP to physical network destination.
+///
+/// Removes the mapping only if its VNI, MAC, and underlay IP match `phys`;
+/// a missing or mismatched mapping is left unchanged.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClearVirt2PhysReq {
     pub vip: IpAddr,
@@ -742,6 +745,9 @@ pub struct SetMcast2PhysReq {
 }
 
 /// Clear a mapping from multicast group to underlay multicast address.
+///
+/// The mapping is removed iff `group` currently maps to `underlay` and is
+/// a no-op otherwise.
 ///
 /// All multicast groups use DEFAULT_MULTICAST_VNI (77) for fleet-wide multicast.
 #[derive(Clone, Debug, Deserialize, Serialize)]

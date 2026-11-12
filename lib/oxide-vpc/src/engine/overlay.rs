@@ -804,16 +804,28 @@ impl VpcMappings {
         v2p.clone()
     }
 
-    /// Delete the mapping for the given VIP in the given VNI.
+    /// Delete the mapping for `vip` in `phys.vni` if its MAC and underlay IP
+    /// match `phys`.
     ///
-    /// Return the existing entry, if there is one.
+    /// For a migration from sled S to T, source-port cleanup supplies S's
+    /// physical address, deleting a remaining mapping to S or preserving a
+    /// mapping that Nexus has already changed to T.
+    ///
+    /// After a failed migration, target-port cleanup supplies T's physical
+    /// address, deleting a remaining mapping to T or preserving a mapping that
+    /// has been restored to S.
+    ///
+    /// Returns the removed entry or `None` if the mapping is missing or
+    /// mismatched.
     pub fn del(&self, vip: &IpAddr, phys: &PhysNet) -> Option<PhysNet> {
         match self.inner.lock().get(&phys.vni) {
-            Some(v2p) => v2p.remove(vip).map(|guest_phys| PhysNet {
-                ether: guest_phys.ether,
-                ip: guest_phys.ip,
-                vni: phys.vni,
-            }),
+            Some(v2p) => v2p
+                .remove_if_mapped_to(vip, &GuestPhysAddr::from(*phys))
+                .map(|guest_phys| PhysNet {
+                    ether: guest_phys.ether,
+                    ip: guest_phys.ip,
+                    vni: phys.vni,
+                }),
 
             None => None,
         }
@@ -1089,6 +1101,37 @@ impl Virt2Phys {
         ip6
     }
 
+    /// Remove the mapping for `vip` if its MAC and underlay IP match `phys`.
+    ///
+    /// Returns the removed entry or `None` if the mapping is missing or
+    /// mismatched.
+    pub fn remove_if_mapped_to(
+        &self,
+        vip: &IpAddr,
+        phys: &GuestPhysAddr,
+    ) -> Option<GuestPhysAddr> {
+        let matches =
+            |g: &GuestPhysAddr| g.ether == phys.ether && g.ip == phys.ip;
+        match vip {
+            IpAddr::Ip4(ip4) => {
+                let mut map = self.ip4.lock();
+                if map.get(ip4).is_some_and(matches) {
+                    map.remove(ip4)
+                } else {
+                    None
+                }
+            }
+            IpAddr::Ip6(ip6) => {
+                let mut map = self.ip6.lock();
+                if map.get(ip6).is_some_and(matches) {
+                    map.remove(ip6)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Virt2Phys {
             ip4: KMutex::new(BTreeMap::new()),
@@ -1155,6 +1198,35 @@ impl Mcast2Phys {
     pub fn dump(&self) -> DumpMcast2PhysResp {
         DumpMcast2PhysResp { ip4: self.dump_ip4(), ip6: self.dump_ip6() }
     }
+
+    /// Remove the mapping for `group` if its underlay matches `underlay`.
+    ///
+    /// Returns the removed entry or `None` if the mapping is missing or
+    /// mismatched.
+    pub fn remove_if_mapped_to(
+        &self,
+        group: &IpAddr,
+        underlay: &MulticastUnderlay,
+    ) -> Option<MulticastUnderlay> {
+        match group {
+            IpAddr::Ip4(ip4) => {
+                let mut map = self.ip4.lock();
+                if map.get(ip4) == Some(underlay) {
+                    map.remove(ip4)
+                } else {
+                    None
+                }
+            }
+            IpAddr::Ip6(ip6) => {
+                let mut map = self.ip6.lock();
+                if map.get(ip6) == Some(underlay) {
+                    map.remove(ip6)
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 impl Default for Mcast2Phys {
@@ -1187,6 +1259,107 @@ impl MappingResource for Mcast2Phys {
         match vip {
             IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
             IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VIP4: IpAddr = IpAddr::Ip4(Ipv4Addr::from_const([172, 30, 0, 5]));
+    const VIP6: IpAddr =
+        IpAddr::Ip6(Ipv6Addr::from_const([0xfd00, 0, 0, 0, 0, 0, 0, 5]));
+    const GROUP4: IpAddr = IpAddr::Ip4(Ipv4Addr::from_const([233, 252, 0, 1]));
+    const GROUP6: IpAddr =
+        IpAddr::Ip6(Ipv6Addr::from_const([0xff0e, 0, 0, 0, 0, 0, 0, 1]));
+
+    fn sled_a() -> GuestPhysAddr {
+        GuestPhysAddr {
+            ether: MacAddr::from_const([0xa8, 0x40, 0x25, 0xf0, 0, 1]),
+            ip: Ipv6Addr::from_const([0xfd00, 0, 0, 1, 0, 0, 0, 1]),
+        }
+    }
+
+    fn sled_b() -> GuestPhysAddr {
+        GuestPhysAddr {
+            ether: sled_a().ether,
+            ip: Ipv6Addr::from_const([0xfd00, 0, 0, 2, 0, 0, 0, 1]),
+        }
+    }
+
+    fn underlay(last: u16) -> MulticastUnderlay {
+        MulticastUnderlay::new(Ipv6Addr::from_const([
+            0xff04, 0, 0, 0, 0, 0, 0, last,
+        ]))
+        .unwrap()
+    }
+
+    fn phys_net(addr: GuestPhysAddr, vni: u32) -> PhysNet {
+        PhysNet { ether: addr.ether, ip: addr.ip, vni: Vni::new(vni).unwrap() }
+    }
+
+    fn same_phys_addr(a: GuestPhysAddr, b: GuestPhysAddr) -> bool {
+        a.ether == b.ether && a.ip == b.ip
+    }
+
+    #[test]
+    fn v2p_remove_if_mapped_to_mismatch_mac() {
+        let other_mac = GuestPhysAddr {
+            ether: MacAddr::from_const([0xa8, 0x40, 0x25, 0xf0, 0, 2]),
+            ip: sled_a().ip,
+        };
+        for vip in [VIP4, VIP6] {
+            let v2p = Virt2Phys::new();
+            v2p.set(vip, sled_a());
+
+            assert!(v2p.remove_if_mapped_to(&vip, &other_mac).is_none());
+            assert!(v2p.remove_if_mapped_to(&vip, &sled_b()).is_none());
+            assert!(same_phys_addr(v2p.get(&vip).unwrap(), sled_a()));
+
+            let removed = v2p.remove_if_mapped_to(&vip, &sled_a()).unwrap();
+            assert!(same_phys_addr(removed, sled_a()));
+            assert!(v2p.get(&vip).is_none());
+            assert!(v2p.remove_if_mapped_to(&vip, &sled_a()).is_none());
+        }
+    }
+
+    #[test]
+    fn vpc_mappings_del_stale_phys_keeps_current() {
+        for vip in [VIP4, VIP6] {
+            let mappings = VpcMappings::new();
+            mappings.add(vip, phys_net(sled_a(), 7));
+            let v2p = mappings.add(vip, phys_net(sled_b(), 7));
+
+            assert!(mappings.del(&vip, &phys_net(sled_a(), 7)).is_none());
+            assert!(mappings.del(&vip, &phys_net(sled_b(), 8)).is_none());
+            assert!(same_phys_addr(v2p.get(&vip).unwrap(), sled_b()));
+
+            let removed = mappings.del(&vip, &phys_net(sled_b(), 7)).unwrap();
+            assert_eq!(removed.ether, sled_b().ether);
+            assert_eq!(removed.ip, sled_b().ip);
+            assert_eq!(removed.vni, Vni::new(7u32).unwrap());
+            assert!(v2p.get(&vip).is_none());
+            assert!(mappings.del(&vip, &phys_net(sled_b(), 7)).is_none());
+        }
+    }
+
+    #[test]
+    fn m2p_remove_if_mapped_to_mismatch() {
+        for group in [GROUP4, GROUP6] {
+            let m2p = Mcast2Phys::new();
+            m2p.set(group, underlay(1));
+            m2p.set(group, underlay(2));
+
+            assert!(m2p.remove_if_mapped_to(&group, &underlay(1)).is_none());
+            assert_eq!(m2p.get(&group), Some(underlay(2)));
+
+            assert_eq!(
+                m2p.remove_if_mapped_to(&group, &underlay(2)),
+                Some(underlay(2))
+            );
+            assert!(m2p.get(&group).is_none());
+            assert!(m2p.remove_if_mapped_to(&group, &underlay(2)).is_none());
         }
     }
 }

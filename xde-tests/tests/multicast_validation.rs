@@ -257,6 +257,43 @@ fn test_unsubscribe_never_subscribed() -> Result<()> {
 }
 
 #[test]
+fn test_stale_clear_m2p_preserves_live_mapping() -> Result<()> {
+    let _topol = xde_tests::two_node_topology()?;
+    let hdl = OpteHdl::open()?;
+    let mcast_group = Ipv4Addr::from([224, 1, 2, 104]);
+    let underlay = |last: u8| {
+        MulticastUnderlay::new(Ipv6Addr::from([
+            0xff, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 224, 1, 2, last,
+        ]))
+        .unwrap()
+    };
+    let stale = MulticastGroup::new(mcast_group.into(), underlay(104))?;
+    let live = MulticastGroup::new(mcast_group.into(), underlay(105))?;
+
+    hdl.clear_m2p(&ClearMcast2PhysReq {
+        group: mcast_group.into(),
+        underlay: stale.underlay,
+    })?;
+
+    assert_eq!(m2p_lookup(&hdl, mcast_group)?, Some(live.underlay));
+
+    Ok(())
+}
+
+fn m2p_lookup(
+    hdl: &OpteHdl,
+    group: Ipv4Addr,
+) -> Result<Option<MulticastUnderlay>> {
+    Ok(hdl
+        .dump_m2p()?
+        .ip4
+        .into_iter()
+        .find(|(mapped_group, _)| *mapped_group == group)
+        .map(|(_, underlay)| underlay))
+}
+
+#[test]
 fn test_subscribe_then_clear_m2p() -> Result<()> {
     // Verify that clearing M2P mapping after subscribing stops both local
     // delivery and underlay forwarding for the group.
