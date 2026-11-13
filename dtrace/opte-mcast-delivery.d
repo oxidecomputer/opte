@@ -264,14 +264,15 @@ mcast-map-set
 }
 
 mcast-map-clear {
-	/* arg0=af, arg1=group_ptr, arg2=underlay_ptr, arg3=vni */
+	/* arg0=af, arg1=group_ptr, arg2=underlay_ptr, arg3=vni, arg4=cleared */
 	this->af = arg0;
 	this->group_ptr = arg1;
 	this->underlay = (in6_addr_t *)arg2;
 	this->vni = arg3;
+	this->cleared = arg4;
 
 	/* Always track aggregations */
-	@cfg_counts["MAP_CLEAR"] = count();
+	@cfg_counts[this->cleared ? "MAP_CLEAR" : "MAP_CLEAR_NO_OP"] = count();
 }
 
 mcast-map-clear
@@ -279,7 +280,9 @@ mcast-map-clear
 {
 	this->group = MCAST_GROUP_STR(this->af, this->group_ptr);
 	this->ul = inet_ntoa6(this->underlay);
-	printf(M_LINE_FMT, "CFG MAP-CLEAR", this->vni, this->group, this->ul);
+	printf(M_LINE_FMT,
+	    this->cleared ? "CFG MAP-CLEAR" : "CFG MAP-CLEAR-NO-OP",
+	    this->vni, this->group, this->ul);
 }
 
 mcast-fwd-set {
