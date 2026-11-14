@@ -2429,7 +2429,7 @@ impl<N: NetworkImpl> Port<N> {
         // The goal is to find a TCP entry for ufid_out. If one is present,
         // move its state forward. If that state is terminal, remove the
         // entry. If we need to insert a new state, because of an earlier miss
-        // or because the TSP state was advanced back to the beginning, do so.
+        // or because the TCP state was advanced back to the beginning, do so.
         //
         // However! We start with a read lock, because that's the polite thing
         // to do, reply traffic can make good use of it, and the cleanup task
