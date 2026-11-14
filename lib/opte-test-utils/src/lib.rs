@@ -286,11 +286,11 @@ fn oxide_net_builder(
     let one_limit = NonZeroU32::new(1).unwrap();
 
     firewall::setup(&mut pb, fw_limit).expect("failed to add firewall layer");
-    gateway::setup(&pb, cfg, vpc_map, one_limit)
+    gateway::setup(&mut pb, cfg, vpc_map, one_limit)
         .expect("failed to setup gateway layer");
-    router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
+    router::setup(&mut pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, m2p, v2b, one_limit)
+    overlay::setup(&mut pb, cfg, v2p, m2p, v2b, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
