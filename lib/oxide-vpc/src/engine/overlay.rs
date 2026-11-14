@@ -152,6 +152,7 @@ use opte::engine::ip::v6::Ipv6Cidr;
 use opte::engine::ip::v6::Ipv6Push;
 use opte::engine::layer::DefaultAction;
 use opte::engine::layer::LayerActions;
+use opte::engine::layer::LayerKind;
 use opte::engine::layer::LayerSpec;
 use opte::engine::nat::ExternalIpTag;
 use opte::engine::packet::InnerFlowId;
@@ -184,7 +185,6 @@ pub fn setup(
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
     v2b: Arc<Virt2Boundary>,
-    ft_limit: core::num::NonZeroU32,
 ) -> core::result::Result<(), OpteError> {
     // Action Index 0
     let encap = Action::Static(Arc::new(EncapAction::new(
@@ -208,7 +208,8 @@ pub fn setup(
         default_out: DefaultAction::Deny,
     };
 
-    let mut layer = LayerSpec::new(OVERLAY_LAYER_NAME, actions, ft_limit);
+    let mut layer =
+        LayerSpec::new(OVERLAY_LAYER_NAME, actions, LayerKind::Stateless);
 
     // Outbound: encapsulation (priority 1)
     let encap_rule = Rule::match_any(1, layer.action(0).unwrap());
