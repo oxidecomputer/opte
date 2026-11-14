@@ -4,6 +4,8 @@
 
 // Copyright 2026 Oxide Computer Company
 
+//! Metadata for inter-action communication.
+
 use alloc::borrow::Cow;
 use alloc::collections::BTreeMap;
 use alloc::string::String;

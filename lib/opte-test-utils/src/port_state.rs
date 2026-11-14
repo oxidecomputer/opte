@@ -251,6 +251,7 @@ macro_rules! assert_port {
                 );
             }
         }
+        $pav.port.verify_no_larval();
     };
 }
 
