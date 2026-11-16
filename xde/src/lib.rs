@@ -5,7 +5,6 @@
 // Copyright 2024 Oxide Computer Company
 
 // xde - A mac provider for OPTE-based network implementations.
-#![feature(extern_types)]
 #![no_std]
 #![allow(non_upper_case_globals)]
 // XXX We do not use double in the kernel. We should not allow

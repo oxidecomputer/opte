@@ -8,7 +8,7 @@ repository.workspace = true
 
 [features]
 default = []
-kernel = []
+kernel = ["illumos/kernel"]
 
 [dependencies]
-bitflags.workspace = true
+illumos.workspace = true

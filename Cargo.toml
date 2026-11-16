@@ -26,6 +26,7 @@ repository = "https://github.com/oxidecomputer/opte"
 # Internal crates
 derror-macro = { path = "crates/derror-macro" }
 illumos-sys-hdrs = { path = "crates/illumos-sys-hdrs" }
+illumos = { git = "https://github.com/oxidecomputer/illumos-rs", branch = "ry/mac", default-features = false }
 kstat-macro = { path = "crates/kstat-macro" }
 opte-api = { path = "crates/opte-api", default-features = false }
 

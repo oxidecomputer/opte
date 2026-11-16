@@ -147,6 +147,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitstruct"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1b10c3912af09af44ea1dafe307edb5ed374b2a32658eb610e372270c9017b4"
+dependencies = [
+ "bitstruct_derive",
+]
+
+[[package]]
+name = "bitstruct_derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35fd19022c2b750d14eb9724c204d08ab7544570105b3b466d8a9f2f3feded27"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "borsh"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -952,10 +972,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
+name = "illumos"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#e808dd1301bcf0fdfa65b5a5d349e0c33b666cb2"
+dependencies = [
+ "bitflags 2.13.2",
+ "bitstruct",
+ "cfg-if",
+ "ingot",
+ "module_macro",
+ "num_enum",
+ "zerocopy",
+]
+
+[[package]]
 name = "illumos-sys-hdrs"
 version = "0.1.0"
 dependencies = [
- "bitflags 2.13.2",
+ "illumos",
 ]
 
 [[package]]
@@ -1187,6 +1221,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "module_macro"
+version = "0.1.0"
+source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#e808dd1301bcf0fdfa65b5a5d349e0c33b666cb2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex-lite",
+ "serde",
+ "serde_tokenstream",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1288,6 +1335,7 @@ dependencies = [
  "derror-macro",
  "dyn-clone",
  "heapless",
+ "illumos",
  "illumos-sys-hdrs",
  "ingot",
  "itertools 0.15.0",
@@ -1743,6 +1791,12 @@ dependencies = [
  "memchr",
  "regex-syntax",
 ]
+
+[[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
 
 [[package]]
 name = "regex-syntax"
@@ -2624,6 +2678,7 @@ dependencies = [
  "c8str",
  "crc32fast",
  "heapless",
+ "illumos",
  "illumos-sys-hdrs",
  "ingot",
  "opte",
