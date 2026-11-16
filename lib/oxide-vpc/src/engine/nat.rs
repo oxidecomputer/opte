@@ -521,7 +521,7 @@ fn setup_ipv6_nat(
 /// Passing `Some(_)` external IPs to a port which does not support that
 /// IP address family will return an error.
 pub fn set_external_ips(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     req: SetExternalIpsReq,
 ) -> Result<(), OpteError> {
     let cfg = &port.network().cfg;
@@ -560,7 +560,7 @@ pub fn set_external_ips(
 }
 
 pub(super) fn refresh_nat_rules(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     inet_gw_map: Option<&InternetGatewayMap>,
 ) -> Result<(), OpteError> {
     let cfg = &port.network().cfg;

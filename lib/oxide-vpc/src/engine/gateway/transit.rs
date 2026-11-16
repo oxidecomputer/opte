@@ -64,7 +64,7 @@ pub(super) fn make_holepunch_rule(
 /// Allows a guest to send or receive traffic on a CIDR block
 /// other than their private IP.
 pub fn allow_cidr(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     dest: IpCidr,
     dir: Direction,
     vpc_mappings: Arc<VpcMappings>,
@@ -75,7 +75,7 @@ pub fn allow_cidr(
 /// Prevents a guest from sending/receiving traffic on a CIDR block
 /// other than their private IP.
 pub fn remove_cidr(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     dest: IpCidr,
     dir: Direction,
     vpc_mappings: Arc<VpcMappings>,
@@ -90,7 +90,7 @@ pub fn remove_cidr(
 }
 
 fn modify_cidr(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     dest: IpCidr,
     dir: Direction,
     vpc_mappings: Arc<VpcMappings>,
