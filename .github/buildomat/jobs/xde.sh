@@ -21,6 +21,9 @@
 #:   "=/work/test/multicast_multi_nexthop",
 #:   "=/work/xde.conf",
 #: ]
+#: access_repos = [
+#:   "oxidecomputer/illumos-rs"
+#: ]
 #:
 #: [[publish]]
 #: series = "module"
