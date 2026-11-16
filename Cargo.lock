@@ -974,7 +974,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "illumos"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#e808dd1301bcf0fdfa65b5a5d349e0c33b666cb2"
+source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#b15aad7f3e07a5b285cc6b494512f419af12955f"
 dependencies = [
  "bitflags 2.13.2",
  "bitstruct",
@@ -1223,7 +1223,7 @@ dependencies = [
 [[package]]
 name = "module_macro"
 version = "0.1.0"
-source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#e808dd1301bcf0fdfa65b5a5d349e0c33b666cb2"
+source = "git+https://github.com/oxidecomputer/illumos-rs?branch=ry%2Fmac#b15aad7f3e07a5b285cc6b494512f419af12955f"
 dependencies = [
  "proc-macro2",
  "quote",
