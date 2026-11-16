@@ -1010,6 +1010,13 @@ impl<N: NetworkImpl> Port<N> {
     /// * [`PortState::Running`]
     pub fn clear_uft(&self) -> Result<()> {
         check_state!(self.state, [PortState::Running])?;
+
+        // Hold the write lock for both the `clear` and the kstat update to
+        // keep the flow counter in sync.
+        //
+        // This can be fixed as part of opte#1035, whereupon kstat reads will
+        // just be able to take their values from the table in question
+        // directly.
         {
             let mut uft = self.uft_in.write();
             uft.clear();
@@ -1519,21 +1526,12 @@ impl<N: NetworkImpl> Port<N> {
                             "failed to find TCP state on known TCP flow",
                         );
 
-                        let tcp_dir = match dir {
-                            Direction::In => TcpDirection::In {
-                                ufid_in: &flow_before,
-                                ufid_out: tcp_flow.id(),
-                            },
-                            Direction::Out => {
-                                TcpDirection::Out { ufid_out: &flow_before }
-                            }
-                        };
-
                         let invalidated_tcp = match self
                             .update_installed_tcp_state(
                                 tcp_flow.as_ref(),
                                 tcp,
-                                &tcp_dir,
+                                dir,
+                                &flow_before,
                                 pkt.len() as u64,
                             ) {
                             Ok(TcpState::Closed) => Some(tcp_flow),
@@ -2327,6 +2325,10 @@ impl<N: NetworkImpl> Port<N> {
 
     /// Creates a new TCP flow state entry for a given packet.
     ///
+    /// This function must only been called when there is no entry in
+    /// `tcp_flows`. This *must* be rechecked after upgrading to a write lock.
+    /// *If this constraint is violated, this function will panic.*
+    ///
     /// # Errors
     /// * `OpteError::MaxCapacity(_)` if the TCP flows table is full.
     /// * `ProcessError::TcpFlow(_)` if we do not have a valid transition from
@@ -2507,7 +2509,8 @@ impl<N: NetworkImpl> Port<N> {
                 let next_state = self.update_installed_tcp_state(
                     e.as_ref(),
                     tcp,
-                    dir,
+                    dir.dir(),
+                    dir.local_flow(),
                     pkt_len,
                 );
 
@@ -2828,7 +2831,7 @@ impl<N: NetworkImpl> Port<N> {
 
         // For outbound traffic the TCP flow table must be checked
         // _before_ processing take place.
-        let tcp_flow_full = if pkt.meta().is_inner_tcp() {
+        let tcp_flow = if pkt.meta().is_inner_tcp() {
             match self.process_out_tcp(ufid_out, pkt.meta(), pkt.len() as u64) {
                 Ok(TcpMaybeClosed::Closed(removed)) => {
                     tcp_closed = true;
@@ -2876,7 +2879,7 @@ impl<N: NetworkImpl> Port<N> {
         let mut xforms = Transforms::new();
         let res = self.layers_process(Out, pkt, &mut xforms, ameta);
 
-        let tcp_flow = tcp_flow_full.as_ref().map(Arc::downgrade);
+        let tcp_flow_weak = tcp_flow.as_ref().map(Arc::downgrade);
 
         let mut flags = TransformFlags::empty();
         if pkt.checksums_dirty() {
@@ -2903,7 +2906,7 @@ impl<N: NetworkImpl> Port<N> {
                     xforms: xforms.compile(flags),
                     epoch,
                     l4_hash: ufid_out.crc32(),
-                    tcp_flow,
+                    tcp_flow: tcp_flow_weak,
                     parents: pkt.take_lfts(),
                     ready: false.into(),
                 };
@@ -2937,24 +2940,24 @@ impl<N: NetworkImpl> Port<N> {
             }
 
             Ok(LayerResult::Hairpin(hppkt)) => {
-                tcp_flow_full.inspect(|v| v.mark_ready());
+                tcp_flow.inspect(|v| v.mark_ready());
                 Ok(InternalProcessResult::Hairpin(hppkt))
             }
 
             Ok(LayerResult::Deny { name, reason }) => {
-                tcp_flow_full.inspect(|v| v.mark_ready());
+                tcp_flow.inspect(|v| v.mark_ready());
                 Ok(InternalProcessResult::Drop {
                     reason: DropReason::Layer { name, reason },
                 })
             }
 
             Ok(LayerResult::HandlePkt) => {
-                tcp_flow_full.inspect(|v| v.mark_ready());
+                tcp_flow.inspect(|v| v.mark_ready());
                 Ok(InternalProcessResult::from(self.net.handle_pkt(Out, pkt)?))
             }
 
             Err(e) => {
-                tcp_flow_full.inspect(|v| v.mark_ready());
+                tcp_flow.inspect(|v| v.mark_ready());
                 Err(ProcessError::Layer(e))
             }
         }
@@ -3174,13 +3177,14 @@ impl<N: NetworkImpl> Port<N> {
         &self,
         el: &FlowEntry<TcpFlowEntryState>,
         tcp: &impl TcpRef<V>,
-        dir: &TcpDirection,
+        dir: Direction,
+        flow_id: &InnerFlowId,
         pkt_len: u64,
     ) -> result::Result<TcpState, TcpNewFlowNeeded> {
         let tcp_flow = el.state();
         let mut tfes = tcp_flow.inner.lock();
         match dir {
-            TcpDirection::In { ufid_in, .. } => {
+            Direction::In => {
                 tfes.segs_in += 1;
                 tfes.bytes_in += pkt_len;
 
@@ -3188,9 +3192,9 @@ impl<N: NetworkImpl> Port<N> {
                 // before it was processed so that we can retire the
                 // correct UFT/LFT entries upon connection
                 // termination.
-                tfes.inbound_ufid = Some(**ufid_in);
+                tfes.inbound_ufid = Some(*flow_id);
             }
-            TcpDirection::Out { .. } => {
+            Direction::Out => {
                 tfes.segs_out += 1;
                 tfes.bytes_out += pkt_len;
             }
@@ -3201,7 +3205,7 @@ impl<N: NetworkImpl> Port<N> {
         // `mark_dead` will lock `tcp_flow.inner` to access the list of
         // parents attached to the flow lifetime. We need to release our lock
         // if we need to make the flow as terminated.
-        match tcp_state.process(self.name_cstr(), dir.dir(), el.id(), tcp) {
+        match tcp_state.process(self.name_cstr(), dir, el.id(), tcp) {
             Ok(TcpState::Closed) => {
                 drop(tfes);
                 el.mark_dead();
@@ -3214,12 +3218,7 @@ impl<N: NetworkImpl> Port<N> {
                 Err(TcpNewFlowNeeded)
             }
             Err(e @ TcpFlowStateError::UnexpectedSegment { state, .. }) => {
-                self.tcp_err_probe(
-                    dir.dir(),
-                    None,
-                    dir.local_flow(),
-                    e.to_string(),
-                );
+                self.tcp_err_probe(dir, None, flow_id, e.to_string());
                 Ok(state)
             }
         }
