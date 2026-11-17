@@ -48,7 +48,7 @@ clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.8"
 ctor = "0.10"
-darling = "0.23"
+darling = "0.24"
 dlpi = { git = "https://github.com/oxidecomputer/dlpi-sys", default-features = false }
 dyn-clone = "1.0"
 heapless = "0.8"
