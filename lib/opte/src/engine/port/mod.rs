@@ -3051,7 +3051,7 @@ impl<N: NetworkImpl> Port<N> {
     /// This method must now be called whilst holding *any* table locks.
     fn uft_tcp_closed(&self, removed: Arc<FlowEntry<TcpFlowEntryState>>) {
         // Take a copy of what we believe the inbound UFID is. Removal here is
-        // best-effort: if we the flow ID changes unexpectedly, it will either
+        // best-effort: if the flow ID changes unexpectedly, it will either
         // time out or remove itself when it is reused and sees that it is
         // connected to a `Dead` TCP flow.
         //
