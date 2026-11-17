@@ -95,6 +95,7 @@ use core::num::NonZeroU32;
 use core::ops::Deref;
 use core::result;
 use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU8;
 use core::sync::atomic::Ordering;
 #[cfg(any(feature = "std", test))]
 use core::time::Duration;
@@ -3049,7 +3050,17 @@ impl<N: NetworkImpl> Port<N> {
     ///
     /// This method must now be called whilst holding *any* table locks.
     fn uft_tcp_closed(&self, removed: Arc<FlowEntry<TcpFlowEntryState>>) {
-        if let Some(ufid_in) = removed.state().inner.lock().inbound_ufid {
+        // Take a copy of what we believe the inbound UFID is. Removal here is
+        // best-effort: if we the flow ID changes unexpectedly, it will either
+        // time out or remove itself when it is reused and sees that it is
+        // connected to a `Dead` TCP flow.
+        //
+        // Also, this declaration *must remain here, outside of the `if let`
+        // block*. Otherwise, the lock on `TcpFlowEntryState::inner` will be
+        // held for the entirety of that scope, and we will violate the lock
+        // ordering detailed in `Port::process`.
+        let ufid_in = removed.state().inner.lock().inbound_ufid;
+        if let Some(ufid_in) = ufid_in {
             let mut uft = self.uft_in.write();
             if let Some(found_entry) = uft.get(&ufid_in)
                 && found_entry.state().uses_tcp_flow(&removed)
@@ -3205,7 +3216,12 @@ impl<N: NetworkImpl> Port<N> {
         // `mark_dead` will lock `tcp_flow.inner` to access the list of
         // parents attached to the flow lifetime. We need to release our lock
         // if we need to make the flow as terminated.
-        match tcp_state.process(self.name_cstr(), dir, el.id(), tcp) {
+        let res = tcp_state.process(self.name_cstr(), dir, el.id(), tcp);
+
+        // Keep the external copy of the state in sync.
+        tcp_flow.state.store(tfes.tcp_state_raw(), Ordering::Relaxed);
+
+        match res {
             Ok(TcpState::Closed) => {
                 drop(tfes);
                 el.mark_dead();
@@ -3276,6 +3292,12 @@ pub struct TcpFlowEntryStateInner<Id: FlowId> {
 
 pub(super) struct TcpFlowEntryState {
     inner: KMutex<TcpFlowEntryStateInner<InnerFlowId>>,
+
+    /// A copy of the current state for use in eviction/expiry scoring. This
+    /// prevents these methods from needing to violate the overall lock order.
+    ///
+    /// This value is updated with the lock `inner` held.
+    state: AtomicU8,
 }
 
 impl TcpFlowEntryState {
@@ -3284,40 +3306,72 @@ impl TcpFlowEntryState {
         tcp_state: TcpFlowState,
         bytes_in: u64,
     ) -> Self {
-        Self {
-            inner: KMutex::new(TcpFlowEntryStateInner {
-                inbound_ufid: Some(inbound_ufid),
-                tcp_state,
-                segs_in: 1,
-                segs_out: 0,
-                bytes_in,
-                bytes_out: 0,
+        let inner = TcpFlowEntryStateInner {
+            inbound_ufid: Some(inbound_ufid),
+            tcp_state,
+            segs_in: 1,
+            segs_out: 0,
+            bytes_in,
+            bytes_out: 0,
 
-                inbound_parents: vec![],
-                outbound_parents: vec![],
-            }),
-        }
+            inbound_parents: vec![],
+            outbound_parents: vec![],
+        };
+        let state = AtomicU8::from(inner.tcp_state_raw());
+        Self { inner: KMutex::new(inner), state }
     }
 
     fn new_outbound(tcp_state: TcpFlowState, bytes_out: u64) -> Self {
-        Self {
-            inner: KMutex::new(TcpFlowEntryStateInner {
-                inbound_ufid: None,
-                tcp_state,
-                segs_in: 0,
-                segs_out: 1,
-                bytes_in: 0,
-                bytes_out,
+        let inner = TcpFlowEntryStateInner {
+            inbound_ufid: None,
+            tcp_state,
+            segs_in: 0,
+            segs_out: 1,
+            bytes_in: 0,
+            bytes_out,
 
-                inbound_parents: vec![],
-                outbound_parents: vec![],
-            }),
-        }
+            inbound_parents: vec![],
+            outbound_parents: vec![],
+        };
+        let state = AtomicU8::from(inner.tcp_state_raw());
+        Self { inner: KMutex::new(inner), state }
     }
 
+    /// Get the current FSM state of the TCP flow.
+    ///
+    /// This method does not lock the TCP flow state, making it safe to use in
+    /// eviction priority calculations.
     fn tcp_state(&self) -> TcpState {
-        let lock = self.inner.lock();
-        lock.tcp_state.tcp_state()
+        match self.state.load(Ordering::Relaxed) {
+            0 => TcpState::Closed,
+            1 => TcpState::Listen,
+            2 => TcpState::SynSent,
+            3 => TcpState::SynRcvd,
+            4 => TcpState::Established,
+            5 => TcpState::CloseWait,
+            6 => TcpState::LastAck,
+            7 => TcpState::FinWait1,
+            8 => TcpState::FinWait2,
+            9 => TcpState::TimeWait,
+            _ => unreachable!("TCP state update/init stored illegal value"),
+        }
+    }
+}
+
+impl<Id: FlowId> TcpFlowEntryStateInner<Id> {
+    fn tcp_state_raw(&self) -> u8 {
+        match self.tcp_state.tcp_state() {
+            TcpState::Closed => 0,
+            TcpState::Listen => 1,
+            TcpState::SynSent => 2,
+            TcpState::SynRcvd => 3,
+            TcpState::Established => 4,
+            TcpState::CloseWait => 5,
+            TcpState::LastAck => 6,
+            TcpState::FinWait1 => 7,
+            TcpState::FinWait2 => 8,
+            TcpState::TimeWait => 9,
+        }
     }
 }
 

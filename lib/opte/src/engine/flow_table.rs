@@ -93,6 +93,11 @@ pub(super) enum EvictionPriority {
 }
 
 /// A policy for expiring flow table entries over time.
+///
+/// ## Thread safety
+/// Implementers of this trait must not take any locks within `self`, as
+/// these methods will be called with various table and lifetime locks held
+/// for walking and associating flow entry relationships.
 pub(super) trait ExpiryPolicy<S: FlowState>:
     fmt::Debug + Send + Sync
 {
