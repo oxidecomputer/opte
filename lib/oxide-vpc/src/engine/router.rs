@@ -394,7 +394,7 @@ fn make_rule(
 /// For the entry to be deleted it must match exactly for the
 /// destination [`IpCidr`] as well as its paired [`RouterTarget`].
 pub fn del_entry(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
     class: RouterClass,
@@ -415,7 +415,7 @@ pub fn del_entry(
 ///
 /// Route the [`IpCidr`] to the specified [`RouterTarget`].
 pub fn add_entry(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     dest: IpCidr,
     target: RouterTarget,
     class: RouterClass,
@@ -427,7 +427,7 @@ pub fn add_entry(
 
 /// Replace the current set of router entries with the set passed in.
 pub fn replace(
-    port: &Port<VpcNetwork>,
+    port: &mut Port<VpcNetwork>,
     entries: Vec<(IpCidr, RouterTarget, RouterClass)>,
 ) -> Result<NoResp, OpteError> {
     let mut out_rules = Vec::with_capacity(entries.len());
