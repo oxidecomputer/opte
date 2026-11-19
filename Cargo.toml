@@ -47,7 +47,7 @@ cfg-if = "1"
 clap = { version = "4", features = ["derive", "string", "wrap_help"] }
 crc32fast = { version = "1", default-features = false }
 criterion = "0.8"
-ctor = "0.10"
+ctor = "1.0"
 darling = "0.24"
 dlpi = { git = "https://github.com/oxidecomputer/dlpi-sys", default-features = false }
 dyn-clone = "1.0"
@@ -57,15 +57,15 @@ ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.15", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-nix = { version = "0.31", features = ["signal", "user"] }
+nix = { version = "0.32", features = ["signal", "user"] }
 pcap-parser = "0.17"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
 proc-macro2 = { version = "1" }
 proptest = "1.12"
 quote = "1.0"
-rand = { version = "0.10.0", default-features = false }
-ref-cast = "1.0.25"
+rand = { version = "0.10.4", default-features = false }
+ref-cast = "1.0.27"
 ron = "0.12"
 serde = { version = "1.0", features = ["alloc", "derive"], default-features = false }
 serde_json = { version = "1.0" }
