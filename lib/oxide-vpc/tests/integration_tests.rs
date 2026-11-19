@@ -104,7 +104,7 @@ use uuid::Uuid;
 // If we are running `cargo test`, then make sure to
 // register the USDT probes before running any tests.
 #[cfg(test)]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 fn register_usdt() {
     usdt::register_probes().unwrap();
 }
