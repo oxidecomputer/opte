@@ -57,7 +57,7 @@ ipnetwork = { version = "0.21", default-features = false }
 itertools = { version = "0.15", default-features = false }
 libc = "0.2"
 libnet = { git = "https://github.com/oxidecomputer/netadm-sys", branch = "main" }
-nix = { version = "0.31", features = ["signal", "user"] }
+nix = { version = "0.32", features = ["signal", "user"] }
 pcap-parser = "0.17"
 postcard = { version = "1", features = ["alloc"], default-features = false }
 poptrie = { git = "https://github.com/oxidecomputer/poptrie", branch = "main" }
