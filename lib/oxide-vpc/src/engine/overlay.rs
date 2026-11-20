@@ -1326,6 +1326,7 @@ impl MappingResource for Mcast2Phys {
 mod tests {
     use super::*;
     use crate::api::BOUNDARY_SERVICES_VNI;
+    use crate::api::RouterListError;
     use uuid::Uuid;
 
     fn tep(n: u16) -> TunnelEndpoint {
@@ -1452,7 +1453,10 @@ mod tests {
     fn router_list_rejects_duplicate_priorities() {
         let r1 = Some(Uuid::from_u128(1));
         let r2 = Some(Uuid::from_u128(2));
-        assert!(RouterList::new([(10, r1), (10, r2)]).is_err());
+        assert_eq!(
+            RouterList::new([(10, r1), (10, r2)]),
+            Err(RouterListError::DuplicatePriority(10))
+        );
 
         let list = RouterList::new([(20, r2), (10, r1)]).unwrap();
         assert_eq!(list.entries().collect::<Vec<_>>(), &[(10, r1), (20, r2)]);
@@ -1462,11 +1466,14 @@ mod tests {
     fn router_list_rejects_duplicate_routers() {
         let r1 = Some(Uuid::from_u128(1));
 
-        let err = RouterList::new([(10, r1), (20, r1)]).unwrap_err();
-        assert!(err.contains("duplicate router"), "{err}");
-
-        let err = RouterList::new([(10, None), (20, None)]).unwrap_err();
-        assert!(err.contains("duplicate default router"), "{err}");
+        assert_eq!(
+            RouterList::new([(10, r1), (20, r1)]),
+            Err(RouterListError::DuplicateRouter(r1))
+        );
+        assert_eq!(
+            RouterList::new([(10, None), (20, None)]),
+            Err(RouterListError::DuplicateRouter(None))
+        );
     }
 
     #[test]

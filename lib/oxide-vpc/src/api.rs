@@ -502,21 +502,14 @@ impl RouterList {
     /// Duplicate priorities and duplicate routers are rejected.
     pub fn new(
         entries: impl IntoIterator<Item = (u16, RouterId)>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RouterListError> {
         let mut list = BTreeMap::new();
         for (prio, router) in entries {
             if list.contains_key(&prio) {
-                return Err(format!(
-                    "duplicate priority {prio} in router list"
-                ));
+                return Err(RouterListError::DuplicatePriority(prio));
             }
             if list.values().any(|r| *r == router) {
-                return Err(match router {
-                    Some(id) => format!("duplicate router {id} in router list"),
-                    None => {
-                        "duplicate default router in router list".to_string()
-                    }
-                });
+                return Err(RouterListError::DuplicateRouter(router));
             }
             list.insert(prio, router);
         }
@@ -547,9 +540,11 @@ impl Default for RouterList {
 }
 
 impl TryFrom<Vec<(u16, RouterId)>> for RouterList {
-    type Error = String;
+    type Error = RouterListError;
 
-    fn try_from(entries: Vec<(u16, RouterId)>) -> Result<Self, String> {
+    fn try_from(
+        entries: Vec<(u16, RouterId)>,
+    ) -> Result<Self, RouterListError> {
         Self::new(entries)
     }
 }
@@ -557,6 +552,32 @@ impl TryFrom<Vec<(u16, RouterId)>> for RouterList {
 impl From<RouterList> for Vec<(u16, RouterId)> {
     fn from(list: RouterList) -> Self {
         list.0.into_iter().collect()
+    }
+}
+
+/// The reason a set of entries cannot form a [`RouterList`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouterListError {
+    /// Two entries have the same priority.
+    DuplicatePriority(u16),
+
+    /// Two entries name the same router.
+    DuplicateRouter(RouterId),
+}
+
+impl Display for RouterListError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::DuplicatePriority(prio) => {
+                write!(f, "duplicate priority {prio} in router list")
+            }
+            Self::DuplicateRouter(Some(id)) => {
+                write!(f, "duplicate router {id} in router list")
+            }
+            Self::DuplicateRouter(None) => {
+                write!(f, "duplicate default router in router list")
+            }
+        }
     }
 }
 
