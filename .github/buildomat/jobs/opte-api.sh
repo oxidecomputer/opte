@@ -5,6 +5,9 @@
 #: target = "helios-3.0"
 #: rust_toolchain = true
 #: output_rules = []
+#: access_repos = [
+#:   "oxidecomputer/illumos-rs"
+#: ]
 #:
 
 set -o errexit

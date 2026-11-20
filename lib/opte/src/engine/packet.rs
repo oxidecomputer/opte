@@ -61,6 +61,11 @@ use core::result;
 use core::sync::atomic::AtomicPtr;
 use core::sync::atomic::Ordering;
 use dyn_clone::DynClone;
+pub use illumos::mblk::packet::BufferState;
+pub use illumos::mblk::packet::Pullup;
+pub use illumos::mblk::packet::SegAdjustError;
+pub use illumos::mblk::packet::WrapError;
+pub use illumos::mblk::packet::WriteError;
 use illumos_sys_hdrs::mac::MacEtherOffloadFlags;
 use illumos_sys_hdrs::mac::MacTunType;
 use illumos_sys_hdrs::mac::MblkOffloadFlags;
@@ -139,32 +144,9 @@ impl From<smoltcp::wire::Error> for BodyTransformError {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum SegAdjustError {
-    /// Attempt to place the end of the writable/readable area of the
-    /// segment past the limit of the underlying buffer.
-    EndPastLimit,
-
-    /// Attempt to place the start of the writable/readable area of
-    /// the segment before the base of the underlying buffer.
-    StartBeforeBase,
-
-    /// Attempt to place the start the writable/readable area of the
-    /// segment outside the range of the underlying buffer.
-    StartPastEnd,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub enum ModifierCreateError {
     StartOutOfRange,
     EndOutOfRange,
-}
-
-#[derive(Clone, Copy, Debug, DError)]
-pub enum WrapError {
-    /// We tried to wrap a NULL pointer.
-    NullPtr,
-    /// We tried to wrap a packet chain as though it were a single mblk.
-    Chain,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, DError)]
@@ -187,6 +169,19 @@ impl ParseError {
             }
             _ => {}
         }
+    }
+}
+
+impl DError for WrapError {
+    fn discriminant(&self) -> &'static core::ffi::CStr {
+        match self {
+            WrapError::NullPtr => c"NullPtr",
+            WrapError::Chain => c"Chain",
+        }
+    }
+
+    fn child(&self) -> Option<&dyn DError> {
+        None
     }
 }
 
@@ -244,14 +239,6 @@ impl From<PacketParseError> for ParseError {
     fn from(value: PacketParseError) -> Self {
         Self::IngotError(value)
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WriteError {
-    BadLayout,
-    EndOfPacket,
-    NotEnoughBytes { available: usize, needed: usize },
-    StraddledWrite,
 }
 
 pub type WriteResult<T> = result::Result<T, WriteError>;
@@ -1374,18 +1361,6 @@ impl<T: Read + Pullup, M: LightweightMeta<T::Chunk>> LiteParsed<T, M> {}
 pub type MblkPacketData<'a> = PacketData<MsgBlkIterMut<'a>>;
 pub type MblkFullParsed<'a> = FullParsed<MsgBlkIterMut<'a>>;
 pub type MblkLiteParsed<'a, M> = LiteParsed<MsgBlkIterMut<'a>, M>;
-
-pub trait BufferState {
-    fn len(&self) -> usize;
-    fn base_ptr(&self) -> Option<NonNull<mblk_t>>;
-    fn large_offload(&self) -> bool;
-}
-
-pub trait Pullup {
-    /// Pulls all remaining segments of a packet into a new
-    /// `Self` containing a single buffer.
-    fn pullup(&self, prepend: Option<&[u8]>) -> MsgBlk;
-}
 
 /// A set of headers to be emitted at the head of a packet, and
 /// possibly a replacement body as required in the slowpath.
