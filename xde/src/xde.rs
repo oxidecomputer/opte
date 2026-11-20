@@ -4168,7 +4168,12 @@ fn set_router_list_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let dev = devs
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
-    *dev.port.network().routers.write() = state.v2b.port_routers(req.list);
+    let routers = &dev.port.network().routers;
+    // Let's not clear the UFT if there's nothing to change.
+    if routers.read().list() == req.list {
+        return Ok(NoResp::default());
+    }
+    *routers.write() = state.v2b.port_routers(req.list);
     // We've changed fundamental assumptions upon which the UFT was built, so
     // we need to clear it.
     match dev.port.clear_uft() {
