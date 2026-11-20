@@ -575,12 +575,12 @@ pub enum LayerKind {
     /// A layer without a flow table. Packets are processed at this layer
     /// without any locking.
     ///
-    /// Rules may produce any action *except* [`Action::StatefulAllow`]. If
-    /// this action is observed, the packet will be dropped with an error
-    /// condition.
+    /// Rules may produce any action *except* [`Action::StatefulAllow`] or
+    /// [`Action::Stateful`]. If this action is observed, the packet will
+    /// be dropped with an error condition.
     Stateless,
 
-    /// A layer with in/out flow tables, used to hold
+    /// A layer with in/out flow tables, used to hold [`Action::Stateful`] and
     /// [`Action::StatefulAllow`] decisions for a pair of 5-tuples. Accessing
     /// these tables may require locking.
     ///
