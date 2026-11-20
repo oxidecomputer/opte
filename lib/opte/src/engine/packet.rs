@@ -1289,11 +1289,11 @@ impl<T: Read + Pullup> Packet<FullParsed<T>> {
         }
     }
 
-    pub fn record_lft(&mut self, lft: Arc<dyn FlowEntryInfo>) {
+    pub(super) fn record_lft(&mut self, lft: Arc<dyn FlowEntryInfo>) {
         self.state.lfts.push(lft);
     }
 
-    pub fn take_lfts(&mut self) -> Vec<Arc<dyn FlowEntryInfo>> {
+    pub(super) fn take_lfts(&mut self) -> Vec<Arc<dyn FlowEntryInfo>> {
         core::mem::take(&mut self.state.lfts)
     }
 }
