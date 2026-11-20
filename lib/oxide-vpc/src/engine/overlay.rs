@@ -887,7 +887,7 @@ pub struct RouterV2b {
     ip6: KMutex<BTreeMap<Ipv6Cidr, BTreeSet<TunnelEndpoint>>>,
 
     // The Poptrie-based representation of the v2b table is a data structure
-    // optimized for fast query times. It's under an read-write lock to allow
+    // optimized for fast query times. It's under a read-write lock to allow
     // multiple concurrent readers. When we update we hold the lock just long
     // enough to swap the entry with one that was pre-built out of band.
     pt4: KRwLock<Poptrie<Ipv4Cidr, BTreeSet<TunnelEndpoint>>>,
@@ -897,7 +897,8 @@ pub struct RouterV2b {
 /// A port's routers, by priority.
 ///
 /// A realized mapping of routers is kept so that lookups can contend only on
-/// the inner `pt` locks.
+/// the inner `pt` locks. This is the subset of routers that are assigned to
+/// this port. The full set of routers is kept in `Virt2Boundary`.
 pub struct PortRouters(BTreeMap<u16, Arc<RouterV2b>>);
 
 /// A mapping from inner multicast destination IPs to underlay multicast groups.
