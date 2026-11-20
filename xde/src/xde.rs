@@ -431,6 +431,7 @@ unsafe extern "C" {
         group: uintptr_t,
         underlay: *const oxide_vpc::api::Ipv6Addr,
         vni: uintptr_t,
+        cleared: uintptr_t,
     );
     pub safe fn __dtrace_probe_mcast__fwd__set(
         underlay: *const oxide_vpc::api::Ipv6Addr,
@@ -4130,7 +4131,8 @@ fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     // All multicast uses fleet-wide DEFAULT_MULTICAST_VNI (77)
     let vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
     let state = get_xde_state();
-    state.m2p.remove(&req.group);
+    let cleared =
+        state.m2p.remove_if_mapped_to(&req.group, &underlay).is_some();
 
     // DTrace: multicast map clear
     let (af, group_ptr) = dtrace_addr(&req.group);
@@ -4139,6 +4141,7 @@ fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         group_ptr,
         &underlay.addr(),
         vni.as_u32() as uintptr_t,
+        cleared as uintptr_t,
     );
     Ok(NoResp::default())
 }
