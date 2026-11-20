@@ -419,6 +419,22 @@ unsafe extern "C" {
         next_hop: *const oxide_vpc::api::Ipv6Addr,
     );
 
+    pub safe fn __dtrace_probe_v2p__set(
+        af: uintptr_t,
+        vip: uintptr_t,
+        mac: *const u8,
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+    );
+    pub safe fn __dtrace_probe_v2p__clear(
+        af: uintptr_t,
+        vip: uintptr_t,
+        mac: *const u8,
+        underlay: *const oxide_vpc::api::Ipv6Addr,
+        vni: uintptr_t,
+        cleared: uintptr_t,
+    );
+
     // Multicast control-plane probes
     pub safe fn __dtrace_probe_mcast__map__set(
         af: uintptr_t,
@@ -1512,16 +1528,16 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
         PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
     match cfg.ip_cfg {
         IpCfg::Ipv4(ref ipv4) => {
-            state.vpc_map.del(&IpAddr::Ip4(ipv4.private_ip), &phys_net)
+            del_v2p(state, &IpAddr::Ip4(ipv4.private_ip), &phys_net)
         }
         IpCfg::Ipv6(ref ipv6) => {
-            state.vpc_map.del(&IpAddr::Ip6(ipv6.private_ip), &phys_net)
+            del_v2p(state, &IpAddr::Ip6(ipv6.private_ip), &phys_net)
         }
         IpCfg::DualStack { ref ipv4, ref ipv6 } => {
-            state.vpc_map.del(&IpAddr::Ip4(ipv4.private_ip), &phys_net);
-            state.vpc_map.del(&IpAddr::Ip6(ipv6.private_ip), &phys_net)
+            del_v2p(state, &IpAddr::Ip4(ipv4.private_ip), &phys_net);
+            del_v2p(state, &IpAddr::Ip6(ipv6.private_ip), &phys_net)
         }
-    };
+    }
 
     Ok(NoResp::default())
 }
@@ -4081,15 +4097,36 @@ fn set_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: SetVirt2PhysReq = env.copy_in_req()?;
     let state = get_xde_state();
     state.vpc_map.add(req.vip, req.phys);
+
+    let (af, vip_ptr) = dtrace_addr(&req.vip);
+    __dtrace_probe_v2p__set(
+        af as uintptr_t,
+        vip_ptr,
+        req.phys.ether.as_ptr(),
+        &req.phys.ip,
+        req.phys.vni.as_u32() as uintptr_t,
+    );
     Ok(NoResp::default())
 }
 
 #[unsafe(no_mangle)]
 fn clear_v2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let req: ClearVirt2PhysReq = env.copy_in_req()?;
-    let state = get_xde_state();
-    state.vpc_map.del(&req.vip, &req.phys);
+    del_v2p(get_xde_state(), &req.vip, &req.phys);
     Ok(NoResp::default())
+}
+
+fn del_v2p(state: &XdeState, vip: &IpAddr, phys: &PhysNet) {
+    let cleared = state.vpc_map.del(vip, phys).is_some();
+    let (af, vip_ptr) = dtrace_addr(vip);
+    __dtrace_probe_v2p__clear(
+        af as uintptr_t,
+        vip_ptr,
+        phys.ether.as_ptr(),
+        &phys.ip,
+        phys.vni.as_u32() as uintptr_t,
+        cleared as uintptr_t,
+    );
 }
 
 #[unsafe(no_mangle)]
@@ -4131,8 +4168,10 @@ fn clear_m2p_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     // All multicast uses fleet-wide DEFAULT_MULTICAST_VNI (77)
     let vni = Vni::new(DEFAULT_MULTICAST_VNI).unwrap();
     let state = get_xde_state();
-    let cleared =
-        state.m2p.remove_if_mapped_to(&req.group, &underlay).is_some();
+    let cleared = state
+        .m2p
+        .remove_if(&req.group, |_, current| *current == underlay)
+        .is_some();
 
     // DTrace: multicast map clear
     let (af, group_ptr) = dtrace_addr(&req.group);

@@ -15,6 +15,9 @@ use oxide_vpc::api::SetVirt2PhysReq;
 use oxide_vpc::api::Vni;
 use xde_tests::TEST_VPC_VNI;
 
+const OTHER_SLED_UNDERLAY: Ipv6Addr =
+    Ipv6Addr::from_const([0xfd99, 0, 0, 0, 0, 0, 0, 1]);
+
 #[test]
 fn test_xde_loopback() -> Result<()> {
     let mut topol = xde_tests::two_node_topology()?;
@@ -26,23 +29,32 @@ fn test_xde_loopback() -> Result<()> {
         .zexec(&format!("ping {}", topol.nodes[1].port.ip()))?;
 
     let hdl = OpteHdl::open()?;
+    let vni = Vni::new(TEST_VPC_VNI)?;
 
     // A clear request sent with an outdated underlay address for node b must
     // leave b's mapping intact and keep b reachable.
-    let peer: Ipv4Addr = "10.0.0.2".parse().unwrap();
-    let peer_phys: Ipv6Addr = "fd77::1".parse().unwrap();
-    hdl.clear_v2p(&ClearVirt2PhysReq {
-        vip: peer.into(),
-        phys: phys("a8:40:25:ff:00:02", "fd99::1"),
-    })?;
-    assert_eq!(v2p_lookup(&hdl, peer)?, Some(peer_phys));
-    let ping = topol.nodes[0].command(&format!("ping {peer}")).output()?;
-    assert!(ping.status.success(), "ping {peer} failed: {ping:?}");
+    let peer = &topol.nodes[1].port;
+    let live = PhysNet {
+        ether: MacAddr::from(peer.mac()),
+        ip: Ipv6Addr::from(peer.underlay_ip()),
+        vni,
+    };
+    let stale = PhysNet { ip: OTHER_SLED_UNDERLAY, ..live };
+    hdl.clear_v2p(&ClearVirt2PhysReq { vip: peer.ip().into(), phys: stale })?;
 
-    // Map node a's VIP to another sled, like Nexus does after a migration,
-    // and then tear down a's port.
-    let vip: Ipv4Addr = "10.0.0.1".parse().unwrap();
-    let moved = phys("a8:40:25:ff:00:01", "fd99::1");
+    assert_eq!(v2p_lookup(&hdl, peer.ip())?, Some(live.ip));
+    let ping =
+        topol.nodes[0].command(&format!("ping {}", peer.ip())).output()?;
+    assert!(ping.status.success(), "ping {} failed: {ping:?}", peer.ip());
+
+    // Map node a's VIP to another sled and then tear down a's port.
+    let port = &topol.nodes[0].port;
+    let vip = port.ip();
+    let moved = PhysNet {
+        ether: MacAddr::from(port.mac()),
+        ip: OTHER_SLED_UNDERLAY,
+        vni,
+    };
     hdl.set_v2p(&SetVirt2PhysReq { vip: vip.into(), phys: moved })?;
 
     let node = topol.nodes.remove(0);
@@ -60,14 +72,6 @@ fn test_xde_loopback() -> Result<()> {
     assert_eq!(found, Some(moved.ip));
 
     Ok(())
-}
-
-fn phys(ether: &str, ip: &str) -> PhysNet {
-    PhysNet {
-        ether: ether.parse::<MacAddr>().unwrap(),
-        ip: ip.parse::<Ipv6Addr>().unwrap(),
-        vni: Vni::new(TEST_VPC_VNI).unwrap(),
-    }
 }
 
 fn v2p_lookup(hdl: &OpteHdl, vip: Ipv4Addr) -> Result<Option<Ipv6Addr>> {

@@ -484,7 +484,7 @@ impl Eq for TunnelEndpoint {}
 ///
 /// We save space in the VPC mappings by grouping guest
 /// Virtual-to-Physical mappings by VNI.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GuestPhysAddr {
     pub ether: MacAddr,
     pub ip: Ipv6Addr,
