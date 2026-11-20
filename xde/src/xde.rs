@@ -248,7 +248,12 @@ use opte::api::NoResp;
 use opte::api::OpteCmd;
 use opte::api::OpteCmdIoctl;
 use opte::api::OpteError;
+use opte::api::PausePortReq;
+use opte::api::ResetPortReq;
+use opte::api::ResumePortReq;
 use opte::api::SetXdeUnderlayReq;
+use opte::api::StateReq;
+use opte::api::StateResp;
 use opte::api::XDE_IOC_OPTE_CMD;
 use opte::d_error::LabelBlock;
 use opte::ddi::kstat::KStatNamed;
@@ -504,7 +509,7 @@ fn bad_packet_parse_probe(
     };
 
     __dtrace_probe_bad__packet(
-        port_str.as_ptr() as uintptr_t,
+        port_str.as_ptr().addr(),
         dir as uintptr_t,
         mp,
         block.as_ptr(),
@@ -525,7 +530,7 @@ fn bad_packet_probe(
         let _ = eb.append_name_raw(msg);
     }
     __dtrace_probe_bad__packet(
-        port_str.as_ptr() as uintptr_t,
+        port_str.as_ptr().addr(),
         dir as uintptr_t,
         mp,
         eb.as_ptr(),
@@ -654,7 +659,7 @@ pub struct XdeDev {
     // XXX Ideally the xde driver would be a generic driver which
     // could setup ports for any number of network implementations.
     // However, that's not where things are today.
-    pub port: Arc<Port<VpcNetwork>>,
+    port: KRwLock<Port<VpcNetwork>>,
     port_v2p: Arc<overlay::Virt2Phys>,
     port_igw_map: KMutex<Option<InternetGatewayMap>>,
 
@@ -688,10 +693,6 @@ impl XdeDev {
         if let Some(pkt) = pkt.unwrap_mblk() {
             unsafe { mac::mac_rx(self.mh, ptr::null_mut(), pkt.as_ptr()) }
         }
-    }
-
-    pub fn vpc_cfg(&self) -> &VpcCfg {
-        &self.port.network().cfg
     }
 }
 
@@ -978,6 +979,26 @@ unsafe extern "C" fn xde_ioc_opte_cmd(karg: *mut c_void, mode: c_int) -> c_int {
             hdlr_resp(&mut env, resp)
         }
 
+        OpteCmd::State => {
+            let resp = state_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::PausePort => {
+            let resp = pause_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResumePort => {
+            let resp = resume_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
+        OpteCmd::ResetPort => {
+            let resp = reset_port_hdlr(&mut env);
+            hdlr_resp(&mut env, resp)
+        }
+
         OpteCmd::AddFwRule => {
             let resp = add_fw_rule_hdlr(&mut env);
             hdlr_resp(&mut env, resp)
@@ -1182,7 +1203,8 @@ fn shared_periodic_expire(_: &mut ()) {
     let state = get_xde_state();
     let devs = state.devs.read();
     for dev in devs.iter() {
-        let _ = dev.port.expire_flows();
+        let port = dev.port.read();
+        let _ = port.expire_flows();
         dev.routes.remove_routes();
     }
 }
@@ -1199,7 +1221,8 @@ fn check_for_autonomous_packets(_: &mut ()) {
     let devmap = {
         let devs = state.devs.read();
         for dev in devs.iter() {
-            for (dir, pkt) in dev.port.network().autonomous_packets() {
+            let port = dev.port.read();
+            for (dir, pkt) in port.network().autonomous_packets() {
                 match dir {
                     Direction::In => {
                         // TODO-correctness: We're delivering these packets
@@ -1298,7 +1321,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
         mh: ptr::null_mut(),
         link_state: mac::link_state_t::Down,
         mtu,
-        port: new_port(
+        port: KRwLock::new(new_port(
             Arc::clone(&devname),
             &cfg,
             state.vpc_map.clone(),
@@ -1306,7 +1329,7 @@ fn create_xde(req: &CreateXdeReq) -> Result<NoResp, OpteError> {
             port_v2p.clone(),
             state.v2b.clone(),
             state.ectx.clone(),
-        )?,
+        )?),
         devname,
         port_v2p,
         postbox_key,
@@ -1497,7 +1520,7 @@ fn delete_xde(req: &DeleteXdeReq) -> Result<NoResp, OpteError> {
     }
 
     // Remove the VPC mappings for this port.
-    let cfg = xde.vpc_cfg();
+    let cfg = xde.port.read().network().cfg.clone();
     let phys_net =
         PhysNet { ether: cfg.guest_mac, ip: cfg.phys_ip, vni: cfg.vni };
     match cfg.ip_cfg {
@@ -2099,9 +2122,8 @@ unsafe extern "C" fn xde_mc_getstat(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
     let dev = arg as *mut XdeDev;
-    unsafe {
-        (*dev).port.start();
-    }
+    let mut port = unsafe { (*dev).port.write() };
+    port.start();
     0
 }
 
@@ -2110,9 +2132,8 @@ unsafe extern "C" fn xde_mc_start(arg: *mut c_void) -> c_int {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn xde_mc_stop(arg: *mut c_void) {
     let dev = arg as *mut XdeDev;
-    unsafe {
-        (*dev).port.reset();
-    }
+    let mut port = unsafe { (*dev).port.write() };
+    port.reset();
 }
 
 #[unsafe(no_mangle)]
@@ -2162,6 +2183,7 @@ unsafe extern "C" fn xde_mc_unicst(
     unsafe {
         (*dev)
             .port
+            .read()
             .mac_addr()
             .bytes()
             .copy_from_slice(core::slice::from_raw_parts(macaddr, 6));
@@ -2178,8 +2200,8 @@ fn guest_loopback_probe(
     __dtrace_probe_guest__loopback(
         mblk_addr,
         flow,
-        src.port.name_cstr().as_ptr() as uintptr_t,
-        dst.port.name_cstr().as_ptr() as uintptr_t,
+        src.devname.as_ptr().addr(),
+        dst.devname.as_ptr().addr(),
     );
 }
 
@@ -2224,7 +2246,7 @@ fn guest_loopback(
 
     guest_loopback_probe(mblk_addr, &flow, src_dev, dst_dev);
 
-    match dst_dev.port.process(In, parsed_pkt) {
+    match dst_dev.port.read().process(In, parsed_pkt) {
         Ok(ProcessResult::Modified(emit_spec)) => {
             let mut pkt = emit_spec.apply(pkt);
             if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
@@ -2272,8 +2294,8 @@ fn guest_loopback(
         Err(e) => {
             opte::engine::dbg!(
                 "loopback port process error: {} -> {} {:?}",
-                src_dev.port.name(),
-                dst_dev.port.name(),
+                src_dev.devname,
+                dst_dev.devname,
                 e
             );
             None
@@ -2587,7 +2609,7 @@ fn handle_mcast_tx<'a>(
                     src_ptr,
                     dst_ptr,
                     ctx.vni.as_u32() as uintptr_t,
-                    dev.port.name_cstr().as_ptr() as uintptr_t,
+                    dev.devname.as_ptr().addr(),
                     filter.mode() as uintptr_t,
                 );
                 continue;
@@ -2613,7 +2635,7 @@ fn handle_mcast_tx<'a>(
                 af,
                 addr_ptr,
                 ctx.vni.as_u32() as uintptr_t,
-                dev.port.name_cstr().as_ptr() as uintptr_t,
+                dev.devname.as_ptr().addr(),
             );
             if let Some(hp) =
                 guest_loopback(src_dev, dev, *key, my_pkt, postbox)
@@ -2893,6 +2915,7 @@ fn handle_mcast_rx(
                 xde.stats.vals.mcast_rx_stale_local().incr(1);
                 continue;
             };
+            let port = dev.port.read();
 
             if !filter.allows(ctx.inner_src) {
                 let xde = get_xde_state();
@@ -2904,7 +2927,7 @@ fn handle_mcast_rx(
                     src_ptr,
                     dst_ptr,
                     ctx.vni.as_u32() as uintptr_t,
-                    dev.port.name_cstr().as_ptr() as uintptr_t,
+                    port.name_cstr().as_ptr() as uintptr_t,
                     filter.mode() as uintptr_t,
                 );
                 continue;
@@ -2943,9 +2966,9 @@ fn handle_mcast_rx(
                 af,
                 addr_ptr,
                 ctx.vni.as_u32() as uintptr_t,
-                dev.port.name_cstr().as_ptr() as uintptr_t,
+                port.name_cstr().as_ptr() as uintptr_t,
             );
-            xde_rx_one_direct(stream, dev, *key, my_pkt, postbox);
+            xde_rx_one_direct(stream, &port, *key, my_pkt, postbox);
             let xde = get_xde_state();
             xde.stats.vals.mcast_rx_local().incr(1);
         }
@@ -3055,7 +3078,8 @@ fn xde_mc_tx_one<'a>(
     port_map: &mut Option<KRwLockReadGuard<'a, Arc<DevMap>>>,
     mcast_fwd: &mut Option<KRwLockReadGuard<'a, Arc<McastForwardingTable>>>,
 ) {
-    let parser = src_dev.port.network().parser();
+    let port = src_dev.port.read();
+    let parser = port.network().parser();
     let mblk_addr = pkt.mblk_addr();
     let offload_req = pkt.offload_flags();
     let parsed_pkt = match Packet::parse_outbound(pkt.iter_mut(), parser) {
@@ -3110,11 +3134,11 @@ fn xde_mc_tx_one<'a>(
         }
     };
 
-    let port = &src_dev.port;
-
     // The port processing code will fire a probe that describes what
     // action was taken.
     let res = port.process(Direction::Out, parsed_pkt);
+
+    drop(port);
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
@@ -3522,7 +3546,7 @@ fn new_port(
     v2p: Arc<overlay::Virt2Phys>,
     v2b: Arc<overlay::Virt2Boundary>,
     ectx: Arc<ExecCtx>,
-) -> Result<Arc<Port<VpcNetwork>>, OpteError> {
+) -> Result<Port<VpcNetwork>, OpteError> {
     let cfg = cfg.clone();
 
     // Unwrap safety: we always have at least one FT entry, because we always
@@ -3552,8 +3576,7 @@ fn new_port(
     let limit =
         NonZeroU32::new(FW_FT_LIMIT.get().max(nat_ft_limit.get())).unwrap();
     let net = VpcNetwork::new(cfg, routers);
-    let port = Arc::new(pb.create(net, limit, limit)?);
-    Ok(port)
+    pb.create(net, limit, limit).map_err(Into::into)
 }
 
 #[unsafe(no_mangle)]
@@ -3825,7 +3848,7 @@ fn xde_rx_one(
         }
     }
 
-    let port = &dev.port;
+    let port = dev.port.read();
 
     let res = port.process(Direction::In, parsed_pkt);
 
@@ -3906,7 +3929,7 @@ fn xde_rx_one(
 #[inline]
 fn xde_rx_one_direct(
     stream: &DlsStream,
-    dev: &XdeDev,
+    port: &Port<VpcNetwork>,
     port_key: VniMac,
     mut pkt: MsgBlk,
     postbox: &mut Postbox,
@@ -3975,8 +3998,6 @@ fn xde_rx_one_direct(
         }
     }
 
-    let port = &dev.port;
-
     let res = port.process(Direction::In, parsed_pkt);
 
     match res {
@@ -4009,7 +4030,8 @@ fn add_router_entry_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::add_entry(&dev.port, req.dest, req.target, req.class)
+    let mut port = dev.port.write();
+    router::add_entry(&mut port, req.dest, req.target, req.class)
 }
 
 #[unsafe(no_mangle)]
@@ -4023,7 +4045,8 @@ fn del_router_entry_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    router::del_entry(&dev.port, req.dest, req.target, req.class)
+    let mut port = dev.port.write();
+    router::del_entry(&mut port, req.dest, req.target, req.class)
 }
 
 #[unsafe(no_mangle)]
@@ -4035,7 +4058,8 @@ fn add_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::add_fw_rule(&dev.port, &req)?;
+    let mut port = dev.port.write();
+    firewall::add_fw_rule(&mut port, &req)?;
     Ok(NoResp::default())
 }
 
@@ -4048,7 +4072,8 @@ fn rem_fw_rule_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::rem_fw_rule(&dev.port, &req)?;
+    let mut port = dev.port.write();
+    firewall::rem_fw_rule(&mut port, &req)?;
     Ok(NoResp::default())
 }
 
@@ -4061,7 +4086,8 @@ fn set_fw_rules_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    firewall::set_fw_rules(&dev.port, &req)?;
+    let mut port = dev.port.write();
+    firewall::set_fw_rules(&mut port, &req)?;
     Ok(NoResp::default())
 }
 
@@ -4168,7 +4194,8 @@ fn set_router_list_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     let dev = devs
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
-    let routers = &dev.port.network().routers;
+    let port = dev.port.read();
+    let routers = &port.network().routers;
     // Let's not clear the UFT if there's nothing to change.
     if routers.read().list() == req.list {
         return Ok(NoResp::default());
@@ -4176,7 +4203,7 @@ fn set_router_list_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
     *routers.write() = state.v2b.port_routers(req.list);
     // We've changed fundamental assumptions upon which the UFT was built, so
     // we need to clear it.
-    match dev.port.clear_uft() {
+    match port.clear_uft() {
         Ok(()) => {}
         // A port that isn't running has no flows to invalidate.
         Err(OpteError::BadState(_)) => {}
@@ -4195,7 +4222,7 @@ fn dump_router_list_hdlr(
     let dev = devs
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
-    let list = dev.port.network().routers.read().list();
+    let list = dev.port.read().network().routers.read().list();
     Ok(DumpRouterListResp { list })
 }
 
@@ -4419,7 +4446,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         // If the caller supplied an overlay group, translate it via the M2P table.
         // First, reject non-multicast inputs to preserve DevMap error semantics.
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));
@@ -4428,7 +4455,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         // Validate source filter: sources must contain valid unicast addresses
         req.filter
             .validate_sources_for_group(req.group)
-            .map_err(|e| OpteError::BadState(e.to_string()))?;
+            .map_err(|e| OpteError::Multicast(e.to_string()))?;
 
         let group_key = match req.group {
             oxide_vpc::api::IpAddr::Ip6(ip6) => {
@@ -4442,7 +4469,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
                 } else if let Ok(underlay_group) = MulticastUnderlay::new(ip6) {
                     underlay_group
                 } else {
-                    return Err(OpteError::BadState(
+                    return Err(OpteError::Multicast(
                         "no underlay mapping for IPv6 multicast group".into(),
                     ));
                 }
@@ -4454,7 +4481,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
                 if let Some(underlay_group) = state.m2p.get(&req.group) {
                     underlay_group
                 } else {
-                    return Err(OpteError::BadState(
+                    return Err(OpteError::Multicast(
                         "no underlay mapping for IPv4 multicast group".into(),
                     ));
                 }
@@ -4470,7 +4497,7 @@ fn mcast_subscribe_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         );
         if let Ok(port_cstr) = CString::new(req.port_name.clone()) {
             __dtrace_probe_mcast__subscribe(
-                port_cstr.as_ptr() as uintptr_t,
+                port_cstr.as_ptr().addr(),
                 af as uintptr_t,
                 group_ptr,
                 DEFAULT_MULTICAST_VNI as uintptr_t,
@@ -4513,7 +4540,7 @@ fn mcast_unsubscribe_hdlr(
         // Reject non-multicast input to preserve API use and match subscribe
         // semantics.
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));
@@ -4544,7 +4571,7 @@ fn mcast_unsubscribe_hdlr(
         );
         if let Ok(port_cstr) = CString::new(req.port_name.clone()) {
             __dtrace_probe_mcast__unsubscribe(
-                port_cstr.as_ptr() as uintptr_t,
+                port_cstr.as_ptr().addr(),
                 af as uintptr_t,
                 group_ptr,
                 DEFAULT_MULTICAST_VNI as uintptr_t,
@@ -4578,7 +4605,7 @@ fn mcast_unsubscribe_all_hdlr(
 
         // Reject non-multicast input
         if !req.group.is_multicast() {
-            return Err(OpteError::BadState(format!(
+            return Err(OpteError::Multicast(format!(
                 "IP address {} is not a multicast address",
                 req.group
             )));
@@ -4635,7 +4662,7 @@ fn list_layers_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    Ok(dev.port.list_layers())
+    Ok(dev.port.read().list_layers())
 }
 
 #[unsafe(no_mangle)]
@@ -4647,7 +4674,7 @@ fn clear_uft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.clear_uft()?;
+    dev.port.read().clear_uft()?;
     Ok(NoResp::default())
 }
 
@@ -4660,7 +4687,7 @@ fn clear_lft_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.clear_lft(&req.layer_name)?;
+    dev.port.read().clear_lft(&req.layer_name)?;
     Ok(NoResp::default())
 }
 
@@ -4673,7 +4700,7 @@ fn dump_uft_hdlr(env: &mut IoctlEnvelope) -> Result<DumpUftResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.dump_uft()
+    dev.port.read().dump_uft()
 }
 
 #[unsafe(no_mangle)]
@@ -4687,7 +4714,7 @@ fn dump_layer_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.dump_layer(&req.name)
+    dev.port.read().dump_layer(&req.name)
 }
 
 #[unsafe(no_mangle)]
@@ -4701,7 +4728,7 @@ fn dump_tcp_flows_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    dev.port.dump_tcp_flows()
+    dev.port.read().dump_tcp_flows()
 }
 
 #[unsafe(no_mangle)]
@@ -4713,10 +4740,11 @@ fn set_external_ips_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
+    let mut port = dev.port.write();
     let mut igw_map_lock = dev.port_igw_map.lock();
     *igw_map_lock = req.inet_gw_map.clone();
 
-    nat::set_external_ips(&dev.port, req)?;
+    nat::set_external_ips(&mut port, req)?;
 
     Ok(NoResp::default())
 }
@@ -4730,7 +4758,8 @@ fn allow_cidr_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    gateway::allow_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())?;
+    let mut port = dev.port.write();
+    gateway::allow_cidr(&mut port, req.cidr, req.dir, state.vpc_map.clone())?;
     Ok(NoResp::default())
 }
 
@@ -4745,7 +4774,8 @@ fn remove_cidr_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
-    gateway::remove_cidr(&dev.port, req.cidr, req.dir, state.vpc_map.clone())
+    let mut port = dev.port.write();
+    gateway::remove_cidr(&mut port, req.cidr, req.dir, state.vpc_map.clone())
 }
 
 #[unsafe(no_mangle)]
@@ -4757,9 +4787,10 @@ fn attach_subnet_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
+    let mut port = dev.port.write();
     let igw_map_lock = dev.port_igw_map.lock();
     attached_subnets::attach_subnet(
-        &dev.port,
+        &mut port,
         igw_map_lock.as_ref(),
         &state.vpc_map,
         req,
@@ -4779,9 +4810,10 @@ fn detach_subnet_hdlr(
         .get_by_name(&req.port_name)
         .ok_or_else(|| OpteError::PortNotFound(req.port_name.clone()))?;
 
+    let mut port = dev.port.write();
     let igw_map_lock = dev.port_igw_map.lock();
     attached_subnets::detach_subnet(
-        &dev.port,
+        &mut port,
         igw_map_lock.as_ref(),
         &state.vpc_map,
         req,
@@ -4794,12 +4826,13 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
     let state = get_xde_state();
     let devs = state.devs.read();
     for dev in devs.iter() {
-        let cfg = dev.vpc_cfg();
+        let port = dev.port.read();
+        let cfg = &port.network().cfg;
         let ipv4_state = cfg.ipv4_cfg().map(|cfg| cfg.external_ips.load());
         let ipv6_state = cfg.ipv6_cfg().map(|cfg| cfg.external_ips.load());
         resp.ports.push(PortInfo {
-            name: dev.port.name().to_string(),
-            mac_addr: dev.port.mac_addr(),
+            name: port.name().to_string(),
+            mac_addr: port.mac_addr(),
             ip4_addr: cfg.ipv4_cfg().map(|cfg| cfg.private_ip),
             ephemeral_ip4_addr: ipv4_state
                 .as_ref()
@@ -4814,11 +4847,58 @@ fn list_ports_hdlr() -> Result<ListPortsResp, OpteError> {
             floating_ip6_addrs: ipv6_state
                 .as_ref()
                 .map(|cfg| cfg.floating_ips.clone()),
-            state: dev.port.state().to_string(),
+            state: port.state().to_string(),
         });
     }
 
     Ok(resp)
+}
+
+#[unsafe(no_mangle)]
+fn state_hdlr(env: &mut IoctlEnvelope) -> Result<StateResp, OpteError> {
+    let StateReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    Ok(StateResp { state: dev.port.read().state() })
+}
+
+#[unsafe(no_mangle)]
+fn pause_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let PausePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.write().pause()?;
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn resume_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResumePortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.write().start();
+    Ok(NoResp::default())
+}
+
+#[unsafe(no_mangle)]
+fn reset_port_hdlr(env: &mut IoctlEnvelope) -> Result<NoResp, OpteError> {
+    let ResetPortReq { port_name } = env.copy_in_req()?;
+    let state = get_xde_state();
+    let devs = state.devs.read();
+    let Some(dev) = devs.get_by_name(&port_name) else {
+        return Err(OpteError::PortNotFound(port_name));
+    };
+    dev.port.write().reset();
+    Ok(NoResp::default())
 }
 
 impl From<&crate::ip::in6_addr> for Ipv6Addr {
