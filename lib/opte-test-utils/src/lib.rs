@@ -23,6 +23,7 @@ pub use opte::api::Direction::*;
 pub use opte::api::MacAddr;
 pub use opte::ddi::mblk::MsgBlk;
 pub use opte::ddi::mblk::MsgBlkIterMut;
+pub use opte::ddi::sync::KRwLock;
 pub use opte::engine::GenericUlp;
 pub use opte::engine::NetworkParser;
 pub use opte::engine::ether::EtherMeta;
@@ -73,6 +74,7 @@ pub use oxide_vpc::api::Ipv4Cfg;
 pub use oxide_vpc::api::Ipv6Cfg;
 pub use oxide_vpc::api::PhysNet;
 pub use oxide_vpc::api::RouterClass;
+pub use oxide_vpc::api::RouterList;
 pub use oxide_vpc::api::RouterTarget;
 pub use oxide_vpc::api::SNat4Cfg;
 pub use oxide_vpc::api::SNat6Cfg;
@@ -87,6 +89,7 @@ pub use oxide_vpc::engine::geneve::OxideOptionType;
 pub use oxide_vpc::engine::nat;
 pub use oxide_vpc::engine::overlay;
 pub use oxide_vpc::engine::overlay::Mcast2Phys;
+pub use oxide_vpc::engine::overlay::PortRouters;
 pub use oxide_vpc::engine::overlay::TUNNEL_ENDPOINT_MAC;
 pub use oxide_vpc::engine::overlay::Virt2Boundary;
 pub use oxide_vpc::engine::overlay::Virt2Phys;
@@ -270,7 +273,7 @@ fn oxide_net_builder(
     vpc_map: Arc<VpcMappings>,
     v2p: Arc<Virt2Phys>,
     m2p: Arc<Mcast2Phys>,
-    v2b: Arc<Virt2Boundary>,
+    routers: Arc<KRwLock<PortRouters>>,
     flow_table_limits: Option<NonZeroU32>,
 ) -> PortBuilder {
     #[allow(clippy::arc_with_non_send_sync)]
@@ -290,7 +293,7 @@ fn oxide_net_builder(
         .expect("failed to setup gateway layer");
     router::setup(&pb, cfg, one_limit).expect("failed to add router layer");
     nat::setup(&mut pb, cfg, snat_limit).expect("failed to add nat layer");
-    overlay::setup(&pb, cfg, v2p, m2p, v2b, one_limit)
+    overlay::setup(&pb, cfg, v2p, m2p, routers, one_limit)
         .expect("failed to add overlay layer");
     pb
 }
@@ -363,13 +366,16 @@ pub fn oxide_net_setup2(
 
     let v2b = Arc::new(Virt2Boundary::new());
     let m2p = Arc::new(Mcast2Phys::new());
+    let routers =
+        Arc::new(KRwLock::new(v2b.port_routers(RouterList::default_only())));
 
     let converted_cfg = oxide_vpc::cfg::VpcCfg::with_mtu(cfg.clone(), 1500);
-    let vpc_net = VpcNetwork::new(converted_cfg.clone(), v2b.clone());
+    let vpc_net = VpcNetwork::new(converted_cfg.clone(), routers.clone());
     let uft_limit = flow_table_limits.unwrap_or(UFT_LIMIT.unwrap());
     let tcp_limit = flow_table_limits.unwrap_or(TCP_LIMIT.unwrap());
 
     v2b.set(
+        None,
         "0.0.0.0/0".parse().unwrap(),
         vec![TunnelEndpoint {
             ip: BS_IP_ADDR,
@@ -377,6 +383,7 @@ pub fn oxide_net_setup2(
         }],
     );
     v2b.set(
+        None,
         "::/0".parse().unwrap(),
         vec![TunnelEndpoint {
             ip: BS_IP_ADDR,
@@ -390,7 +397,7 @@ pub fn oxide_net_setup2(
         vpc_map.clone(),
         port_v2p,
         m2p.clone(),
-        v2b,
+        routers,
         flow_table_limits,
     )
     .create(vpc_net, uft_limit, tcp_limit)
