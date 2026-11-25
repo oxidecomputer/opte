@@ -35,6 +35,7 @@ use crate::api::DumpLayerResp;
 use crate::d_error::DError;
 #[cfg(all(not(feature = "std"), not(test)))]
 use crate::d_error::LabelBlock;
+use crate::ddi::kstat;
 use crate::ddi::kstat::KStatNamed;
 use crate::ddi::kstat::KStatProvider;
 use crate::ddi::kstat::KStatU64;
@@ -611,14 +612,16 @@ impl LayerSpec {
     pub(crate) fn into_layer(
         self,
         port: Arc<C8Str>,
-    ) -> result::Result<Layer, crate::ddi::kstat::Error> {
+    ) -> result::Result<Layer, CreateError> {
         let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
 
         let stats = KStatNamed::new(
             "xde",
             &format!("{port}_{name}"),
             LayerStats::new(),
-        )?;
+        )
+        .map_err(|err| CreateError { name, err })?;
+
         stats.vals.lft_capacity.set(ft_limit.get() as u64);
         stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
         stats.vals.in_rules.set(rules_in.num_rules() as u64);
@@ -657,6 +660,20 @@ impl LayerSpec {
     ) {
         self.rules_in.set_rules(in_rules);
         self.rules_out.set_rules(out_rules);
+    }
+}
+
+/// Errors encountered while converting a [`LayerSpec`] into a fully
+/// reified `Layer`.
+#[derive(Clone, Debug)]
+pub struct CreateError {
+    name: &'static C8Str,
+    err: kstat::Error,
+}
+
+impl Display for CreateError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "couldn't create layer {}: {}", self.name, self.err)
     }
 }
 

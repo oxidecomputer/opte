@@ -263,6 +263,7 @@ pub struct PortBuilder {
 #[derive(Clone, Debug)]
 pub enum PortCreateError {
     InitStats(kstat::Error),
+    LayerCreate(layer::CreateError),
 }
 
 impl From<kstat::Error> for PortCreateError {
@@ -271,10 +272,17 @@ impl From<kstat::Error> for PortCreateError {
     }
 }
 
+impl From<layer::CreateError> for PortCreateError {
+    fn from(e: layer::CreateError) -> Self {
+        Self::LayerCreate(e)
+    }
+}
+
 impl Display for PortCreateError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::InitStats(e) => write!(f, "{e}"),
+            Self::InitStats(e) => Display::fmt(&e, f),
+            Self::LayerCreate(e) => Display::fmt(&e, f),
         }
     }
 }
