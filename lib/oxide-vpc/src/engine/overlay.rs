@@ -854,10 +854,6 @@ impl Default for VpcMappings {
     }
 }
 
-// XXX: Should these not be RwLocks? This is a really unfortunate degree of
-//      contention for multiple ports in the slowpath to block one another.
-//      (Not common by any means, but needless when it does occur!)
-
 /// A mapping from virtual IPs to physical location.
 pub struct Virt2Phys {
     // XXX We need to implement some sort of invalidation mechanism
@@ -870,8 +866,8 @@ pub struct Virt2Phys {
     // invalidation (they call it reconciliation).
     //
     // https://github.com/oxidecomputer/opte/issues/221
-    ip4: KMutex<BTreeMap<Ipv4Addr, GuestPhysAddr>>,
-    ip6: KMutex<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
+    ip4: KRwLock<BTreeMap<Ipv4Addr, GuestPhysAddr>>,
+    ip6: KRwLock<BTreeMap<Ipv6Addr, GuestPhysAddr>>,
 }
 
 /// A mapping from virtual IPs to boundary services addresses.
@@ -901,8 +897,8 @@ pub struct Virt2Boundary {
 /// Validation is enforced at the API boundary (see xde.rs set_m2p_hdlr) to ensure
 /// only valid admin-local IPv6 multicast addresses (ff04::/16) are stored.
 pub struct Mcast2Phys {
-    ip4: KMutex<BTreeMap<Ipv4Addr, MulticastUnderlay>>,
-    ip6: KMutex<BTreeMap<Ipv6Addr, MulticastUnderlay>>,
+    ip4: KRwLock<BTreeMap<Ipv4Addr, MulticastUnderlay>>,
+    ip6: KRwLock<BTreeMap<Ipv6Addr, MulticastUnderlay>>,
 }
 
 pub const TUNNEL_ENDPOINT_MAC: [u8; 6] = [0xA8, 0x40, 0x25, 0x77, 0x77, 0x77];
@@ -1071,7 +1067,7 @@ pub const VIRT_2_PHYS_NAME: &str = "Virt2Phys";
 impl Virt2Phys {
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, GuestPhysAddr)> {
         let mut ip4 = Vec::new();
-        for (vip, gaddr) in self.ip4.lock().iter() {
+        for (vip, gaddr) in self.ip4.read().iter() {
             ip4.push((*vip, *gaddr));
         }
         ip4
@@ -1079,7 +1075,7 @@ impl Virt2Phys {
 
     pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, GuestPhysAddr)> {
         let mut ip6 = Vec::new();
-        for (vip, gaddr) in self.ip6.lock().iter() {
+        for (vip, gaddr) in self.ip6.read().iter() {
             ip6.push((*vip, *gaddr));
         }
         ip6
@@ -1087,8 +1083,8 @@ impl Virt2Phys {
 
     pub fn new() -> Self {
         Virt2Phys {
-            ip4: KMutex::new(BTreeMap::new()),
-            ip6: KMutex::new(BTreeMap::new()),
+            ip4: KRwLock::new(BTreeMap::new()),
+            ip6: KRwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -1108,22 +1104,22 @@ impl MappingResource for Virt2Phys {
 
     fn get(&self, vip: &Self::Key) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
-            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+            IpAddr::Ip4(ip4) => self.ip4.read().get(ip4).cloned(),
+            IpAddr::Ip6(ip6) => self.ip6.read().get(ip6).cloned(),
         }
     }
 
     fn remove(&self, vip: &Self::Key) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().remove(ip4),
-            IpAddr::Ip6(ip6) => self.ip6.lock().remove(ip6),
+            IpAddr::Ip4(ip4) => self.ip4.write().remove(ip4),
+            IpAddr::Ip6(ip6) => self.ip6.write().remove(ip6),
         }
     }
 
     fn set(&self, vip: Self::Key, phys: GuestPhysAddr) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, phys),
-            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, phys),
+            IpAddr::Ip4(ip4) => self.ip4.write().insert(ip4, phys),
+            IpAddr::Ip6(ip6) => self.ip6.write().insert(ip6, phys),
         }
     }
 }
@@ -1132,19 +1128,19 @@ impl Mcast2Phys {
     /// Create a new empty multicast-to-underlay mapping table.
     pub fn new() -> Self {
         Self {
-            ip4: KMutex::new(BTreeMap::new()),
-            ip6: KMutex::new(BTreeMap::new()),
+            ip4: KRwLock::new(BTreeMap::new()),
+            ip6: KRwLock::new(BTreeMap::new()),
         }
     }
 
     /// Dump all IPv4 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip4(&self) -> Vec<(Ipv4Addr, MulticastUnderlay)> {
-        self.ip4.lock().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
+        self.ip4.read().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
     }
 
     /// Dump all IPv6 overlay multicast group to underlay IPv6 multicast mappings.
     pub fn dump_ip6(&self) -> Vec<(Ipv6Addr, MulticastUnderlay)> {
-        self.ip6.lock().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
+        self.ip6.read().iter().map(|(vip, mcast)| (*vip, *mcast)).collect()
     }
 
     /// Dump all M2P mappings.
@@ -1167,22 +1163,22 @@ impl MappingResource for Mcast2Phys {
 
     fn get(&self, vip: &Self::Key) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().get(ip4).cloned(),
-            IpAddr::Ip6(ip6) => self.ip6.lock().get(ip6).cloned(),
+            IpAddr::Ip4(ip4) => self.ip4.read().get(ip4).cloned(),
+            IpAddr::Ip6(ip6) => self.ip6.read().get(ip6).cloned(),
         }
     }
 
     fn remove(&self, vip: &Self::Key) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().remove(ip4),
-            IpAddr::Ip6(ip6) => self.ip6.lock().remove(ip6),
+            IpAddr::Ip4(ip4) => self.ip4.write().remove(ip4),
+            IpAddr::Ip6(ip6) => self.ip6.write().remove(ip6),
         }
     }
 
     fn set(&self, vip: Self::Key, mcast: Self::Entry) -> Option<Self::Entry> {
         match vip {
-            IpAddr::Ip4(ip4) => self.ip4.lock().insert(ip4, mcast),
-            IpAddr::Ip6(ip6) => self.ip6.lock().insert(ip6, mcast),
+            IpAddr::Ip4(ip4) => self.ip4.write().insert(ip4, mcast),
+            IpAddr::Ip6(ip6) => self.ip6.write().insert(ip6, mcast),
         }
     }
 }
