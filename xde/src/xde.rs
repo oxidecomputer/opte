@@ -288,6 +288,7 @@ use opte::engine::packet::InnerFlowId;
 use opte::engine::packet::Packet;
 use opte::engine::packet::ParseError;
 use opte::engine::parse::ValidUlp;
+use opte::engine::port::FlowMatch;
 use opte::engine::port::Port;
 use opte::engine::port::PortBuilder;
 use opte::engine::port::ProcessResult;
@@ -2232,7 +2233,7 @@ fn guest_loopback(
     guest_loopback_probe(mblk_addr, &flow, src_dev, dst_dev);
 
     match dst_dev.port.read().process(In, parsed_pkt) {
-        Ok(ProcessResult::Modified(emit_spec)) => {
+        Ok((ProcessResult::Modified(emit_spec), _)) => {
             let mut pkt = emit_spec.apply(pkt);
             if let Err(e) = pkt.fill_parse_info(&ulp_meoi, None) {
                 opte::engine::err!("failed to set offload info: {}", e);
@@ -2264,12 +2265,12 @@ fn guest_loopback(
             None
         }
 
-        Ok(ProcessResult::Drop { reason }) => {
+        Ok((ProcessResult::Drop { reason }, _)) => {
             opte::engine::dbg!("loopback rx drop: {:?}", reason);
             None
         }
 
-        Ok(ProcessResult::Hairpin(hppkt)) => {
+        Ok((ProcessResult::Hairpin(hppkt), _)) => {
             // A port can generate a message like an ICMP
             // packet-too-big, which we must feed back to the
             // original port.
@@ -3126,7 +3127,8 @@ fn xde_mc_tx_one<'a>(
     drop(port);
 
     match res {
-        Ok(ProcessResult::Modified(emit_spec)) => {
+        // TODO(ky): nested loopback makes this REALLY fhard to write.
+        Ok((ProcessResult::Modified(emit_spec), _)) => {
             // If the outer IPv6 destination is the same as the
             // source, then we need to loop the packet inbound to the
             // guest on this same host.
@@ -3369,9 +3371,9 @@ fn xde_mc_tx_one<'a>(
             );
         }
 
-        Ok(ProcessResult::Drop { .. }) => {}
+        Ok((ProcessResult::Drop { .. }, _)) => {}
 
-        Ok(ProcessResult::Hairpin(hpkt)) => {
+        Ok((ProcessResult::Hairpin(hpkt), _)) => {
             // Hairpin packets are queued for later delivery. If we have a
             // packet chain containing both hairpin and local deliveries
             // (via `guest_loopback`), we defer hairpin delivery until after
@@ -3610,15 +3612,21 @@ unsafe extern "C" fn xde_rx(
     let devmap = stream.ports_map[cpu_index].devs.lock();
     let mut postbox = Postbox::new();
 
+    // XXX prevent constantly re-locking one port if we can.
+    let mut curr_port = None;
+    let mut curr_match = None;
+
     while let Some(pkt) = chain.pop_front() {
         if let Some(pkt) =
-            xde_rx_one(&stream.stream, pkt, &devmap, &mut postbox)
+            xde_rx_one(&stream.stream, pkt, &devmap, &mut postbox, &mut curr_port, &mut curr_match)
         {
             count += 1;
             len += pkt.byte_len();
             out_chain.append(pkt);
         }
     }
+
+    drop(curr_port);
 
     devmap.deliver_all(postbox);
 
@@ -3661,12 +3669,14 @@ unsafe extern "C" fn xde_rx(
 /// accordingly.
 #[cfg_attr(feature = "profiling", inline(never), unsafe(no_mangle))]
 #[cfg_attr(not(feature = "profiling"), inline)]
-fn xde_rx_one(
+fn xde_rx_one<'a, 'b>(
     stream: &DlsStream,
     mut pkt: MsgBlk,
-    devs: &DevMap,
+    devs: &'a DevMap,
     postbox: &mut Postbox,
-) -> Option<MsgBlk> {
+    curr_port: &mut Option<(&'b XdeDev, KRwLockReadGuard<'b, Port<VpcNetwork>>)>,
+    curr_match: &mut Option<FlowMatch<VpcNetwork>>,
+) -> Option<MsgBlk> where 'a: 'b {
     let mblk_addr = pkt.mblk_addr();
 
     // We must first parse the packet in order to determine where it
@@ -3694,6 +3704,11 @@ fn xde_rx_one(
 
     let ip6_dst = meta.outer_v6.destination();
     if ip6_dst.is_multicast() {
+        // Discard our unicast delivery state. Stretching this lock ownership is
+        // BAD and is a great way to invite the ghost of deadlock present.
+        *curr_port = None;
+        *curr_match = None;
+
         // Early exit: if no multicast subscribers exist on this sled, drop immediately
         // to avoid unnecessary packet processing (pullup, parsing, subscription lookups).
         if !devs.has_mcast_subscribers() {
@@ -3776,16 +3791,26 @@ fn xde_rx_one(
     let ether_dst = meta.inner_eth.destination();
 
     let port_key = VniMac::new(vni, ether_dst);
-    let Some(dev) = devs.get_by_key(port_key) else {
-        // TODO add SDT probe
-        // TODO add stat
-        opte::engine::dbg!(
-            "[encap] no device found for vni: {} mac: {}",
-            vni,
-            ether_dst
-        );
-        return Some(pkt);
-    };
+    let (dev, port) = if let Some(curr) = curr_port.as_ref() && curr.0.postbox_key == port_key {
+        (curr.0, &curr.1)
+    } else {match devs.get_by_key(port_key) {
+        Some(dev) => {
+            *curr_port = Some((dev, dev.port.read()));
+
+            let out = curr_port.as_ref().unwrap();
+            (out.0, &out.1)
+        },
+        None => {
+            // TODO add SDT probe
+            // TODO add stat
+            opte::engine::dbg!(
+                "[encap] no device found for vni: {} mac: {}",
+                vni,
+                ether_dst
+            );
+            return Some(pkt);
+        }
+    }};
 
     // Large TCP frames include their MSS in-band, as recipients can require
     // this to correctly process frames which have been given split into
@@ -3828,9 +3853,30 @@ fn xde_rx_one(
         }
     }
 
-    let port = dev.port.read();
+    let res = if let Some(matcher) = &curr_match {
+        match matcher.process(port, parsed_pkt) {
+            Ok(v) => Ok(v),
+            Err(opte::engine::port::Err2::RetryFull(ret)) => match port.process(Direction::In, ret) {
+                Ok((v, matcher)) => {
+                    *curr_match = matcher;
+                    Ok(v)
+                }
+                Err(e) => Err(e),
+            },
+            Err(opte::engine::port::Err2::WrongPort) => unreachable!(),
+            Err(opte::engine::port::Err2::Process(e)) => Err(e),
+        }
+    } else {
+        match port.process(Direction::In, parsed_pkt) {
+            Ok((v, matcher)) => {
+                *curr_match = matcher;
+                Ok(v)
+            }
+            Err(e) => Err(e),
+        }
+    };
 
-    let res = port.process(Direction::In, parsed_pkt);
+    // let res = port.process(Direction::In, parsed_pkt);
 
     match res {
         Ok(ProcessResult::Modified(emit_spec)) => {
@@ -3981,7 +4027,7 @@ fn xde_rx_one_direct(
     let res = port.process(Direction::In, parsed_pkt);
 
     match res {
-        Ok(ProcessResult::Modified(emit_spec)) => {
+        Ok((ProcessResult::Modified(emit_spec), _)) => {
             let mut npkt = emit_spec.apply(pkt);
 
             if let Err(e) = npkt.fill_parse_info(&ulp_meoi, None) {
@@ -3990,7 +4036,7 @@ fn xde_rx_one_direct(
 
             postbox.post(port_key, npkt);
         }
-        Ok(ProcessResult::Hairpin(hppkt)) => {
+        Ok((ProcessResult::Hairpin(hppkt), _)) => {
             stream.tx_drop_on_no_desc(
                 hppkt,
                 TxHint::NoneOrMixed,

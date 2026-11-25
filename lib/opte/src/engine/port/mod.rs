@@ -235,6 +235,89 @@ impl From<HdlPktAction> for InternalProcessResult {
     }
 }
 
+pub enum Err2<'a, M>
+where
+    M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
+{
+    RetryFull(Packet<LiteParsed<MsgBlkIterMut<'a>, M>>),
+    Process(ProcessError),
+    WrongPort,
+}
+
+/// XXX TODO
+pub struct FlowMatch<N: NetworkImpl> {
+    // I don't *think* I can have a true ref. here?
+    // Way too hard to keep the ref. alive over lock holding.
+    // port: &'a Port<N>,
+    port: *const Port<N>,
+    flow: Arc<UftEntry>,
+    dir: Direction,
+}
+
+impl<N: NetworkImpl> FlowMatch<N> {
+    /// Process the packet.
+    ///
+    /// # States
+    ///
+    /// This command is valid only for [`PortState::Running`].
+    #[inline(always)]
+    pub fn process<'b, M>(
+        &self,
+        port: &Port<N>,
+        pkt: Packet<LiteParsed<MsgBlkIterMut<'b>, M>>,
+    ) -> result::Result<ProcessResult, Err2<'b, M>>
+    where
+        M: LightweightMeta<<MsgBlkIterMut<'b> as Read>::Chunk>,
+    {
+        if !core::ptr::addr_eq(port, self.port) {
+            return Err(Err2::WrongPort);
+        }
+
+        let epoch = port.epoch();
+        let flow_before = pkt.flow();
+
+        if &flow_before != self.flow.id()
+            || self.flow.is_killed()
+            || self.flow.state().epoch != port.epoch
+        {
+            return Err(Err2::RetryFull(pkt));
+        }
+
+        let mut flow_after = None;
+        let mblk_addr = pkt.mblk_addr();
+
+        port.port_process_entry_probe(self.dir, &flow_before, epoch, mblk_addr);
+        let (res, fpk) = match port.process_impl(
+            Some(&self.flow),
+            self.dir,
+            pkt,
+            &flow_before,
+            &mut flow_after,
+            Moment::now(),
+        ) {
+            Ok((res, fpk)) => (Ok(res), fpk),
+            Err(e) => (Err(e), FastPathDecisionKind::Slow),
+        };
+
+        // match dir {
+        //     Direction::In => self.update_stats_in(&res),
+        //     Direction::Out => self.update_stats_out(&res),
+        // }
+
+        port.port_process_return_probe(
+            self.dir,
+            &flow_before,
+            flow_after.as_ref().unwrap_or(&flow_before),
+            epoch,
+            mblk_addr,
+            &res,
+            fpk,
+        );
+
+        res.map_err(Err2::Process)
+    }
+}
+
 /// The reason for a packet being dropped.
 #[derive(Clone, Debug)]
 pub enum DropReason {
@@ -700,20 +783,21 @@ struct PortStats {
 type UftEntry = FlowEntry<UftState<InnerFlowId>>;
 
 /// The degree of work required to handle a packet in [`Port::process`].
-enum FastPathDecision {
-    CompiledUft(Arc<UftEntry>),
-    Uft(Arc<UftEntry>),
+enum FastPathDecision<'a> {
+    CompiledUft(&'a UftEntry),
+    Uft(&'a UftEntry),
     Slow,
 }
 
-/// The integer discriminant of a [`FastPathDecision`].
+/// The integer discriminant of a [`FastPathDecision`];
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum FastPathDecisionKind {
     CompiledUft = 0,
     Uft = 1,
     Slow = 2,
 }
 
-impl FastPathDecision {
+impl<'a> FastPathDecision<'a> {
     fn kind(&self) -> FastPathDecisionKind {
         match self {
             Self::CompiledUft(_) => FastPathDecisionKind::CompiledUft,
@@ -1334,7 +1418,7 @@ impl<N: NetworkImpl> Port<N> {
         // is pretty large, but expressing the transform on a &mut is also
         // less than ideal.
         pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
-    ) -> result::Result<ProcessResult, ProcessError>
+    ) -> result::Result<(ProcessResult, Option<FlowMatch<N>>), ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
     {
@@ -1345,18 +1429,45 @@ impl<N: NetworkImpl> Port<N> {
         check_state!(self.state, [PortState::Running])
             .map_err(|_| ProcessError::BadState(self.state))?;
 
-        self.port_process_entry_probe(
-            dir,
-            &flow_before,
-            self.epoch(),
-            mblk_addr,
-        );
+        let epoch = self.epoch();
 
-        let (res, fpk) =
-            match self.process_impl(dir, pkt, &flow_before, &mut flow_after) {
-                Ok((res, fpk)) => (Ok(res), fpk),
-                Err(e) => (Err(e), FastPathDecisionKind::Slow),
+        self.port_process_entry_probe(dir, &flow_before, epoch, mblk_addr);
+
+        let uft = match dir {
+            Direction::Out => &self.uft_out,
+            Direction::In => &self.uft_in,
+        };
+
+        let process_start = Moment::now();
+        let mut uft_entry = uft.read().get(&flow_before).map(Arc::clone);
+
+        if let Some(ref entry) = uft_entry
+            && (entry.is_killed() || entry.state().epoch != epoch)
+        {
+            // The entry is *definitely* from a previous epoch; invalidate
+            // its UFT entries and proceed to rule processing.
+            let owned_pair = *entry.state().pair.lock();
+            let (ufid_in, ufid_out) = {
+                match dir {
+                    Direction::Out => (owned_pair.as_ref(), Some(&flow_before)),
+                    Direction::In => (Some(&flow_before), owned_pair.as_ref()),
+                }
             };
+            self.uft_invalidate(ufid_out, ufid_in);
+            uft_entry = None;
+        }
+
+        let (res, fpk) = match self.process_impl(
+            uft_entry.as_ref(),
+            dir,
+            pkt,
+            &flow_before,
+            &mut flow_after,
+            process_start,
+        ) {
+            Ok((res, fpk)) => (Ok(res), fpk),
+            Err(e) => (Err(e), FastPathDecisionKind::Slow),
+        };
 
         match dir {
             Direction::In => self.update_stats_in(&res),
@@ -1373,16 +1484,22 @@ impl<N: NetworkImpl> Port<N> {
             fpk,
         );
 
-        res
+        let flow_match = uft_entry
+            .filter(|_| fpk != FastPathDecisionKind::Slow)
+            .map(|flow| FlowMatch { port: self, flow, dir });
+
+        res.map(|v| (v, flow_match))
     }
 
     #[inline(always)]
     fn process_impl<'a, M>(
         &self,
+        uft_entry: Option<&Arc<UftEntry>>,
         dir: Direction,
         pkt: Packet<LiteParsed<MsgBlkIterMut<'a>, M>>,
         flow_before: &InnerFlowId,
         flow_after: &mut Option<InnerFlowId>,
+        process_start: Moment,
     ) -> result::Result<(ProcessResult, FastPathDecisionKind), ProcessError>
     where
         M: LightweightMeta<<MsgBlkIterMut<'a> as Read>::Chunk>,
@@ -1427,16 +1544,7 @@ impl<N: NetworkImpl> Port<N> {
         // The goal is to take only a read lock on the relevant UFT, and fall
         // back to write locks whenever we have invalid state which must be
         // removed or we need to traverse the slowpath.
-        let process_start = Moment::now();
         let epoch = self.epoch();
-
-        // (1) Check for UFT and precompiled transforms.
-        let uft = match dir {
-            Direction::Out => &self.uft_out,
-            Direction::In => &self.uft_in,
-        };
-
-        let uft_entry = uft.read().get(flow_before).map(Arc::clone);
 
         // Packets which are larger than the guest is able to receive may
         // require bespoke handling by the `NetworkImpl`. If this is the case
@@ -1471,9 +1579,7 @@ impl<N: NetworkImpl> Port<N> {
         // If the entry is from a prior table configuration, mark it as invalid
         // and demote ourselves to the slowpath.
         let decision = match uft_entry {
-            Some(entry)
-                if !entry.is_killed() && entry.state().epoch == epoch =>
-            {
+            Some(entry) => {
                 // The Fast Path. This entry is from the current epoch, and is
                 // still alive. We will aim for either case (1) or (2).
                 entry.hit_at(process_start);
@@ -1485,7 +1591,7 @@ impl<N: NetworkImpl> Port<N> {
                 .incr(1);
 
                 if !self.check_uft_tcp(
-                    &entry,
+                    entry,
                     dir,
                     &pkt,
                     flow_before,
@@ -1497,23 +1603,6 @@ impl<N: NetworkImpl> Port<N> {
                 } else {
                     FastPathDecision::Uft(entry)
                 }
-            }
-            Some(ref entry) => {
-                // The entry is *definitely* from a previous epoch; invalidate
-                // its UFT entries and proceed to rule processing.
-                let owned_pair = *entry.state().pair.lock();
-                let (ufid_in, ufid_out) = {
-                    match dir {
-                        Direction::Out => {
-                            (owned_pair.as_ref(), Some(flow_before))
-                        }
-                        Direction::In => {
-                            (Some(flow_before), owned_pair.as_ref())
-                        }
-                    }
-                };
-                self.uft_invalidate(ufid_out, ufid_in);
-                FastPathDecision::Slow
             }
             None => FastPathDecision::Slow,
         };
