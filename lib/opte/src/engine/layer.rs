@@ -614,8 +614,6 @@ impl LayerSpec {
     ) -> result::Result<Layer, crate::ddi::kstat::Error> {
         let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
 
-        // Unwrap: We know this is fine because the stat names are
-        // generated from the LayerStats structure.
         let stats = KStatNamed::new(
             "xde",
             &format!("{port}_{name}"),
