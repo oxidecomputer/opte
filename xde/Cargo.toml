@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 illumos-sys-hdrs = { workspace = true, features = ["kernel"] }
+illumos = { workspace = true, features = ["mac"] }
 opte = { workspace = true, features = ["engine", "kernel"], default-features = false }
 oxide-vpc = { workspace = true, features = ["engine", "kernel"], default-features = false }
 

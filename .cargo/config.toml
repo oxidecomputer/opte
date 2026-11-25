@@ -5,3 +5,9 @@ kbench = "bench --package opte-bench --bench xde --"
 
 [env]
 CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+[net]
+# Fetch git dependencies with the git CLI so private repos (e.g.
+# illumos-rs) can authenticate via .netrc; cargo's built-in libgit2
+# client does not read .netrc.
+git-fetch-with-cli = true
