@@ -386,9 +386,8 @@ impl PortBuilder {
             layers: self
                 .layers
                 .into_iter()
-                .map(|v| v.into_layer(Arc::clone(&self.name)))
-                .map(KRwLock::new)
-                .collect(),
+                .map(|v| v.into_layer(Arc::clone(&self.name)).map(KRwLock::new))
+                .collect::<result::Result<_, _>>()?,
             uft_in: KRwLock::new(uft_in),
             uft_out: KRwLock::new(uft_out),
             tcp_flows: KRwLock::new(tcp_flows),

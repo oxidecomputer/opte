@@ -606,18 +606,12 @@ impl LayerSpec {
         }
     }
 
-    /// Return the number of rules defined in this layer in the given
-    /// direction.
-    pub fn num_rules(&self, dir: Direction) -> usize {
-        match dir {
-            Direction::Out => self.rules_out.num_rules(),
-            Direction::In => self.rules_in.num_rules(),
-        }
-    }
-
     /// Convert this specification into a full `Layer` as part of creating
     /// a `Port`.
-    pub(crate) fn into_layer(self, port: Arc<C8Str>) -> Layer {
+    pub(crate) fn into_layer(
+        self,
+        port: Arc<C8Str>,
+    ) -> result::Result<Layer, crate::ddi::kstat::Error> {
         let LayerSpec { name, actions, rules_in, rules_out, ft_limit } = self;
 
         // Unwrap: We know this is fine because the stat names are
@@ -626,14 +620,13 @@ impl LayerSpec {
             "xde",
             &format!("{port}_{name}"),
             LayerStats::new(),
-        )
-        .unwrap();
+        )?;
         stats.vals.lft_capacity.set(ft_limit.get() as u64);
         stats.vals.flow_ttl.set(FLOW_DEF_EXPIRE_SECS);
         stats.vals.in_rules.set(rules_in.num_rules() as u64);
         stats.vals.out_rules.set(rules_out.num_rules() as u64);
 
-        Layer {
+        Ok(Layer {
             actions: actions.actions,
             default_in: actions.default_in,
             default_in_hits: 0,
@@ -655,13 +648,10 @@ impl LayerSpec {
             rt_cstr: CString::new(format!("rt-{name}")).unwrap(),
             stats,
             port,
-        }
+        })
     }
 
     /// Set all rules at once, in an atomic manner.
-    ///
-    /// Updating the ruleset immediately invalidates all flows
-    /// established in the Flow Table.
     pub fn set_rules(
         &mut self,
         in_rules: Vec<Rule<Finalized>>,
@@ -1962,8 +1952,8 @@ impl RuleTableCore {
         }
     }
 
-    /// Return an iterator over all rue sin the table.
-    fn iter(&self) -> impl Iterator<Item = &RuleTableEntry> {
+    /// Return an iterator over all rules in the table.
+    fn iter(&self) -> impl ExactSizeIterator<Item = &RuleTableEntry> {
         self.rules.iter()
     }
 
