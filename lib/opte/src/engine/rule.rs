@@ -95,6 +95,23 @@ pub trait MappingResource: Resource {
     /// Remove the entry with the given key, if one exists.
     fn remove(&self, key: &Self::Key) -> Option<Self::Entry>;
 
+    /// Remove the entry with the given key if one exists and `pred` returns
+    /// `true` for it.
+    ///
+    /// The check and the removal are atomic with respect to other
+    /// modifications of this entry.
+    ///
+    /// **Locking behaviour:** implementations may hold the map lock while
+    /// executing `pred`, in which case a `pred` that calls back into the same
+    /// map can deadlock or panic.
+    fn remove_if(
+        &self,
+        key: &Self::Key,
+        pred: impl FnOnce(&Self::Key, &Self::Entry) -> bool,
+    ) -> Option<Self::Entry>
+    where
+        Self: Sized;
+
     /// Set the entry with the given key. Return the current entry, if
     /// one exists.
     fn set(&self, key: Self::Key, entry: Self::Entry) -> Option<Self::Entry>;
